@@ -1,7 +1,7 @@
 ---
 specId: SPEC-101
-title: API 接口定义与数据模型 (Interface & Schemas)
-status: 🚧 规划中
+title: Local ASR API 定义与数据模型 (Interface & Schemas)
+status: ✅ 已实现
 priority: P0
 owner: User
 relatedSpecs: [SPEC-102]
@@ -16,26 +16,27 @@ relatedSpecs: [SPEC-102]
 严格遵循 ADR-001 的 "Type-First" 原则。
 
 ```python
-# src/schemas.py
+# src/api/routes.py
 from pydantic import BaseModel, Field
-from typing import Optional, List, Union
-
-class TranscriptionRequest(BaseModel):
-    # 注意：File 不在 Pydantic 中直接定义，而在 FastAPI controller 参数中
-    language: str = Field(default="auto", description="ISO-639-1 语言代码")
-    clean_tags: bool = Field(default=True, description="是否清洗情感标签")
-    response_format: str = Field(default="json", pattern="^(json|text|verbose_json)$")
+from typing import Optional, List
 
 class Segment(BaseModel):
-    start: float
-    end: float
+    """Segment with timestamp and optional speaker info"""
+    id: int
+    speaker: Optional[str] = None  # Speaker ID (e.g., "SPEAKER_00")
+    start: float = 0.0
+    end: float = 0.0
     text: str
 
 class TranscriptionResponse(BaseModel):
+    """OpenAI Whisper API compatible response format"""
     text: str
-    task: str = "transcribe"
     duration: Optional[float] = None
-    segments: Optional[List[Segment]] = None
+    language: Optional[str] = None
+    model: Optional[str] = None  # 返回实际使用的模型
+    raw_text: Optional[str] = Field(None, description="转录前的原始文本（带所有标签）")
+    is_cleaned: Optional[bool] = Field(True, description="是否经过清理")
+    segments: Optional[List[Segment]] = Field(None, description="详细分段信息（带说话人识别）")
 ```
 
 ## 3\. OpenAPI 规范 (The Contract)
@@ -45,7 +46,7 @@ class TranscriptionResponse(BaseModel):
 ```yaml
 openapi: 3.0.0
 info:
-  title: Local SenseVoice API (Lean Version)
+  title: Local ASR API
   version: 1.0.0
 paths:
   /v1/audio/transcriptions:
@@ -69,12 +70,13 @@ paths:
                   description: 语言代码 (zh, en, ja, ko, auto)
                 response_format:
                   type: string
-                  enum: [json, text, verbose_json, srt] # 加了 srt 方便字幕
+                  enum: [json, verbose_json] # 简化支持
                   default: json
+                  description: json (仅文本) 或 verbose_json (含时间戳/说话人)
                 clean_tags:  # 你的自定义参数
                   type: boolean
                   default: true
-                  description: 是否清洗 <happy> 等情感标签
+                  description: 是否清洗 <happy> 等情感标签 (FunASR 专用)
                 
                 # --- "吉祥物"参数 (为了兼容客户端不报错而存在) ---
                 model:
@@ -82,10 +84,10 @@ paths:
                   default: sense-voice-small
                 temperature:
                   type: number
-                  description: (Ignored in SenseVoice)
+                  description: (Ignored)
                 prompt:
                   type: string
-                  description: (Limited support)
+                  description: (Ignored)
       responses:
         '200':
           description: 成功
@@ -97,18 +99,21 @@ paths:
 components:
   schemas:
     TranscriptionResponse:
-      # 保持这个结构，大多数客户端只看 text
       type: object
       properties:
         text:
           type: string
         duration:
           type: number
+        raw_text:
+          type: string
         segments:
           type: array
           items: 
             type: object
             properties:
+              id: {type: integer}
+              speaker: {type: string}
               start: {type: number}
               end: {type: number}
               text: {type: string}
@@ -121,9 +126,9 @@ components:
   * **Controller**: `src/api/routes.py`
   * **行为**:
     1.  校验 Multipart Form 数据。
-    2.  构造 `TranscriptionRequest` 对象。
-    3.  **立即**调用 `TranscriptionService.submit()` 获取 Future。
+    2.  调用 `TranscriptionService.submit(file, params)`，传入 UploadFile 对象。
+    3.  Service 负责将文件写入临时目录。
     4.  `await future` 等待结果。
-    5.  返回 `TranscriptionResponse`。
+    5.  处理 Service 返回的 dict 或 string 结果，构造 `TranscriptionResponse`。
 
 
