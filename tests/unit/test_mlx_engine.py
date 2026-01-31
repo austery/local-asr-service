@@ -116,6 +116,7 @@ class TestMlxAudioEngine:
         mock_generate_transcription.assert_called_once_with(
             model=mock_model,
             audio="test.wav",
+            format="txt",
             verbose=False
         )
 
@@ -181,6 +182,7 @@ class TestMlxAudioEngine:
         mock_generate_transcription.assert_called_once_with(
             model=mock_model,
             audio="test.wav",
+            format="txt",
             verbose=True
         )
 

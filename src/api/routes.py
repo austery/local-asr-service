@@ -5,8 +5,19 @@ from fastapi import APIRouter, File, UploadFile, Form, Request, HTTPException
 from typing import Optional
 from pydantic import BaseModel, Field
 import logging
+from src.config import MAX_UPLOAD_SIZE_MB
 
 logger = logging.getLogger(__name__)
+
+# 支持的音频 MIME 类型白名单
+ALLOWED_AUDIO_TYPES = {
+    "audio/wav", "audio/x-wav",
+    "audio/mpeg", "audio/mp3",
+    "audio/mp4", "audio/x-m4a",
+    "audio/flac",
+    "audio/ogg",
+    "audio/webm"
+}
 
 # API Request/Response Models
 class Segment(BaseModel):
@@ -42,7 +53,34 @@ async def create_transcription(
     response_format: str = Form("json", description="Response format: 'json' (text only) or 'verbose_json' (with speaker info)"),
     clean_tags: bool = Form(True, description="是否清理 <|xxx|> 标签（FunASR 专用）")
     ):
-    # 1. 获取 Service
+    request_id = getattr(request.state, "request_id", "unknown")
+    
+    # 1. 文件类型校验
+    if file.content_type not in ALLOWED_AUDIO_TYPES:
+        logger.warning(f"[{request_id}] Unsupported file type: {file.content_type}")
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported file type. Only audio files are allowed."
+        )
+    
+    # 2. 文件大小校验（读取内容并检查）
+    content = await file.read()
+    file_size_mb = len(content) / (1024 * 1024)
+    max_size_mb = MAX_UPLOAD_SIZE_MB
+    
+    if file_size_mb > max_size_mb:
+        logger.warning(f"[{request_id}] File too large: {file_size_mb:.2f}MB (max: {max_size_mb}MB)")
+        raise HTTPException(
+            status_code=413,
+            detail=f"File size exceeds maximum allowed ({max_size_mb} MB)"
+        )
+    
+    # 重置文件指针以供后续读取
+    await file.seek(0)
+    
+    logger.info(f"[{request_id}] Processing file: {file.filename} ({file_size_mb:.2f}MB, {file.content_type})")
+    
+    # 3. 获取 Service
     service = request.app.state.service
 
     try:
@@ -56,8 +94,8 @@ async def create_transcription(
             "response_format": "json" if include_speaker_info else "txt",  # MLX 引擎使用
         }
 
-        # 4. 提交任务
-        result = await service.submit(file, params)
+        # 4. 提交任务（传递 request_id）
+        result = await service.submit(file, params, request_id=request_id)
         
         # 5. 处理返回值（可能是字符串或字典）
         if isinstance(result, dict):
@@ -103,8 +141,17 @@ async def create_transcription(
     except RuntimeError as e:
         if "Queue is full" in str(e):
             raise HTTPException(status_code=503, detail="Server is busy (Queue Full). Please try again later.")
-        raise HTTPException(status_code=500, detail=str(e))
+        # 不泄露内部错误细节
+        logger.error(f"[{request_id}] Runtime error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error occurred. Please check server logs for details. (Request ID: {request_id})"
+        )
     
     except Exception as e:
-        logger.error(f"Error processing request: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        # 不泄露内部错误细节
+        logger.error(f"[{request_id}] Unexpected error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error occurred. Please check server logs for details. (Request ID: {request_id})"
+        )

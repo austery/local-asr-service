@@ -1,11 +1,16 @@
 from contextlib import asynccontextmanager
 import logging
-from fastapi import FastAPI
+import uuid
+import time
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # 引入配置和工厂
-from src.config import ENGINE_TYPE, get_model_id, HOST, PORT, MAX_QUEUE_SIZE, LOG_LEVEL
+from src.config import (
+    ENGINE_TYPE, get_model_id, HOST, PORT, MAX_QUEUE_SIZE, LOG_LEVEL,
+    ALLOWED_ORIGINS
+)
 from src.core.factory import create_engine
 from src.services.transcription import TranscriptionService
 from src.api.routes import router as api_router
@@ -27,6 +32,7 @@ async def lifespan(app: FastAPI):
     logger.info("🌱 System starting up...")
     logger.info(f"📋 Engine type: {ENGINE_TYPE}")
     logger.info(f"📋 Model ID: {get_model_id()}")
+    logger.warning("⚠️  Running with workers=1 (REQUIRED for Mac Silicon to prevent OOM)")
     
     # 1. 使用工厂创建引擎
     engine = create_engine()
@@ -58,14 +64,35 @@ app = FastAPI(
     lifespan=lifespan  # 挂载生命周期
 )
 
-# 允许跨域 (方便前端调用)
+# 解析 CORS origins
+cors_origins = ALLOWED_ORIGINS.split(",") if ALLOWED_ORIGINS != "*" else ["*"]
+logger.info(f"🔒 CORS allowed origins: {cors_origins}")
+
+# CORS 中间件（默认仅本地）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 请求日志中间件（生成 request_id 并记录耗时）
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    
+    start_time = time.time()
+    logger.info(f"[{request_id}] {request.method} {request.url.path}")
+    
+    response = await call_next(request)
+    
+    duration = time.time() - start_time
+    logger.info(f"[{request_id}] Completed in {duration:.2f}s - Status: {response.status_code}")
+    
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 # 注册路由
 app.include_router(api_router)

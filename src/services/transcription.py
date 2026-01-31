@@ -48,13 +48,14 @@ class TranscriptionService:
         asyncio.create_task(self._consume_loop())
         self.logger.info("👷 Background worker started.")
 
-    async def submit(self, file: UploadFile, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def submit(self, file: UploadFile, params: Dict[str, Any], request_id: str = "unknown") -> Dict[str, Any]:
         """
         提交任务接口 (供 API 层调用)。
         这个方法是非阻塞的：它只是把任务扔进队列，然后等待结果。
         """
         # 1. 检查队列是否已满 (快速失败)
         if self.queue.full():
+            self.logger.warning(f"[{request_id}] Queue full, rejecting request")
             raise RuntimeError("Service busy: Queue is full.")
 
         # 2. "临时文件之舞" (The Temp File Dance)
@@ -76,7 +77,7 @@ class TranscriptionService:
             future = loop.create_future()
             
             job = TranscriptionJob(
-                uid=uuid.uuid4().hex[:8],
+                uid=request_id,  # 使用传入的 request_id
                 temp_dir=temp_dir,
                 temp_file_path=temp_path,
                 params=params,
@@ -107,6 +108,10 @@ class TranscriptionService:
             # 从队列获取任务
             job: TranscriptionJob = await self.queue.get()
             
+            queue_time = time.time() - job.received_at
+            self.logger.info(f"[{job.uid}] Starting transcription (queue_time={queue_time:.2f}s)")
+            
+            inference_start = time.time()
             try:
                 # === 核心推理逻辑 ===
                 # 根据 response_format 参数决定引擎返回格式
@@ -122,6 +127,9 @@ class TranscriptionService:
                     format=format_param  # 传递 format 参数给 MLX 引擎
                 )
 
+                # 计算推理耗时
+                inference_time = time.time() - inference_start
+                
                 # 处理返回值（可能是字符串或字典）
                 if isinstance(result_data, dict):
                     # MLX 引擎返回了 JSON 格式（包含 segments）
@@ -131,10 +139,10 @@ class TranscriptionService:
                     cleaned_text = clean_sensevoice_tags(raw_text, clean_tags=clean_tags)
                     
                     # 构造结果
-                    process_time = time.time() - job.received_at
+                    total_time = time.time() - job.received_at
                     result = {
                         "text": cleaned_text,
-                        "duration": process_time,
+                        "duration": total_time,
                         "raw_text": raw_text,
                         "is_cleaned": clean_tags,
                         "segments": result_data.get("segments")  # 透传 segments
@@ -147,20 +155,26 @@ class TranscriptionService:
                     cleaned_text = clean_sensevoice_tags(raw_text, clean_tags=clean_tags)
                     
                     # 构造结果
-                    process_time = time.time() - job.received_at
+                    total_time = time.time() - job.received_at
                     result = {
                         "text": cleaned_text,
-                        "duration": process_time,
+                        "duration": total_time,
                         "raw_text": raw_text,
                         "is_cleaned": clean_tags
                     }
+                
+                # 记录完成日志
+                self.logger.info(
+                    f"[{job.uid}] Transcription completed: "
+                    f"queue_time={queue_time:.2f}s, inference_time={inference_time:.2f}s, total_time={total_time:.2f}s"
+                )
                 
                 # 唤醒等待的 API 请求
                 if not job.future.done():
                     job.future.set_result(result)
 
             except Exception as e:
-                self.logger.exception(f"❌ Job {job.uid} failed")
+                self.logger.exception(f"❌ [{job.uid}] Job failed: {e}")
                 if not job.future.done():
                     job.future.set_exception(e)
             

@@ -150,6 +150,12 @@ ENGINE_TYPE=mlx MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit uv run python -m src.
 | `MLX_MODEL_ID` | `mlx-community/Qwen3-ASR-1.7B-4bit` | MLX 引擎默认模型 |
 | `HOST` | `0.0.0.0` | 服务监听地址 |
 | `PORT` | `50070` | 服务监听端口 |
+| `MAX_QUEUE_SIZE` | `50` | 最大并发队列深度 |
+| `MAX_UPLOAD_SIZE_MB` | `200` | 上传文件大小限制（MB） |
+| `ALLOWED_ORIGINS` | `http://localhost,http://127.0.0.1` | CORS 允许的源（逗号分隔，或 `*` 放开所有） |
+| `LOG_LEVEL` | `INFO` | 日志级别 |
+| `HOST` | `0.0.0.0` | 服务监听地址 |
+| `PORT` | `50070` | 服务监听端口 |
 | `MAX_QUEUE_SIZE` | `50` | 最大队列深度 |
 | `MAX_AUDIO_DURATION_MINUTES` | `50` | 最大音频时长（仅 MLX 引擎，超过自动切片） |
 

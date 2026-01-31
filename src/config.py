@@ -47,6 +47,12 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "50070"))
 MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "50"))
 
+# === 安全配置 ===
+# 上传文件大小限制（MB）
+MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "200"))
+# CORS 允许的源（默认仅本地，可设置为 * 放开）
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://127.0.0.1")
+
 # === 日志配置 ===
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 

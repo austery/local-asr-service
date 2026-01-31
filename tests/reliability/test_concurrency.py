@@ -74,11 +74,14 @@ class TestReliability:
                 # 为了简单，我们直接构造 Job 塞进去
                 from src.services.transcription import TranscriptionJob
                 import time
+                import tempfile
                 
                 fut = asyncio.get_running_loop().create_future()
+                temp_dir = tempfile.mkdtemp(prefix="test_recovery_")
                 job = TranscriptionJob(
                     uid=f"job_{i}",
-                    temp_file_path=f"dummy_{i}.wav", # 文件不存在没关系，mock engine 不会读
+                    temp_dir=temp_dir,
+                    temp_file_path=f"dummy_{i}.wav",  # 文件不存在没关系，mock engine 不会读
                     params={},
                     future=fut,
                     received_at=time.time()
