@@ -29,7 +29,7 @@ ENGINE_TYPE: EngineType = os.getenv("ENGINE_TYPE", "funasr")  # type: ignore
 FUNASR_MODEL_ID = os.getenv("FUNASR_MODEL_ID", "iic/SenseVoiceSmall")
 
 # MLX 默认模型
-MLX_MODEL_ID = os.getenv("MLX_MODEL_ID", "mlx-community/VibeVoice-ASR-4bit")
+MLX_MODEL_ID = os.getenv("MLX_MODEL_ID", "mlx-community/Qwen3-ASR-1.7B-4bit")
 
 # 通用 MODEL_ID（优先级高于引擎特定配置）
 MODEL_ID = os.getenv("MODEL_ID", None)

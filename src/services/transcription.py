@@ -104,28 +104,51 @@ class TranscriptionService:
             
             try:
                 # === 核心推理逻辑 ===
+                # 根据 response_format 参数决定引擎返回格式
+                format_param = job.params.get("response_format", "txt")
+                
                 # run_in_threadpool 是为了把同步的 Engine 代码放到线程池里跑
                 # 防止阻塞 asyncio 的事件循环
-                raw_text = await run_in_threadpool(
+                result_data = await run_in_threadpool(
                     self.engine.transcribe_file,
                     file_path=job.temp_file_path,
                     language=job.params.get("language", "auto"),
-                    use_itn=True
+                    use_itn=True,
+                    format=format_param  # 传递 format 参数给 MLX 引擎
                 )
 
-                # 调用适配器清洗文本
-                # 根据 clean_tags 参数决定是否清理
-                clean_tags = job.params.get("clean_tags", True)
-                cleaned_text = clean_sensevoice_tags(raw_text, clean_tags=clean_tags)
-
-                # 构造结果
-                process_time = time.time() - job.received_at
-                result = {
-                    "text": cleaned_text,  # 主要返回文本（根据 clean_tags 决定是否清理）
-                    "duration": process_time,
-                    "raw_text": raw_text,  # 始终保留原始文本，供需要时使用
-                    "is_cleaned": clean_tags  # 标记是否进行了清理
-                }
+                # 处理返回值（可能是字符串或字典）
+                if isinstance(result_data, dict):
+                    # MLX 引擎返回了 JSON 格式（包含 segments）
+                    raw_text = result_data.get("text", "")
+                    # 调用适配器清洗文本（仅清理文本内容，不影响 segments）
+                    clean_tags = job.params.get("clean_tags", True)
+                    cleaned_text = clean_sensevoice_tags(raw_text, clean_tags=clean_tags)
+                    
+                    # 构造结果
+                    process_time = time.time() - job.received_at
+                    result = {
+                        "text": cleaned_text,
+                        "duration": process_time,
+                        "raw_text": raw_text,
+                        "is_cleaned": clean_tags,
+                        "segments": result_data.get("segments")  # 透传 segments
+                    }
+                else:
+                    # 文本格式返回（FunASR 或 MLX txt 格式）
+                    raw_text = result_data
+                    # 调用适配器清洗文本
+                    clean_tags = job.params.get("clean_tags", True)
+                    cleaned_text = clean_sensevoice_tags(raw_text, clean_tags=clean_tags)
+                    
+                    # 构造结果
+                    process_time = time.time() - job.received_at
+                    result = {
+                        "text": cleaned_text,
+                        "duration": process_time,
+                        "raw_text": raw_text,
+                        "is_cleaned": clean_tags
+                    }
                 
                 # 唤醒等待的 API 请求
                 if not job.future.done():

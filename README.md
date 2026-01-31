@@ -3,7 +3,7 @@
 一个专为 Apple Silicon (M-series) 芯片优化的高性能、本地化语音转录服务。  
 支持**双引擎架构**：
 - **FunASR 引擎**：阿里 FunASR (SenseVoiceSmall) 模型，基于 PyTorch MPS
-- **MLX Audio 引擎**：Apple MLX 原生模型 (VibeVoice, Whisper, Qwen3-ASR 等)
+- **MLX Audio 引擎**：Apple MLX 原生模型 (Qwen3-ASR, Whisper 等)
 
 提供兼容 OpenAI Whisper 格式的 HTTP 接口。
 
