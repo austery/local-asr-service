@@ -148,22 +148,51 @@ class AudioChunkingService:
     
     async def _normalize_audio(self, input_path: str) -> AudioNormalizationResult:
         """
-        归一化音频到最优格式
+        归一化音频到最优格式 (WAV PCM 16kHz Mono)
         - 单声道（语音不需要立体声）
         - 16kHz 采样率（Whisper 标准）
-        - 适度压缩码率
+        - PCM s16le 编码（无损，解码极快）
         """
         input_p = Path(input_path)
-        output_path = str(input_p.with_suffix(".normalized.mp3"))
         
-        print(f"   🔧 Normalizing audio...")
+        # 优化：如果是 WAV 文件，检查是否已经是目标格式
+        if input_p.suffix.lower() == ".wav":
+            try:
+                # 检查格式
+                cmd_check = [
+                    "ffprobe", 
+                    "-v", "error", 
+                    "-select_streams", "a:0", 
+                    "-show_entries", "stream=channels,sample_rate", 
+                    "-of", "csv=p=0", 
+                    input_path
+                ]
+                result = subprocess.run(cmd_check, stdout=subprocess.PIPE, text=True)
+                # 输出通常是 "16000,1" 或 "1,16000" 取决于版本，或者分行
+                # 我们简单判断是否包含 16000 和 1
+                output = result.stdout.strip()
+                if "16000" in output and ("1" in output or "mono" in output):
+                    print(f"   ✨ Audio is already 16kHz mono WAV. Skipping normalization.")
+                    file_size = input_p.stat().st_size
+                    duration = await self._get_audio_duration(input_path)
+                    return AudioNormalizationResult(
+                        normalized_path=input_path,
+                        file_size_bytes=file_size,
+                        duration_seconds=duration,
+                    )
+            except Exception as e:
+                print(f"   ⚠️  Format check failed, proceeding to normalize: {e}")
+
+        output_path = str(input_p.with_suffix(".normalized.wav"))
+        
+        print(f"   🔧 Normalizing audio to 16k WAV...")
         
         cmd = [
             "ffmpeg",
             "-i", input_path,
             "-ac", "1",  # Mono
             "-ar", str(self.sample_rate),  # 16kHz
-            "-b:a", self.bitrate,  # 64k
+            "-c:a", "pcm_s16le", # WAV standard format
             "-y",  # Overwrite
             output_path,
         ]

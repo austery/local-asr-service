@@ -4,6 +4,7 @@ import os
 import uuid
 import time
 import logging
+import tempfile
 from dataclasses import dataclass
 from typing import Dict, Any
 from fastapi import UploadFile
@@ -17,7 +18,8 @@ from src.adapters.text import clean_sensevoice_tags
 @dataclass
 class TranscriptionJob:
     uid: str
-    temp_file_path: str
+    temp_dir: str  # 任务专属临时目录
+    temp_file_path: str # 原始文件路径
     params: Dict[str, Any]
     future: asyncio.Future
     received_at: float
@@ -56,13 +58,15 @@ class TranscriptionService:
             raise RuntimeError("Service busy: Queue is full.")
 
         # 2. "临时文件之舞" (The Temp File Dance)
-        # FunASR 需要一个真实的文件路径，所以我们必须把 UploadFile 落盘
-        # 使用 UUID 防止文件名冲突
-        file_ext = os.path.splitext(file.filename)[1] or ".wav"
-        temp_filename = f"temp_{uuid.uuid4().hex}{file_ext}"
-        temp_path = os.path.abspath(temp_filename)
-
+        # 为每个请求创建一个独立的临时目录，方便统一清理
+        temp_dir = tempfile.mkdtemp(prefix="asr_task_")
+        
         try:
+            file_ext = os.path.splitext(file.filename)[1] or ".wav"
+            # 文件名使用 original 以便区分，但实际上只要在目录下就行
+            temp_filename = f"original{file_ext}"
+            temp_path = os.path.join(temp_dir, temp_filename)
+
             # 将上传的文件流写入磁盘
             with open(temp_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
@@ -73,6 +77,7 @@ class TranscriptionService:
             
             job = TranscriptionJob(
                 uid=uuid.uuid4().hex[:8],
+                temp_dir=temp_dir,
                 temp_file_path=temp_path,
                 params=params,
                 future=future,
@@ -88,9 +93,9 @@ class TranscriptionService:
             return result
 
         except Exception as e:
-            # 如果在入队前就失败了，确保清理临时文件
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            # 如果在入队前就失败了，确保清理临时目录
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
             raise e
 
     async def _consume_loop(self):
@@ -161,9 +166,10 @@ class TranscriptionService:
             
             finally:
                 # === 打扫战场 ===
-                # 无论成功失败，必须删除临时文件，否则磁盘会爆
-                if os.path.exists(job.temp_file_path):
-                    os.remove(job.temp_file_path)
+                # 无论成功失败，必须删除临时目录
+                # 这会连带删除原始文件、归一化文件、切片文件等所有中间产物
+                if os.path.exists(job.temp_dir):
+                    shutil.rmtree(job.temp_dir, ignore_errors=True)
                 
                 # 标记队列任务完成
                 self.queue.task_done()
