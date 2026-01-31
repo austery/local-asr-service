@@ -66,23 +66,49 @@ brew install ffmpeg
 
 如果你安装了 [uv](https://github.com/astral-sh/uv)，这是最快的方式：
 
-\# 1\. 创建并锁定 Python 3.11 虚拟环境  
-uv venv \--python 3.11
+```bash
+# 1. 克隆或进入项目目录
+cd local-asr-service
 
-\# 2\. 激活环境  
+# 2. 同步依赖（首次需要 --prerelease=allow）
+uv sync --prerelease=allow
+
+# 3. 激活环境
 source .venv/bin/activate
-
-\# 3\. 极速安装依赖  
-\# funasr 会自动拉取 torch (mps版)  
-uv pip install \-r requirements.txt
+```
 
 #### **🐢 方案 B: 使用 Conda (传统)**
 
-conda create \-n sensevoice python=3.11  
+```bash
+conda create -n sensevoice python=3.11  
 conda activate sensevoice  
-pip install \-r requirements.txt
+pip install -e .
+```
 
-*(如果是从零开始，确保 requirements.txt 包含：fastapi, uvicorn, funasr, python-multipart, torch)*
+### **3\. 配置环境变量（可选）**
+
+复制示例配置文件：
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env` 文件设置你的配置：
+
+```bash
+# 引擎类型
+ENGINE_TYPE=funasr  # 或 mlx
+
+# 模型 ID（可选，覆盖默认值）
+# MODEL_ID=mlx-community/whisper-large-v3-turbo
+
+# 服务配置
+PORT=50070
+MAX_QUEUE_SIZE=50
+LOG_LEVEL=INFO
+```
+
+**注意**：如果不创建 `.env` 文件，服务会使用内置默认值。
 
 ## **🚀 启动服务**
 
@@ -228,6 +254,50 @@ curl http://localhost:50070/v1/audio/transcriptions \
 ### **3\. 查看自动文档 (Swagger UI)**
 
 浏览器访问：[http://localhost:50070/docs](https://www.google.com/search?q=http://localhost:50070/docs)
+
+### **4\. 模型存储位置**
+
+服务会自动下载并缓存模型到以下位置：
+
+#### **FunASR 引擎模型**
+```bash
+路径: ~/.cache/modelscope/hub/models/iic/
+
+已下载的模型示例：
+├─ SenseVoiceSmall (893 MB) - 主模型
+├─ punc_ct-transformer (1.1 GB) - 标点符号
+└─ speech_fsmn_vad (3.9 MB) - 语音活动检测
+
+查看命令：
+ls -lh ~/.cache/modelscope/hub/models/iic/
+du -sh ~/.cache/modelscope/hub/models/iic/*
+```
+
+#### **MLX Audio 引擎模型**
+```bash
+路径: ~/.cache/huggingface/hub/
+
+模型大小参考：
+- VibeVoice-ASR-4bit: ~4-5 GB
+- Whisper-large-v3-turbo: ~1.5 GB
+- Qwen3-ASR-1.7B-8bit: ~1-2 GB
+
+查看命令：
+ls -lh ~/.cache/huggingface/hub/
+du -sh ~/.cache/huggingface/hub/models--mlx-community*
+```
+
+#### **清理缓存**
+```bash
+# 删除 FunASR 模型
+rm -rf ~/.cache/modelscope/hub/models/iic/SenseVoiceSmall
+
+# 删除所有 MLX Community 模型
+rm -rf ~/.cache/huggingface/hub/models--mlx-community*
+
+# 查看总缓存大小
+du -sh ~/.cache/modelscope ~/.cache/huggingface
+```
 
 ## **📂 项目结构**
 

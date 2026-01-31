@@ -1,9 +1,22 @@
 """
 统一配置管理模块。
 通过环境变量控制服务行为。
+支持从 .env 文件加载配置。
 """
 import os
 from typing import Literal
+from pathlib import Path
+
+# 加载 .env 文件（如果存在）
+from dotenv import load_dotenv
+
+# 查找 .env 文件：优先使用项目根目录的 .env
+env_path = Path(__file__).parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
+else:
+    # 尝试从当前工作目录加载
+    load_dotenv()
 
 # 引擎类型
 EngineType = Literal["funasr", "mlx"]
