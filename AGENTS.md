@@ -4,7 +4,7 @@
 A high-performance, local voice transcription service optimized for Apple Silicon (M-series) chips.
 Supports **dual engine architecture**:
 - **FunASR Engine**: Alibaba FunASR (SenseVoiceSmall) model via PyTorch MPS
-- **MLX Audio Engine**: Apple MLX native models (VibeVoice, Whisper, Qwen3-ASR, etc.)
+- **MLX Audio Engine**: Apple MLX native models (Qwen3-ASR, Whisper, etc.)
 
 Provides an OpenAI Whisper-compatible HTTP API.
 The project follows Clean Architecture principles to separate API, scheduling, and inference logic.
@@ -27,7 +27,7 @@ source .venv/bin/activate
 # Start with FunASR engine (default)
 uv run python -m src.main
 
-# Start with MLX Audio engine (VibeVoice, Whisper, etc.)
+# Start with MLX Audio engine (Qwen3-ASR, Whisper, etc.)
 ENGINE_TYPE=mlx uv run python -m src.main
 
 # Use a custom model
@@ -44,7 +44,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 50070 --workers 1
 | `ENGINE_TYPE` | `funasr` | Engine type: `funasr` or `mlx` |
 | `MODEL_ID` | (engine default) | Override model ID for any engine |
 | `FUNASR_MODEL_ID` | `iic/SenseVoiceSmall` | Default model for FunASR engine |
-| `MLX_MODEL_ID` | `mlx-community/VibeVoice-ASR-4bit` | Default model for MLX engine |
+| `MLX_MODEL_ID` | `mlx-community/Qwen3-ASR-1.7B-4bit` | Default model for MLX engine |
 | `HOST` | `0.0.0.0` | Server host |
 | `PORT` | `50070` | Server port |
 | `MAX_QUEUE_SIZE` | `50` | Max concurrent requests in queue |
@@ -53,8 +53,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 50070 --workers 1
 ## Supported MLX Models
 
 When using `ENGINE_TYPE=mlx`, you can switch models via `MODEL_ID`:
-- `mlx-community/VibeVoice-ASR-4bit` - Microsoft VibeVoice (default, 9B, 60-min audio)
-- `mlx-community/VibeVoice-ASR-bf16` - VibeVoice full precision
+- `mlx-community/Qwen3-ASR-1.7B-4bit` - Alibaba Qwen3-ASR (default, recommended, fast & stable)
 - `mlx-community/whisper-large-v3-turbo-asr-fp16` - OpenAI Whisper Turbo
 - `mlx-community/Qwen3-ASR-1.7B-8bit` - Alibaba Qwen3-ASR
 - `mlx-community/parakeet-tdt-0.6b-v2` - NVIDIA Parakeet (English only)

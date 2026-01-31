@@ -25,7 +25,7 @@ class TestConfig:
             # 注意：如果之前已经加载过，可能会保留旧值
             # 所以我们只验证 get_model_id 函数逻辑
             assert src.config.FUNASR_MODEL_ID == "iic/SenseVoiceSmall"
-            assert src.config.MLX_MODEL_ID == "mlx-community/VibeVoice-ASR-4bit"
+            assert src.config.MLX_MODEL_ID == "mlx-community/Qwen3-ASR-1.7B-4bit"
         finally:
             os.environ.update(old_env)
 
@@ -42,5 +42,5 @@ class TestFactory:
         funasr_engine = FunASREngine(model_id="iic/SenseVoiceSmall")
         assert funasr_engine.model_id == "iic/SenseVoiceSmall"
         
-        mlx_engine = MlxAudioEngine(model_id="mlx-community/VibeVoice-ASR-4bit")
-        assert mlx_engine.model_id == "mlx-community/VibeVoice-ASR-4bit"
+        mlx_engine = MlxAudioEngine(model_id="mlx-community/Qwen3-ASR-1.7B-4bit")
+        assert mlx_engine.model_id == "mlx-community/Qwen3-ASR-1.7B-4bit"

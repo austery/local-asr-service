@@ -127,10 +127,10 @@ FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main
 
 ### **方式 B: MLX Audio 引擎 (推荐 M4 Pro/Max)**
 
-使用 Apple MLX 原生模型（VibeVoice、Whisper 等）：
+使用 Apple MLX 原生模型（Qwen3-ASR、Whisper 等）：
 
 ```bash
-# 默认使用 VibeVoice-ASR-4bit
+# 默认使用 Qwen3-ASR-1.7B-4bit（推荐）
 ENGINE_TYPE=mlx uv run python -m src.main
 
 # 使用 Whisper Large V3 Turbo
@@ -147,7 +147,7 @@ ENGINE_TYPE=mlx MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit uv run python -m src.
 | `ENGINE_TYPE` | `funasr` | 引擎类型: `funasr` 或 `mlx` |
 | `MODEL_ID` | (引擎默认) | 覆盖任意引擎的模型 ID |
 | `FUNASR_MODEL_ID` | `iic/SenseVoiceSmall` | FunASR 引擎默认模型 |
-| `MLX_MODEL_ID` | `mlx-community/VibeVoice-ASR-4bit` | MLX 引擎默认模型 |
+| `MLX_MODEL_ID` | `mlx-community/Qwen3-ASR-1.7B-4bit` | MLX 引擎默认模型 |
 | `HOST` | `0.0.0.0` | 服务监听地址 |
 | `PORT` | `50070` | 服务监听端口 |
 | `MAX_QUEUE_SIZE` | `50` | 最大队列深度 |
@@ -163,13 +163,11 @@ ENGINE_TYPE=mlx MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit uv run python -m src.
 ### **支持的 MLX 模型**
 
 使用 `ENGINE_TYPE=mlx` 时，可通过 `MODEL_ID` 切换：
-- `mlx-community/VibeVoice-ASR-4bit` - 微软 VibeVoice（默认，9B，**支持超长音频自动切片**）
-- `mlx-community/VibeVoice-ASR-bf16` - VibeVoice 全精度版
 - `mlx-community/whisper-large-v3-turbo-asr-fp16` - OpenAI Whisper Turbo
 - `mlx-community/Qwen3-ASR-1.7B-8bit` - 阿里 Qwen3-ASR
 - `mlx-community/parakeet-tdt-0.6b-v2` - NVIDIA Parakeet (仅英文)
 
-**⏱️ 长音频处理：** MLX 引擎支持自动音频切片，默认限制 50 分钟（VibeVoice 官方限制 59 分钟）。超过限制时：
+**⏱️ 长音频处理：** MLX 引擎支持自动音频切片，默认限制 50 分钟。超过限制时：
 1. **优先策略**：在静音点智能切片（避免断词）
 2. **Fallback 策略**：固定时长 + 15秒重叠切片
 3. 切片后自动合并转录结果
@@ -292,7 +290,7 @@ du -sh ~/.cache/modelscope/hub/models/iic/*
 路径: ~/.cache/huggingface/hub/
 
 模型大小参考：
-- VibeVoice-ASR-4bit: ~4-5 GB
+- Qwen3-ASR-1.7B-4bit: ~2 GB
 - Whisper-large-v3-turbo: ~1.5 GB
 - Qwen3-ASR-1.7B-8bit: ~1-2 GB
 

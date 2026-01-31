@@ -48,7 +48,7 @@ class TestMlxAudioEngine:
         from src.core.mlx_engine import MlxAudioEngine
         
         engine = MlxAudioEngine()
-        assert engine.model_id == "mlx-community/VibeVoice-ASR-4bit"
+        assert engine.model_id == "mlx-community/Qwen3-ASR-1.7B-4bit"
 
     def test_load_model(self, mock_load_model, mock_chunking_service):
         """测试模型加载逻辑"""

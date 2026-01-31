@@ -1,8 +1,8 @@
 """
 MLX Audio 推理引擎封装类。
-支持 VibeVoice、Whisper、Qwen3-ASR 等 mlx-audio 兼容模型。
+支持 Qwen3-ASR、Whisper、Parakeet 等 mlx-audio 兼容模型。
 支持自动音频切片（长音频超过限制时）。
-支持说话人分离（VibeVoice 特性）。
+支持说话人分离（某些模型特性）。
 """
 import time
 import gc
@@ -22,7 +22,7 @@ class MlxAudioEngine:
     实现 ASREngine Protocol。
     """
 
-    def __init__(self, model_id: str = "mlx-community/VibeVoice-ASR-4bit"):
+    def __init__(self, model_id: str = "mlx-community/Qwen3-ASR-1.7B-4bit"):
         self.model_id = model_id
         self.model = None
         self.chunking_service = AudioChunkingService()
