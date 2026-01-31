@@ -23,6 +23,7 @@ class TranscriptionResponse(BaseModel):
     task: str = Field(default="transcribe", description="任务类型")
     language: str = Field(default="zh", description="识别出的语言")
     duration: float = Field(description="音频总时长(秒)")
+    model: Optional[str] = Field(default=None, description="实际使用的模型ID")
     raw_text: Optional[str] = Field(default=None, description="原始转录文本（包含所有SenseVoice标签和语气词）")
     is_cleaned: bool = Field(default=True, description="text字段是否经过清理")
     # 这里就是你觉得缺失的复杂部分：
@@ -44,7 +45,7 @@ async def create_transcription(
     # === 输入参数定义 (Request Body) ===
     # 这里的每一个参数，FastAPI 都会自动生成到 OpenAPI 的 requestBody 中
     file: UploadFile = File(..., description="音频文件 (wav, mp3, m4a)"),
-    model: str = Form(default="sensevoice-small", description="模型ID (仅做兼容，固定为 sensevoice)"),
+    model: str = Form(default="auto", description="模型ID (信息用途，实际模型由启动配置决定)"),
     language: str = Form(default="auto", description="语言代码 (zh, en, ja, ko, auto)"),
     response_format: str = Form(default="json", description="返回格式 (json, verbose_json)"),
     clean_tags: bool = Form(default=True, description="是否清洗情感标签 (<happy>等)"),
@@ -72,6 +73,7 @@ async def create_transcription(
             text=result["text"],
             duration=result.get("duration", 0.0),
             language=language if language != "auto" else "zh", # MVP 简化处理
+            model=request.app.state.model_id if hasattr(request.app.state, "model_id") else None,  # 返回实际使用的模型
             raw_text=result.get("raw_text"),  # 原始文本（包含所有标签）
             is_cleaned=result.get("is_cleaned", True),  # 是否清理过
             segments=result.get("segments", None) # 如果 Service 以后支持了 segments，这里直接透传

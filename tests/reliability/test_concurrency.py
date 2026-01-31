@@ -2,7 +2,7 @@ import pytest
 import asyncio
 import httpx
 from src.services.transcription import TranscriptionService
-from src.core.engine import SenseVoiceEngine
+from src.core.funasr_engine import FunASREngine
 from unittest.mock import MagicMock
 
 @pytest.mark.asyncio

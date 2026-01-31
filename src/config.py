@@ -49,3 +49,21 @@ MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "50"))
 
 # === 日志配置 ===
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# === 音频处理配置 ===
+# 最大音频时长（分钟），超过则自动切片（仅 MLX 引擎）
+MAX_AUDIO_DURATION_MINUTES = int(os.getenv("MAX_AUDIO_DURATION_MINUTES", "50"))
+
+# 静音检测配置
+SILENCE_THRESHOLD_SEC = float(os.getenv("SILENCE_THRESHOLD_SEC", "0.5"))
+SILENCE_NOISE_DB = os.getenv("SILENCE_NOISE_DB", "-30dB")
+
+# 音频归一化配置
+AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
+AUDIO_BITRATE = os.getenv("AUDIO_BITRATE", "64k")
+
+# 重叠切片配置（fallback 策略）
+CHUNK_OVERLAP_SECONDS = int(os.getenv("CHUNK_OVERLAP_SECONDS", "15"))
+
+# Tokenizers 并行警告抑制
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")

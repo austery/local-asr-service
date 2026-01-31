@@ -17,6 +17,7 @@
 
 * **🚀 极速推理**: 支持 Torch MPS 和 Apple MLX 双加速后端。  
 * **🔄 双引擎架构**: 通过环境变量在 FunASR 和 MLX Audio 引擎间无缝切换。
+* **✂️ 智能音频切片**: MLX 引擎支持超长音频自动切片（静音检测 + 重叠策略），无需手动预处理。
 * **🛡️ 显存保护**: 内置 asyncio.Queue 生产者-消费者模型，严格串行处理任务，防止并发请求撑爆统一内存。  
 * **🔌 OpenAI 兼容**: 提供与 POST /v1/audio/transcriptions 完全一致的接口，可直接对接现有的 Whisper 客户端。  
 * **🧹 智能清洗**: 自动清洗 SenseVoice 输出的富文本标签（如 \<|zh|\>、\<|NEUTRAL|\>），只返回纯净文本。
@@ -150,15 +151,28 @@ ENGINE_TYPE=mlx MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit uv run python -m src.
 | `HOST` | `0.0.0.0` | 服务监听地址 |
 | `PORT` | `50070` | 服务监听端口 |
 | `MAX_QUEUE_SIZE` | `50` | 最大队列深度 |
+| `MAX_AUDIO_DURATION_MINUTES` | `50` | 最大音频时长（仅 MLX 引擎，超过自动切片） |
+
+**音频处理配置（仅 MLX 引擎）：**
+- `SILENCE_THRESHOLD_SEC` - 静音检测最小时长（默认 0.5秒）
+- `SILENCE_NOISE_DB` - 静音噪音阈值（默认 -30dB）
+- `AUDIO_SAMPLE_RATE` - 音频采样率（默认 16000Hz）
+- `AUDIO_BITRATE` - 音频比特率（默认 64k）
+- `CHUNK_OVERLAP_SECONDS` - 切片重叠时长（默认 15秒，fallback 策略）
 
 ### **支持的 MLX 模型**
 
 使用 `ENGINE_TYPE=mlx` 时，可通过 `MODEL_ID` 切换：
-- `mlx-community/VibeVoice-ASR-4bit` - 微软 VibeVoice（默认，9B，支持60分钟长音频）
+- `mlx-community/VibeVoice-ASR-4bit` - 微软 VibeVoice（默认，9B，**支持超长音频自动切片**）
 - `mlx-community/VibeVoice-ASR-bf16` - VibeVoice 全精度版
 - `mlx-community/whisper-large-v3-turbo-asr-fp16` - OpenAI Whisper Turbo
 - `mlx-community/Qwen3-ASR-1.7B-8bit` - 阿里 Qwen3-ASR
 - `mlx-community/parakeet-tdt-0.6b-v2` - NVIDIA Parakeet (仅英文)
+
+**⏱️ 长音频处理：** MLX 引擎支持自动音频切片，默认限制 50 分钟（VibeVoice 官方限制 59 分钟）。超过限制时：
+1. **优先策略**：在静音点智能切片（避免断词）
+2. **Fallback 策略**：固定时长 + 15秒重叠切片
+3. 切片后自动合并转录结果
 
 ### **方式 C: Uvicorn 命令行**
 
