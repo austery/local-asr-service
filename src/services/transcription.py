@@ -1,0 +1,146 @@
+import asyncio
+import shutil
+import os
+import uuid
+import time
+import logging
+from dataclasses import dataclass
+from typing import Dict, Any
+from fastapi import UploadFile
+from starlette.concurrency import run_in_threadpool
+
+# 引入抽象接口和适配器
+from src.core.base_engine import ASREngine
+from src.adapters.text import clean_sensevoice_tags
+
+# 定义一个简单的任务对象，用于在队列中传递
+@dataclass
+class TranscriptionJob:
+    uid: str
+    temp_file_path: str
+    params: Dict[str, Any]
+    future: asyncio.Future
+    received_at: float
+
+class TranscriptionService:
+    """
+    转录服务调度器。
+    职责：
+    1. 管理异步队列 (Async Queue)
+    2. 协调 Engine 进行串行推理
+    3. 管理临时文件的生命周期
+    """
+
+    def __init__(self, engine: ASREngine, max_queue_size: int = 50):
+        self.engine = engine
+        self.logger = logging.getLogger(__name__)
+        # 核心设计：使用 asyncio.Queue 实现背压 (Backpressure)
+        # 如果队列满 50 个，前端会直接收到 503 错误，保护系统不崩溃
+        self.queue = asyncio.Queue(maxsize=max_queue_size)
+        self.is_running = False
+        self.logger.info(f"🚦 Service initialized. Queue size: {max_queue_size}")
+
+    async def start_worker(self):
+        """启动后台消费者循环 (在 main.py 的 lifespan 中调用)"""
+        self.is_running = True
+        asyncio.create_task(self._consume_loop())
+        self.logger.info("👷 Background worker started.")
+
+    async def submit(self, file: UploadFile, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        提交任务接口 (供 API 层调用)。
+        这个方法是非阻塞的：它只是把任务扔进队列，然后等待结果。
+        """
+        # 1. 检查队列是否已满 (快速失败)
+        if self.queue.full():
+            raise RuntimeError("Service busy: Queue is full.")
+
+        # 2. "临时文件之舞" (The Temp File Dance)
+        # FunASR 需要一个真实的文件路径，所以我们必须把 UploadFile 落盘
+        # 使用 UUID 防止文件名冲突
+        file_ext = os.path.splitext(file.filename)[1] or ".wav"
+        temp_filename = f"temp_{uuid.uuid4().hex}{file_ext}"
+        temp_path = os.path.abspath(temp_filename)
+
+        try:
+            # 将上传的文件流写入磁盘
+            with open(temp_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+
+            # 3. 创建任务对象
+            loop = asyncio.get_running_loop()
+            future = loop.create_future()
+            
+            job = TranscriptionJob(
+                uid=uuid.uuid4().hex[:8],
+                temp_file_path=temp_path,
+                params=params,
+                future=future,
+                received_at=time.time()
+            )
+
+            # 4. 入队
+            await self.queue.put(job)
+            
+            # 5. 等待处理结果 (Await the future)
+            # 这里的 await 会挂起当前请求，直到后台 worker 完成处理
+            result = await future
+            return result
+
+        except Exception as e:
+            # 如果在入队前就失败了，确保清理临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise e
+
+    async def _consume_loop(self):
+        """
+        消费者循环 (Strict Serial Execution)。
+        这是保护 M4 Pro 显存的关键。
+        """
+        while self.is_running:
+            # 从队列获取任务
+            job: TranscriptionJob = await self.queue.get()
+            
+            try:
+                # === 核心推理逻辑 ===
+                # run_in_threadpool 是为了把同步的 Engine 代码放到线程池里跑
+                # 防止阻塞 asyncio 的事件循环
+                raw_text = await run_in_threadpool(
+                    self.engine.transcribe_file,
+                    file_path=job.temp_file_path,
+                    language=job.params.get("language", "auto"),
+                    use_itn=True
+                )
+
+                # 调用适配器清洗文本
+                # 根据 clean_tags 参数决定是否清理
+                clean_tags = job.params.get("clean_tags", True)
+                cleaned_text = clean_sensevoice_tags(raw_text, clean_tags=clean_tags)
+
+                # 构造结果
+                process_time = time.time() - job.received_at
+                result = {
+                    "text": cleaned_text,  # 主要返回文本（根据 clean_tags 决定是否清理）
+                    "duration": process_time,
+                    "raw_text": raw_text,  # 始终保留原始文本，供需要时使用
+                    "is_cleaned": clean_tags  # 标记是否进行了清理
+                }
+                
+                # 唤醒等待的 API 请求
+                if not job.future.done():
+                    job.future.set_result(result)
+
+            except Exception as e:
+                self.logger.exception(f"❌ Job {job.uid} failed")
+                if not job.future.done():
+                    job.future.set_exception(e)
+            
+            finally:
+                # === 打扫战场 ===
+                # 无论成功失败，必须删除临时文件，否则磁盘会爆
+                if os.path.exists(job.temp_file_path):
+                    os.remove(job.temp_file_path)
+                
+                # 标记队列任务完成
+                self.queue.task_done()
