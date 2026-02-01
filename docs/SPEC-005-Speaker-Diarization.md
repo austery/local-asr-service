@@ -53,7 +53,7 @@ graph TD
 - **优点**: 零开发成本，保持架构简单。
 - **缺点**: 时间不可控，效果不确定。
 
-#### 方案 B: 集成 Pyannote-Audio (Active - Recommended)
+#### 方案 B: 集成 Pyannote-Audio (Active)
 - **描述**: 在 Service 层引入独立的 Diarization 管道。
 - **工作流**:
     1.  Service 接收音频。
@@ -63,6 +63,12 @@ graph TD
     - 需引入 `pyannote.audio` 依赖 (基于 Torch)。
     - 额外显存占用 (~2GB)。
     - 推理延迟增加约 30%。
+
+#### 方案 C: 基于 FunASR + Cam++ 的原生集成 (Chosen ✅)
+- **描述**: 使用 FunASR 官方提供的 `cam++` 声纹模型直接在推理引擎内完成分离。
+- **优点**: 极速、低显存、原生支持 MPS、实现简单。
+- **规范文档**: [SPEC-007-Speaker-Diarization-FunASR.md](./SPEC-007-Speaker-Diarization-FunASR.md)
+- **结论**: 该方案已取代方案 B 成为本项目说话人分离的标准实现路径。
 
 ## 4. API 契约 (API Contract)
 
