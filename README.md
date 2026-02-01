@@ -1,8 +1,8 @@
-# **🎙️ Local SenseVoice API (Mac Silicon Optimized)**
+# **🎙️ Local ASR Service (Mac Silicon Optimized)**
 
 一个专为 Apple Silicon (M-series) 芯片优化的高性能、本地化语音转录服务。  
 支持**双引擎架构**：
-- **FunASR 引擎**：阿里 FunASR (SenseVoiceSmall) 模型，基于 PyTorch MPS
+- **FunASR 引擎**：支持 **Paraformer** (SOTA 中文识别) 和 **Cam++** 声纹模型，实现 **说话人分离 (Diarization)**。
 - **MLX Audio 引擎**：Apple MLX 原生模型 (Qwen3-ASR, Whisper 等)
 
 提供兼容 OpenAI Whisper 格式的 HTTP 接口。
@@ -19,8 +19,9 @@
 * **🔄 双引擎架构**: 通过环境变量在 FunASR 和 MLX Audio 引擎间无缝切换。
 * **✂️ 智能音频切片**: MLX 引擎支持超长音频自动切片（静音检测 + 重叠策略），无需手动预处理。
 * **🛡️ 显存保护**: 内置 asyncio.Queue 生产者-消费者模型，严格串行处理任务，防止并发请求撑爆统一内存。  
-* **🔌 OpenAI 兼容**: 提供与 POST /v1/audio/transcriptions 完全一致的接口，可直接对接现有的 Whisper 客户端。  
-* **🧹 智能清洗**: 自动清洗 SenseVoice 输出的富文本标签（如 \<|zh|\>、\<|NEUTRAL|\>），只返回纯净文本。
+* **👥 说话人分离 (Diarization)**: 集成 Cam++ 模型，自动识别不同说话人（Speaker 0, Speaker 1...）。
+* **🔌 OpenAI 兼容**: 提供与 POST /v1/audio/transcriptions 完全一致的接口，并扩展了多格式输出。
+* **🧹 智能清洗**: 自动清洗 SenseVoice/Paraformer 输出的富文本标签，只返回纯净文本。
 
 ## **🏗️ 系统架构 (The Architecture)**
 
@@ -146,13 +147,13 @@ ENGINE_TYPE=mlx MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit uv run python -m src.
 |------|--------|------|
 | `ENGINE_TYPE` | `funasr` | 引擎类型: `funasr` 或 `mlx` |
 | `MODEL_ID` | (引擎默认) | 覆盖任意引擎的模型 ID |
-| `FUNASR_MODEL_ID` | `iic/SenseVoiceSmall` | FunASR 引擎默认模型 |
+| `FUNASR_MODEL_ID` | `iic/speech_seaco_paraformer...` | FunASR 默认模型 (支持说话人分离) |
 | `MLX_MODEL_ID` | `mlx-community/Qwen3-ASR-1.7B-4bit` | MLX 引擎默认模型 |
 | `HOST` | `0.0.0.0` | 服务监听地址 |
 | `PORT` | `50070` | 服务监听端口 |
 | `MAX_QUEUE_SIZE` | `50` | 最大并发队列深度 |
 | `MAX_UPLOAD_SIZE_MB` | `200` | 上传文件大小限制（MB） |
-| `ALLOWED_ORIGINS` | `http://localhost,http://127.0.0.1` | CORS 允许的源（逗号分隔，或 `*` 放开所有） |
+| `ALLOWED_ORIGINS` | `http://localhost,http://127.0.0.1` | CORS 允许的源 |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `HOST` | `0.0.0.0` | 服务监听地址 |
 | `PORT` | `50070` | 服务监听端口 |
@@ -196,35 +197,63 @@ uvicorn src.main:app \--host 0.0.0.0 \--port 50070 \--workers 1
 curl http://localhost:50070/health  
 # 返回: {"status": "healthy", "engine_type": "funasr", "model": "iic/SenseVoiceSmall"}
 
-### **2\. 语音转录 (OpenAI 格式)**
+#### **1. 文本转录 (默认模式)**
 
-#### **基本调用**
+你最常用的模式，返回纯净的说话人标记文本，适合 RAG 或 LLM。
 
+```bash
 curl http://localhost:50070/v1/audio/transcriptions \
-  -F "file=@/path/to/your/audio.mp3" \
-  -F "language=auto" \
-  -F "clean_tags=true"
+  -F "file=@audio.mp3;type=audio/mpeg"
+```
+
+**预期输出 (Plain Text):**
+```text
+[Speaker 0]: 大家好，今天我们来聊聊...
+[Speaker 1]: 好的，那我们开始吧。
+```
+
+#### **2. 带时间戳模式**
+
+```bash
+curl http://localhost:50070/v1/audio/transcriptions \
+  -F "file=@audio.mp3;type=audio/mpeg" \
+  -F "with_timestamp=true"
+```
 
 **预期输出:**
+```text
+[00:00] [Speaker 0]: 大家好，今天我们来聊聊...
+[00:05] [Speaker 1]: 好的，那我们开始吧。
+```
 
-{  
-  "text": "你好，这是一个测试音频。",  
-  "task": "transcribe",  
-  "language": "zh",  
-  "duration": 5.2,  
-  "raw_text": "<|zh|><|NEUTRAL|>你好，这是一个测试音频。",
-  "is_cleaned": true,
-  "segments": null
+#### **3. JSON 格式 (完整结构化数据)**
+
+```bash
+curl http://localhost:50070/v1/audio/transcriptions \
+  -F "file=@audio.mp3;type=audio/mpeg" \
+  -F "output_format=json"
+```
+
+**预期输出:**
+```json
+{
+  "text": "...",
+  "duration": 5.2,
+  "segments": [
+    {"id": 0, "speaker": "Speaker 0", "start": 50, "end": 1200, "text": "..."},
+    ...
+  ]
 }
+```
 
 #### **参数说明**
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `file` | File | **必填** | 音频文件 (支持 wav, mp3, m4a 等) |
-| `language` | String | `auto` | 语言代码: `zh`, `en`, `ja`, `ko`, `yue`, `auto` |
-| `clean_tags` | Boolean | `true` | **是否清理 SenseVoice 标签** |
-| `response_format` | String | `json` | 返回格式 (当前仅支持 json) |
+| `file` | File | **必填** | 音频文件 (wav, mp3, m4a 等) |
+| `output_format` | String | `txt` | 输出格式: `txt`, `json`, `srt` |
+| `with_timestamp` | Boolean | `false` | txt 格式下是否包含行首时间戳 |
+| `language` | String | `auto` | 语言代码: `zh`, `en`, `auto` |
 
 #### **clean_tags 参数详解**
 

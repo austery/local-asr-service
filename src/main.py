@@ -21,7 +21,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
-logger = logging.getLogger("sensevoice.main")
+logger = logging.getLogger("local_asr.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI):
 
 # === 初始化 FastAPI ===
 app = FastAPI(
-    title="Local SenseVoice API",
+    title="Local ASR Service",
     version="1.0.0",
     lifespan=lifespan  # 挂载生命周期
 )

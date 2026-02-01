@@ -23,19 +23,17 @@ from typing import Optional, List
 class Segment(BaseModel):
     """Segment with timestamp and optional speaker info"""
     id: int
-    speaker: Optional[str] = None  # Speaker ID (e.g., "SPEAKER_00")
-    start: float = 0.0
-    end: float = 0.0
+    speaker: Optional[str] = None  # Speaker ID (e.g., "Speaker 0")
+    start: float = 0.0  # 毫秒
+    end: float = 0.0    # 毫秒
     text: str
 
 class TranscriptionResponse(BaseModel):
-    """OpenAI Whisper API compatible response format"""
+    """JSON response format with full structured data (Used when output_format='json')"""
     text: str
     duration: Optional[float] = None
     language: Optional[str] = None
-    model: Optional[str] = None  # 返回实际使用的模型
-    raw_text: Optional[str] = Field(None, description="转录前的原始文本（带所有标签）")
-    is_cleaned: Optional[bool] = Field(True, description="是否经过清理")
+    model: Optional[str] = None
     segments: Optional[List[Segment]] = Field(None, description="详细分段信息（带说话人识别）")
 ```
 
@@ -65,18 +63,18 @@ paths:
                   type: string
                   format: binary
                   description: 音频文件
+                output_format:
+                  type: string
+                  enum: [txt, json, srt]
+                  default: txt
+                  description: txt (纯净文本), json (结构化数据), srt (字幕)
+                with_timestamp:
+                  type: boolean
+                  default: false
+                  description: (txt 专用) 是否包含行首时间戳
                 language:
                   type: string
-                  description: 语言代码 (zh, en, ja, ko, auto)
-                response_format:
-                  type: string
-                  enum: [json, verbose_json] # 简化支持
-                  default: json
-                  description: json (仅文本) 或 verbose_json (含时间戳/说话人)
-                clean_tags:  # 你的自定义参数
-                  type: boolean
-                  default: true
-                  description: 是否清洗 <happy> 等情感标签 (FunASR 专用)
+                  description: 语言代码 (zh, en, auto)
                 
                 # --- "吉祥物"参数 (为了兼容客户端不报错而存在) ---
                 model:

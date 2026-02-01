@@ -114,8 +114,9 @@ class TranscriptionService:
             inference_start = time.time()
             try:
                 # === 核心推理逻辑 ===
-                # 根据 response_format 参数决定引擎返回格式
-                format_param = job.params.get("response_format", "txt")
+                # 提取输出格式参数
+                output_format = job.params.get("output_format", "txt")
+                with_timestamp = job.params.get("with_timestamp", False)
                 
                 # run_in_threadpool 是为了把同步的 Engine 代码放到线程池里跑
                 # 防止阻塞 asyncio 的事件循环
@@ -123,55 +124,40 @@ class TranscriptionService:
                     self.engine.transcribe_file,
                     file_path=job.temp_file_path,
                     language=job.params.get("language", "auto"),
-                    use_itn=True,
-                    format=format_param  # 传递 format 参数给 MLX 引擎
+                    output_format=output_format,
+                    with_timestamp=with_timestamp,
+                    use_itn=True
                 )
 
                 # 计算推理耗时
                 inference_time = time.time() - inference_start
+                total_time = time.time() - job.received_at
                 
-                # 处理返回值（可能是字符串或字典）
+                # 处理返回值
+                # Engine 现在根据 output_format 返回不同格式:
+                # - txt/srt: 返回 str
+                # - json: 返回 dict {"text": ..., "segments": [...]}
                 if isinstance(result_data, dict):
-                    # MLX 引擎返回了 JSON 格式（包含 segments）
-                    raw_text = result_data.get("text", "")
-                    # 调用适配器清洗文本（仅清理文本内容，不影响 segments）
-                    clean_tags = job.params.get("clean_tags", True)
-                    cleaned_text = clean_sensevoice_tags(raw_text, clean_tags=clean_tags)
-                    
-                    # 构造结果
-                    total_time = time.time() - job.received_at
+                    # JSON 格式，添加 duration
                     result = {
-                        "text": cleaned_text,
+                        "text": result_data.get("text", ""),
                         "duration": total_time,
-                        "raw_text": raw_text,
-                        "is_cleaned": clean_tags,
-                        "segments": result_data.get("segments")  # 透传 segments
+                        "segments": result_data.get("segments")
                     }
                 else:
-                    # 文本格式返回（FunASR 或 MLX txt 格式）
-                    raw_text = result_data
-                    # 调用适配器清洗文本
-                    clean_tags = job.params.get("clean_tags", True)
-                    cleaned_text = clean_sensevoice_tags(raw_text, clean_tags=clean_tags)
-                    
-                    # 构造结果
-                    total_time = time.time() - job.received_at
-                    result = {
-                        "text": cleaned_text,
-                        "duration": total_time,
-                        "raw_text": raw_text,
-                        "is_cleaned": clean_tags
-                    }
+                    # txt/srt 格式，直接透传字符串
+                    result = result_data
                 
                 # 记录完成日志
                 self.logger.info(
                     f"[{job.uid}] Transcription completed: "
-                    f"queue_time={queue_time:.2f}s, inference_time={inference_time:.2f}s, total_time={total_time:.2f}s"
+                    f"format={output_format}, queue_time={queue_time:.2f}s, inference_time={inference_time:.2f}s"
                 )
                 
                 # 唤醒等待的 API 请求
                 if not job.future.done():
                     job.future.set_result(result)
+
 
             except Exception as e:
                 self.logger.exception(f"❌ [{job.uid}] Job failed: {e}")

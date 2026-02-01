@@ -2,7 +2,8 @@
 API routes for speech transcription service.
 """
 from fastapi import APIRouter, File, UploadFile, Form, Request, HTTPException
-from typing import Optional
+from fastapi.responses import PlainTextResponse
+from typing import Optional, Union
 from pydantic import BaseModel, Field
 import logging
 from src.config import MAX_UPLOAD_SIZE_MB
@@ -23,36 +24,47 @@ ALLOWED_AUDIO_TYPES = {
 class Segment(BaseModel):
     """Segment with timestamp and optional speaker info"""
     id: int
-    speaker: Optional[str] = None  # Speaker ID (e.g., "SPEAKER_00")
-    start: float = 0.0
-    end: float = 0.0
+    speaker: Optional[str] = None  # Speaker ID (e.g., "Speaker 0")
+    start: float = 0.0  # 毫秒
+    end: float = 0.0    # 毫秒
     text: str
 
 class TranscriptionResponse(BaseModel):
     """
-    OpenAI Whisper API compatible response format.
-    Spec: https://platform.openai.com/docs/api-reference/audio/createTranscription
+    JSON response format with full structured data.
+    Used when output_format='json'.
     """
     text: str
     duration: Optional[float] = None
     language: Optional[str] = None
-    model: Optional[str] = None  # 返回实际使用的模型
-    raw_text: Optional[str] = Field(None, description="转录前的原始文本（带所有标签）")
-    is_cleaned: Optional[bool] = Field(True, description="是否经过清理")
+    model: Optional[str] = None
     segments: Optional[list[Segment]] = Field(None, description="详细分段信息（带说话人识别）")
 
 # Router
 router = APIRouter()
 
-@router.post("/v1/audio/transcriptions", response_model=TranscriptionResponse)
+@router.post("/v1/audio/transcriptions")
 async def create_transcription(
     request: Request,
     file: UploadFile = File(..., description="Audio file (wav, mp3, m4a, etc.)"),
-    model: str = Form("sensevoice-small", description="Model ID (currently ignored, actual model in config)"),
-    language: str = Form("auto", description="Language code (auto, zh, en, yue, ja, ko)"),
-    response_format: str = Form("json", description="Response format: 'json' (text only) or 'verbose_json' (with speaker info)"),
-    clean_tags: bool = Form(True, description="是否清理 <|xxx|> 标签（FunASR 专用）")
+    model: str = Form("paraformer", description="Model ID (currently uses Paraformer for speaker diarization)"),
+    language: str = Form("auto", description="Language code (auto, zh, en)"),
+    output_format: str = Form("txt", description="Output format: 'txt' (default, clean text), 'json' (with segments), 'srt' (subtitle)"),
+    with_timestamp: bool = Form(False, description="Include timestamps in txt output (e.g., [02:15] [Speaker 0]: ...)"),
     ):
+    """
+    Transcribe audio file with speaker diarization.
+    
+    Output Formats:
+    - **txt** (default): Clean text with speaker labels, suitable for RAG/LLM
+    - **json**: Full structured data with segments and timestamps
+    - **srt**: Standard SRT subtitle format
+    
+    Examples:
+    - Basic: `curl -F "file=@audio.mp3" http://localhost:50070/v1/audio/transcriptions`
+    - With timestamps: `curl -F "file=@audio.mp3" -F "with_timestamp=true" ...`
+    - JSON format: `curl -F "file=@audio.mp3" -F "output_format=json" ...`
+    """
     request_id = getattr(request.state, "request_id", "unknown")
     
     # 1. 文件类型校验
@@ -63,7 +75,7 @@ async def create_transcription(
             detail="Unsupported file type. Only audio files are allowed."
         )
     
-    # 2. 文件大小校验（读取内容并检查）
+    # 2. 文件大小校验
     content = await file.read()
     file_size_mb = len(content) / (1024 * 1024)
     max_size_mb = MAX_UPLOAD_SIZE_MB
@@ -75,83 +87,86 @@ async def create_transcription(
             detail=f"File size exceeds maximum allowed ({max_size_mb} MB)"
         )
     
-    # 重置文件指针以供后续读取
     await file.seek(0)
     
-    logger.info(f"[{request_id}] Processing file: {file.filename} ({file_size_mb:.2f}MB, {file.content_type})")
+    logger.info(f"[{request_id}] Processing file: {file.filename} ({file_size_mb:.2f}MB, format={output_format})")
     
     # 3. 获取 Service
     service = request.app.state.service
 
     try:
-        # 2. 确定是否需要说话人信息（verbose_json 或显式请求 segment）
-        include_speaker_info = (response_format == "verbose_json")
-        
-        # 3. 构造参数
+        # 4. 构造参数
         params = {
             "language": language,
-            "clean_tags": clean_tags,
-            "response_format": "json" if include_speaker_info else "txt",  # MLX 引擎使用
+            "output_format": output_format,
+            "with_timestamp": with_timestamp,
         }
 
-        # 4. 提交任务（传递 request_id）
+        # 5. 提交任务
         result = await service.submit(file, params, request_id=request_id)
         
-        # 5. 处理返回值（可能是字符串或字典）
-        if isinstance(result, dict):
-            # MLX 引擎返回了 JSON 格式（包含说话人信息）
-            text = result.get("text", "")
-            segments_data = result.get("segments")
-            duration = result.get("duration", 0.0)
-            raw_text = result.get("raw_text")
-            is_cleaned = result.get("is_cleaned", True)
-            
-            # 格式化 segments（添加 id 字段）
-            segments = None
-            if segments_data:
-                segments = [
-                    {
-                        "id": i,
-                        "speaker": seg.get("speaker"),
-                        "start": seg.get("start", 0.0),
-                        "end": seg.get("end", 0.0),
-                        "text": seg.get("text", "")
-                    }
-                    for i, seg in enumerate(segments_data)
-                ]
-        else:
-            # 文本格式返回（FunASR 或 MLX txt 格式）
-            text = result
-            segments = None
-            duration = 0.0
-            raw_text = None
-            is_cleaned = True
+        # 6. 根据格式返回不同响应
+        if output_format == "txt" or output_format == "srt":
+            # 纯文本响应
+            return PlainTextResponse(
+                content=result if isinstance(result, str) else result.get("text", ""),
+                media_type="text/plain; charset=utf-8"
+            )
         
-        # 6. 构造返回对象
-        return TranscriptionResponse(
-            text=text,
-            duration=duration,
-            language=language if language != "auto" else "zh",
-            model=request.app.state.model_id if hasattr(request.app.state, "model_id") else None,
-            raw_text=raw_text,
-            is_cleaned=is_cleaned,
-            segments=segments  # 说话人信息（如果有）
+        elif output_format == "json":
+            # JSON 格式响应
+            if isinstance(result, dict):
+                text = result.get("text", "")
+                segments_data = result.get("segments", [])
+                duration = result.get("duration", 0.0)
+                
+                # 格式化 segments
+                segments = None
+                if segments_data:
+                    segments = [
+                        {
+                            "id": i,
+                            "speaker": seg.get("speaker"),
+                            "start": seg.get("start", 0.0),
+                            "end": seg.get("end", 0.0),
+                            "text": seg.get("text", "")
+                        }
+                        for i, seg in enumerate(segments_data)
+                    ]
+                
+                return TranscriptionResponse(
+                    text=text,
+                    duration=duration,
+                    language=language if language != "auto" else "zh",
+                    model=request.app.state.model_id if hasattr(request.app.state, "model_id") else "paraformer",
+                    segments=segments
+                )
+            else:
+                return TranscriptionResponse(
+                    text=result,
+                    language=language if language != "auto" else "zh",
+                    model="paraformer"
+                )
+        
+        # 默认返回纯文本
+        return PlainTextResponse(
+            content=result if isinstance(result, str) else result.get("text", ""),
+            media_type="text/plain; charset=utf-8"
         )
 
     except RuntimeError as e:
         if "Queue is full" in str(e):
             raise HTTPException(status_code=503, detail="Server is busy (Queue Full). Please try again later.")
-        # 不泄露内部错误细节
         logger.error(f"[{request_id}] Runtime error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Internal server error occurred. Please check server logs for details. (Request ID: {request_id})"
+            detail=f"Internal server error occurred. (Request ID: {request_id})"
         )
     
     except Exception as e:
-        # 不泄露内部错误细节
         logger.error(f"[{request_id}] Unexpected error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Internal server error occurred. Please check server logs for details. (Request ID: {request_id})"
+            detail=f"Internal server error occurred. (Request ID: {request_id})"
         )
+

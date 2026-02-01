@@ -26,7 +26,9 @@ ENGINE_TYPE: EngineType = os.getenv("ENGINE_TYPE", "funasr")  # type: ignore
 
 # === 模型配置 ===
 # FunASR 默认模型
-FUNASR_MODEL_ID = os.getenv("FUNASR_MODEL_ID", "iic/SenseVoiceSmall")
+# NOTE: 使用 Paraformer 以支持说话人分离 (SPEC-007)
+# SenseVoice 不支持时间戳预测，无法与 cam++ 配合
+FUNASR_MODEL_ID = os.getenv("FUNASR_MODEL_ID", "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch")
 
 # MLX 默认模型
 MLX_MODEL_ID = os.getenv("MLX_MODEL_ID", "mlx-community/Qwen3-ASR-1.7B-4bit")

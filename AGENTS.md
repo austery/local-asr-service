@@ -1,9 +1,9 @@
-# Local SenseVoice API (Mac Silicon Optimized)
+# Local ASR Service (Mac Silicon Optimized)
 
 ## Project Overview
 A high-performance, local voice transcription service optimized for Apple Silicon (M-series) chips.
 Supports **dual engine architecture**:
-- **FunASR Engine**: Alibaba FunASR (SenseVoiceSmall) model via PyTorch MPS
+- **FunASR Engine**: Alibaba FunASR (Paraformer) model via PyTorch MPS, supports Speaker Diarization.
 - **MLX Audio Engine**: Apple MLX native models (Qwen3-ASR, Whisper, etc.)
 
 Provides an OpenAI Whisper-compatible HTTP API.
@@ -43,7 +43,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 50070 --workers 1
 |----------|---------|-------------|
 | `ENGINE_TYPE` | `funasr` | Engine type: `funasr` or `mlx` |
 | `MODEL_ID` | (engine default) | Override model ID for any engine |
-| `FUNASR_MODEL_ID` | `iic/SenseVoiceSmall` | Default model for FunASR engine |
+| `FUNASR_MODEL_ID` | `iic/speech_seaco_paraformer...` | Default model for FunASR (supports diarization) |
 | `MLX_MODEL_ID` | `mlx-community/Qwen3-ASR-1.7B-4bit` | Default model for MLX engine |
 | `HOST` | `0.0.0.0` | Server host |
 | `PORT` | `50070` | Server port |
