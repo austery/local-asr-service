@@ -1,5 +1,5 @@
 [project]
-name = "local-sensevoice"
+name = "local-asr-service"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"

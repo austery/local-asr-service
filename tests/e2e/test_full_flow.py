@@ -45,11 +45,15 @@ class TestEndToEnd:
             response = real_client.post(
                 "/v1/audio/transcriptions",
                 files={"file": ("silence.wav", f, "audio/wav")},
-                data={"language": "zh", "clean_tags": "true"}
+                data={
+                    "language": "zh", 
+                    "output_format": "json"  # 显式请求 JSON 格式进行验证
+                }
             )
         
         assert response.status_code == 200
         result = response.json()
+
         
         # 对于静音文件，SenseVoice 可能返回空字符串，或者一些幻觉文本
         # 我们主要验证流程跑通了，没有报错
