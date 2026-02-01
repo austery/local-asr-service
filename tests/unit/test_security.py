@@ -1,6 +1,7 @@
 """
 Unit tests for security features (SPEC-006).
 Tests file size limits, MIME type validation, and error message sanitization.
+Updated for SPEC-007 API changes (removed clean_tags, added output_format).
 """
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock, PropertyMock
@@ -28,7 +29,11 @@ class TestFileSizeLimit:
         # Mock request
         request = MagicMock()
         request.state.request_id = "test-request-id"
-        request.app.state.service.submit = AsyncMock(return_value={"text": "test", "duration": 1.0})
+        request.app.state.service.submit = AsyncMock(return_value={
+            "text": "test", 
+            "duration": 1.0,
+            "segments": None
+        })
         request.app.state.model_id = "test-model"
         
         # Execute - 不应抛出异常
@@ -37,8 +42,8 @@ class TestFileSizeLimit:
             file=file,
             model="test",
             language="auto",
-            response_format="json",
-            clean_tags=True
+            output_format="json",
+            with_timestamp=False
         )
         
         assert result.text == "test"
@@ -69,8 +74,8 @@ class TestFileSizeLimit:
                     file=file,
                     model="test",
                     language="auto",
-                    response_format="json",
-                    clean_tags=True
+                    output_format="json",
+                    with_timestamp=False
                 )
             
             assert exc_info.value.status_code == 413
@@ -97,7 +102,11 @@ class TestMIMETypeValidation:
             # Mock request
             request = MagicMock()
             request.state.request_id = "test-request-id"
-            request.app.state.service.submit = AsyncMock(return_value={"text": "test", "duration": 1.0})
+            request.app.state.service.submit = AsyncMock(return_value={
+                "text": "test", 
+                "duration": 1.0,
+                "segments": None
+            })
             request.app.state.model_id = "test-model"
             
             # Execute - 不应抛出异常
@@ -106,8 +115,8 @@ class TestMIMETypeValidation:
                 file=file,
                 model="test",
                 language="auto",
-                response_format="json",
-                clean_tags=True
+                output_format="json",
+                with_timestamp=False
             )
             
             assert result.text == "test"
@@ -146,8 +155,8 @@ class TestMIMETypeValidation:
                     file=file,
                     model="test",
                     language="auto",
-                    response_format="json",
-                    clean_tags=True
+                    output_format="json",
+                    with_timestamp=False
                 )
             
             assert exc_info.value.status_code == 415, f"Failed for {mime_type}"
@@ -187,8 +196,8 @@ class TestErrorMessageSanitization:
                 file=file,
                 model="test",
                 language="auto",
-                response_format="json",
-                clean_tags=True
+                output_format="json",
+                with_timestamp=False
             )
         
         # 验证：错误信息不包含敏感内容
@@ -226,8 +235,8 @@ class TestErrorMessageSanitization:
                 file=file,
                 model="test",
                 language="auto",
-                response_format="json",
-                clean_tags=True
+                output_format="json",
+                with_timestamp=False
             )
         
         # 验证：错误信息不包含堆栈信息
@@ -264,8 +273,8 @@ class TestErrorMessageSanitization:
                 file=file,
                 model="test",
                 language="auto",
-                response_format="json",
-                clean_tags=True
+                output_format="json",
+                with_timestamp=False
             )
         
         # 验证：503 状态码与明确的队列满消息
@@ -295,7 +304,11 @@ class TestRequestIDGeneration:
         request.state.request_id = expected_request_id
         
         # Mock service
-        submit_mock = AsyncMock(return_value={"text": "test", "duration": 1.0})
+        submit_mock = AsyncMock(return_value={
+            "text": "test", 
+            "duration": 1.0,
+            "segments": None
+        })
         request.app.state.service.submit = submit_mock
         request.app.state.model_id = "test-model"
         
@@ -305,8 +318,8 @@ class TestRequestIDGeneration:
             file=file,
             model="test",
             language="auto",
-            response_format="json",
-            clean_tags=True
+            output_format="json",
+            with_timestamp=False
         )
         
         # 验证：submit 被调用且传入了正确的 request_id

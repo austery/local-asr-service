@@ -10,9 +10,8 @@ from typing import Dict, Any
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
-# 引入抽象接口和适配器
+# 引入抽象接口
 from src.core.base_engine import ASREngine
-from src.adapters.text import clean_sensevoice_tags
 
 # 定义一个简单的任务对象，用于在队列中传递
 @dataclass

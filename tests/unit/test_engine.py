@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from src.core.funasr_engine import FunASREngine
+from src.core.funasr_engine import FunASREngine, DEFAULT_MODEL_ID
 
 class TestFunASREngine:
     """
@@ -43,9 +43,13 @@ class TestFunASREngine:
         # 验证 AutoModel 是否被正确调用
         mock_auto_model.assert_called_once()
         call_kwargs = mock_auto_model.call_args.kwargs
-        assert call_kwargs["model"] == "iic/SenseVoiceSmall"
+        # 使用实际的默认模型 ID
+        assert call_kwargs["model"] == DEFAULT_MODEL_ID
         assert call_kwargs["device"] == "cpu"
         assert call_kwargs["disable_update"] is True
+        # SPEC-007: 验证说话人分离模型配置
+        assert call_kwargs["spk_model"] == "cam++"
+        assert call_kwargs["vad_model"] == "fsmn-vad"
         
         # 验证 engine.model 是否被赋值
         assert engine.model is not None
@@ -65,47 +69,77 @@ class TestFunASREngine:
         with pytest.raises(RuntimeError, match="Model not loaded"):
             engine.transcribe_file("dummy.wav")
 
-    def test_transcribe_success(self, mock_auto_model):
-        """测试正常推理流程"""
+    def test_transcribe_success_json(self, mock_auto_model):
+        """测试正常推理流程 - JSON 格式输出"""
         # 1. Setup Mock
         mock_instance = MagicMock()
         mock_auto_model.return_value = mock_instance
         
-        # 模拟 generate 返回值: list of dict
-        mock_instance.generate.return_value = [{"text": "Hello World"}]
+        # 模拟 generate 返回值: 包含 sentence_info (说话人分离结果)
+        mock_instance.generate.return_value = [{
+            "text": "Hello World",
+            "sentence_info": [
+                {"text": "Hello", "start": 0, "end": 500, "spk": 0},
+                {"text": "World", "start": 500, "end": 1000, "spk": 0}
+            ]
+        }]
         
         # 2. Load Engine
         engine = FunASREngine()
         engine.load()
         
-        # 3. Execute
-        result = engine.transcribe_file("test.wav", language="en")
+        # 3. Execute (默认 output_format="json")
+        result = engine.transcribe_file("test.wav", output_format="json")
         
-        # 4. Assertions
-        assert result == "Hello World"
+        # 4. Assertions - JSON 格式返回 dict
+        assert isinstance(result, dict)
+        assert result["text"] == "Hello World"
+        assert "segments" in result
+        assert len(result["segments"]) == 2
         
         # 验证 generate 调用参数
         mock_instance.generate.assert_called_once()
         call_kwargs = mock_instance.generate.call_args.kwargs
         assert call_kwargs["input"] == "test.wav"
-        assert call_kwargs["language"] == "en"
         assert call_kwargs["use_itn"] is True
 
-    def test_transcribe_language_fallback(self, mock_auto_model):
-        """测试语言参数回退逻辑"""
+    def test_transcribe_success_txt(self, mock_auto_model):
+        """测试 TXT 格式输出"""
         mock_instance = MagicMock()
         mock_auto_model.return_value = mock_instance
-        mock_instance.generate.return_value = [{"text": "..."}]
+        mock_instance.generate.return_value = [{
+            "text": "Hello World",
+            "sentence_info": [
+                {"text": "Hello", "start": 0, "end": 500, "spk": 0}
+            ]
+        }]
         
         engine = FunASREngine()
         engine.load()
         
-        # 传入不支持的语言 "fr" (法语)
-        engine.transcribe_file("test.wav", language="fr")
+        result = engine.transcribe_file("test.wav", output_format="txt")
         
-        # 验证是否回退到 "auto"
-        call_kwargs = mock_instance.generate.call_args.kwargs
-        assert call_kwargs["language"] == "auto"
+        # TXT 格式返回字符串
+        assert isinstance(result, str)
+        assert "[Speaker 0]" in result
+        assert "Hello" in result
+
+    def test_transcribe_no_sentence_info(self, mock_auto_model):
+        """测试模型没有返回 sentence_info 时的回退逻辑"""
+        mock_instance = MagicMock()
+        mock_auto_model.return_value = mock_instance
+        # 只返回 text，没有 sentence_info
+        mock_instance.generate.return_value = [{"text": "Simple text"}]
+        
+        engine = FunASREngine()
+        engine.load()
+        
+        result = engine.transcribe_file("test.wav", output_format="json")
+        
+        # 应该返回 dict，但 segments 为 None
+        assert isinstance(result, dict)
+        assert result["text"] == "Simple text"
+        assert result["segments"] is None
 
     def test_transcribe_mps_cleanup(self, mock_auto_model, mock_torch):
         """测试 MPS 环境下的显存清理"""

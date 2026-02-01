@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import os
+from src.core.funasr_engine import DEFAULT_MODEL_ID
 
 
 class TestConfig:
@@ -21,10 +22,9 @@ class TestConfig:
             with patch("src.config.load_dotenv"):  # Skip .env loading
                 importlib.reload(src.config)
             
-            # 测试默认值（应该是 funasr）
-            # 注意：如果之前已经加载过，可能会保留旧值
-            # 所以我们只验证 get_model_id 函数逻辑
-            assert src.config.FUNASR_MODEL_ID == "iic/SenseVoiceSmall"
+            # 测试默认值
+            # NOTE: SPEC-007 更新默认模型为 Paraformer (支持说话人分离)
+            assert src.config.FUNASR_MODEL_ID == DEFAULT_MODEL_ID
             assert src.config.MLX_MODEL_ID == "mlx-community/Qwen3-ASR-1.7B-4bit"
         finally:
             os.environ.update(old_env)
@@ -39,8 +39,8 @@ class TestFactory:
         from src.core.mlx_engine import MlxAudioEngine
         
         # 直接测试引擎类
-        funasr_engine = FunASREngine(model_id="iic/SenseVoiceSmall")
-        assert funasr_engine.model_id == "iic/SenseVoiceSmall"
+        funasr_engine = FunASREngine(model_id=DEFAULT_MODEL_ID)
+        assert funasr_engine.model_id == DEFAULT_MODEL_ID
         
         mlx_engine = MlxAudioEngine(model_id="mlx-community/Qwen3-ASR-1.7B-4bit")
         assert mlx_engine.model_id == "mlx-community/Qwen3-ASR-1.7B-4bit"

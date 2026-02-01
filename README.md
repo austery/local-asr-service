@@ -37,20 +37,20 @@
 当一个请求到达时，系统内部的流转如下：
 
 graph TD  
-    A\[Client\] \--\>|POST /transcriptions| B(API Layer / Routes)  
-    B \--\>|1. 校验参数 & 写入临时文件| C{Service Queue}  
-    C \--\>|2. 入队 (非阻塞)| D\[Asyncio Queue (Max 50)\]  
-    B \-.-\>|3. 等待 Future 结果| A  
+    A[Client] -->|POST /transcriptions| B(API Layer / Routes)  
+    B -->|1. 校验参数 & 写入临时文件| C{Service Queue}  
+    C -->|2. 入队 (非阻塞)| D[Asyncio Queue (Max 50)]  
+    B -.->|3. 等待 Future 结果| A  
       
     subgraph "Background Worker (Serial)"  
-    D \--\>|4. 消费者取出任务| E\[Engine Layer\]  
-    E \--\>|5. MPS 推理 (SenseVoice)| F\[FunASR Model\]  
-    F \--\>|6. 返回 Raw Text| E  
-    E \--\>|7. 文本清洗 (Adapters)| G\[Result\]  
+    D -->|4. 消费者取出任务| E[Engine Layer]  
+    E -->|5. MPS 推理 (Paraformer/SenseVoice)| F[FunASR Model]  
+    F -->|6. 返回 Raw Text| E  
+    E -->|7. 格式化输出 (Adapters)| G[Result]  
     end  
       
-    G \--\>|8. 唤醒 Future| B  
-    B \--\>|9. 返回 JSON| A
+    G -->|8. 唤醒 Future| B  
+    B -->|9. 返回 JSON/Text/SRT| A
 
 ## **🛠️ 环境准备 (Installation)**
 
@@ -101,8 +101,8 @@ cp .env.example .env
 # 引擎类型
 ENGINE_TYPE=funasr  # 或 mlx
 
-# 模型 ID（可选，覆盖默认值）
-# MODEL_ID=mlx-community/whisper-large-v3-turbo
+# 模型 ID（可选，覆盖默认值。若需说话人分离，建议用 Paraformer）
+# FUNASR_MODEL_ID=iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
 
 # 服务配置
 PORT=50070
@@ -114,15 +114,13 @@ LOG_LEVEL=INFO
 
 ## **🚀 启动服务**
 
-### **方式 A: FunASR 引擎 (默认)**
-
-使用阿里 SenseVoice 模型：
+使用 Paraformer 模型（默认，支持说话人分离）：
 
 ```bash
 # 使用 uv 运行
 uv run python -m src.main
 
-# 或指定模型
+# 或显式指定 SenseVoice (仅快速转录，不支持说话人分离)
 FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main
 ```
 
@@ -195,7 +193,7 @@ uvicorn src.main:app \--host 0.0.0.0 \--port 50070 \--workers 1
 ### **1\. 健康检查**
 
 curl http://localhost:50070/health  
-# 返回: {"status": "healthy", "engine_type": "funasr", "model": "iic/SenseVoiceSmall"}
+# 返回: {"status": "healthy", "engine_type": "funasr", "model": "iic/speech_seaco_paraformer..."}
 
 #### **1. 文本转录 (默认模式)**
 
@@ -255,48 +253,9 @@ curl http://localhost:50070/v1/audio/transcriptions \
 | `with_timestamp` | Boolean | `false` | txt 格式下是否包含行首时间戳 |
 | `language` | String | `auto` | 语言代码: `zh`, `en`, `auto` |
 
-#### **clean_tags 参数详解**
-
-SenseVoice 模型原始输出包含丰富的元信息标签，例如：
-- **语言标签**: `<|zh|>`, `<|en|>`
-- **情感标签**: `<|NEUTRAL|>`, `<|HAPPY|>`, `<|ANGRY|>`
-- **事件标签**: `<|Speech|>`, `<|Applause|>`
-
-**模式 1: clean_tags=true (默认，推荐用于生产)**
-
-curl http://localhost:50070/v1/audio/transcriptions \
-  -F "file=@audio.mp3" \
-  -F "clean_tags=true"
-
-返回纯净文本，适合直接展示给用户：
-```json
-{
-  "text": "大家好，欢迎收看本期视频。",
-  "raw_text": "<|zh|><|NEUTRAL|><|Speech|>大家好，欢迎收看本期视频。",
-  "is_cleaned": true
-}
-```
-
-**模式 2: clean_tags=false (保留原始标签，用于分析)**
-
-curl http://localhost:50070/v1/audio/transcriptions \
-  -F "file=@audio.mp3" \
-  -F "clean_tags=false"
-
-返回包含所有标签的原始输出，适合：
-- 情感分析
-- 语言检测验证
-- 调试模型输出
-
-```json
-{
-  "text": "<|zh|><|NEUTRAL|><|Speech|>大家好，欢迎收看本期视频。",
-  "raw_text": "<|zh|><|NEUTRAL|><|Speech|>大家好，欢迎收看本期视频。",
-  "is_cleaned": false
-}
-```
-
-> **💡 提示**: 无论 `clean_tags` 设置为何值，响应中始终包含 `raw_text` 字段，保存完整的模型原始输出。
+> **💡 提示**: 
+> 1. 默认输出格式 (`txt`) 返回带说话人标记的平铺文本。
+> 2. `clean_tags` 参数仅在使用 SenseVoice 模型时有效，用于移除 `<|zh|>` 等特殊标签。
 
 ### **3\. 查看自动文档 (Swagger UI)**
 
@@ -311,9 +270,10 @@ curl http://localhost:50070/v1/audio/transcriptions \
 路径: ~/.cache/modelscope/hub/models/iic/
 
 已下载的模型示例：
-├─ SenseVoiceSmall (893 MB) - 主模型
-├─ punc_ct-transformer (1.1 GB) - 标点符号
-└─ speech_fsmn_vad (3.9 MB) - 语音活动检测
+├─ speech_seaco_paraformer_large (支持时间戳/说话人)
+├─ SenseVoiceSmall (仅纯文本转录)
+├─ punc_ct-transformer-cn-en (标点符号)
+└─ speech_fsmn_vad (语音活动检测)
 
 查看命令：
 ls -lh ~/.cache/modelscope/hub/models/iic/
@@ -356,7 +316,7 @@ du -sh ~/.cache/modelscope ~/.cache/huggingface
 │   │   └── routes.py     \# 路由与 Pydantic 定义  
 │   ├── core              \# 核心业务  
 │   │   ├── base\_engine.py   \# 引擎抽象接口 (Protocol)  
-│   │   ├── funasr\_engine.py \# FunASR/SenseVoice 实现  
+│   │   ├── funasr_engine.py # FunASR (Paraformer/SenseVoice) 实现  
 │   │   ├── mlx\_engine.py    \# MLX Audio 实现  
 │   │   └── factory.py       \# 引擎工厂  
 │   ├── services          \# 服务调度  

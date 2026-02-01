@@ -49,7 +49,7 @@ async def create_transcription(
     file: UploadFile = File(..., description="Audio file (wav, mp3, m4a, etc.)"),
     model: str = Form("paraformer", description="Model ID (currently uses Paraformer for speaker diarization)"),
     language: str = Form("auto", description="Language code (auto, zh, en)"),
-    output_format: str = Form("txt", description="Output format: 'txt' (default, clean text), 'json' (with segments), 'srt' (subtitle)"),
+    output_format: str = Form("json", description="Output format: 'json' (default, OpenAI compatible), 'txt' (clean text only), 'srt' (subtitle)"),
     with_timestamp: bool = Form(False, description="Include timestamps in txt output (e.g., [02:15] [Speaker 0]: ...)"),
     ):
     """
@@ -106,53 +106,47 @@ async def create_transcription(
         result = await service.submit(file, params, request_id=request_id)
         
         # 6. 根据格式返回不同响应
-        if output_format == "txt" or output_format == "srt":
-            # 纯文本响应
+        # SRT 格式返回纯文本（字幕文件格式）
+        if output_format == "srt":
             return PlainTextResponse(
                 content=result if isinstance(result, str) else result.get("text", ""),
                 media_type="text/plain; charset=utf-8"
             )
         
-        elif output_format == "json":
-            # JSON 格式响应
-            if isinstance(result, dict):
-                text = result.get("text", "")
-                segments_data = result.get("segments", [])
-                duration = result.get("duration", 0.0)
-                
-                # 格式化 segments
-                segments = None
-                if segments_data:
-                    segments = [
-                        {
-                            "id": i,
-                            "speaker": seg.get("speaker"),
-                            "start": seg.get("start", 0.0),
-                            "end": seg.get("end", 0.0),
-                            "text": seg.get("text", "")
-                        }
-                        for i, seg in enumerate(segments_data)
-                    ]
-                
-                return TranscriptionResponse(
-                    text=text,
-                    duration=duration,
-                    language=language if language != "auto" else "zh",
-                    model=request.app.state.model_id if hasattr(request.app.state, "model_id") else "paraformer",
-                    segments=segments
-                )
-            else:
-                return TranscriptionResponse(
-                    text=result,
-                    language=language if language != "auto" else "zh",
-                    model="paraformer"
-                )
-        
-        # 默认返回纯文本
-        return PlainTextResponse(
-            content=result if isinstance(result, str) else result.get("text", ""),
-            media_type="text/plain; charset=utf-8"
-        )
+        # JSON 和 TXT 格式都返回 JSON 响应（OpenAI API 兼容）
+        # TXT 格式只返回 text 字段，不含 segments
+        if isinstance(result, dict):
+            text = result.get("text", "")
+            segments_data = result.get("segments", [])
+            duration = result.get("duration", 0.0)
+            
+            # 格式化 segments（仅 json 格式包含）
+            segments = None
+            if output_format == "json" and segments_data:
+                segments = [
+                    {
+                        "id": i,
+                        "speaker": seg.get("speaker"),
+                        "start": seg.get("start", 0.0),
+                        "end": seg.get("end", 0.0),
+                        "text": seg.get("text", "")
+                    }
+                    for i, seg in enumerate(segments_data)
+                ]
+            
+            return TranscriptionResponse(
+                text=text,
+                duration=duration,
+                language=language if language != "auto" else "zh",
+                model=request.app.state.model_id if hasattr(request.app.state, "model_id") else "paraformer",
+                segments=segments
+            )
+        else:
+            return TranscriptionResponse(
+                text=result,
+                language=language if language != "auto" else "zh",
+                model="paraformer"
+            )
 
     except RuntimeError as e:
         if "Queue is full" in str(e):

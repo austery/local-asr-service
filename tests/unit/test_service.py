@@ -12,11 +12,17 @@ class TestTranscriptionService:
     
     @pytest.fixture
     def mock_engine(self):
-        """Mock SenseVoiceEngine"""
+        """Mock FunASR Engine"""
         engine = MagicMock()
         # transcribe_file 是同步方法，但在 service 中被 run_in_threadpool 调用
-        # 我们只需要 mock 它的返回值
-        engine.transcribe_file.return_value = "Mocked Transcription"
+        # 返回 FunASR 格式的结构化数据
+        engine.transcribe_file.return_value = {
+            "text": "Mocked Transcription",
+            "segments": [
+                {"speaker": "Speaker 0", "text": "Mocked", "start": 0, "end": 500},
+                {"speaker": "Speaker 0", "text": "Transcription", "start": 500, "end": 1000}
+            ]
+        }
         return engine
 
     @pytest.fixture
@@ -40,15 +46,13 @@ class TestTranscriptionService:
         
         try:
             # 2. 提交任务
-            params = {"language": "zh"}
+            params = {"language": "zh", "output_format": "json"}
             result = await service.submit(mock_upload_file, params)
             
-            # 3. 验证结果
+            # 3. 验证结果 (FunASR 返回格式)
             assert result["text"] == "Mocked Transcription"
             assert "duration" in result
-            assert "raw_text" in result  # 新增：验证 raw_text 字段
-            assert "is_cleaned" in result  # 新增：验证 is_cleaned 字段
-            assert result["is_cleaned"] is True  # 默认应该清理
+            assert "segments" in result
             
             # 4. 验证 Engine 调用
             service.engine.transcribe_file.assert_called_once()
@@ -56,27 +60,26 @@ class TestTranscriptionService:
         finally:
             # 5. 清理 Worker
             service.is_running = False
-            # 发送一个空任务或者直接 cancel，这里直接 cancel 比较简单
             worker_task.cancel()
             try:
                 await worker_task
             except asyncio.CancelledError:
                 pass
 
-    async def test_submit_with_clean_tags_false(self, service, mock_upload_file):
-        """测试 clean_tags=false 的情况"""
+    async def test_submit_txt_format(self, service, mock_upload_file):
+        """测试 txt 格式输出"""
+        # Mock Engine 返回 txt 格式字符串
+        service.engine.transcribe_file.return_value = "[Speaker 0]: Mocked Transcription"
+        
         service.is_running = True
         worker_task = asyncio.create_task(service._consume_loop())
         
         try:
-            # 提交任务，明确设置 clean_tags=False
-            params = {"language": "zh", "clean_tags": False}
+            params = {"language": "zh", "output_format": "txt"}
             result = await service.submit(mock_upload_file, params)
             
-            # 验证结果
-            assert result["text"] == "Mocked Transcription"  # Mock 返回的是已清理的文本
-            assert result["is_cleaned"] is False  # 应该标记为未清理
-            assert result["raw_text"] == "Mocked Transcription"
+            # txt 格式直接返回字符串
+            assert result == "[Speaker 0]: Mocked Transcription"
             
         finally:
             service.is_running = False
@@ -114,7 +117,7 @@ class TestTranscriptionService:
             captured_path = file_path
             # 此时文件应该存在
             assert os.path.exists(file_path)
-            return "text"
+            return {"text": "test", "segments": None}
             
         service.engine.transcribe_file.side_effect = side_effect
         
