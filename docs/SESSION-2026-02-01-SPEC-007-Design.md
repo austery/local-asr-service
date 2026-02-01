@@ -1,24 +1,18 @@
-# 会话总结：SPEC-007 说话人分离设计与集成规划
-
-**日期**: 2026-02-01  
-**主题**: 集成 FunASR 原生说话人分离模型 (Cam++)  
-**规范文档**: [SPEC-007-Speaker-Diarization-FunASR.md](./SPEC-007-Speaker-Diarization-FunASR.md)
-
----
-
 ## 📊 达成共识
 
-本次会话确立了说话人分离的最终技术路线，放弃了复杂的 `pyannote` 方案，转向更加原生且轻量级的 `cam++` 集成方案。
+本次会话确立了说话人分离的最终技术路线，并在实施过程中取得了一项**关键技术发现**。
 
-### 核心决策
-1. **模型组合**: 采用 `SenseVoiceSmall` + `fsmn-vad` + `cam++` 的阿里开源组合。
-2. **集成方式**: 直接在 `FunASREngine` 的 `AutoModel` 中启用 `spk_model="cam++"`。
-3. **输出格式**: 优先推荐 `List[Dict]` 结构化数据，以支持 EMR (电子病历) 系统的证据提取需求。
+### 核心决策与关键发现
+1. **[CRITICAL] 模型调整**: 发现 **SenseVoiceSmall** 不支持时间谱预测（Timestamps），因此无法配合 **Cam++** 完成说话人分离。
+2. **技术转向**: 最终决定采用 **Paraformer** (`speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch`)。Paraformer 原生支持时间戳，是目前实现说话人分离的“黄金组合”。
+3. **性能验证**: 在 Mac M4 Pro 硬件上，处理 5 分钟音频仅需 16 秒（RTF ~0.016），识别准确率极高。
+4. **输出格式**: 实现了多格式输出方案（JSON, TXT, SRT），特别针对 EMR 系统增加了带时间引用的纯净文本模式。
 
-## ✅ 已完成工作 (Documentation Only)
+## ✅ 已完成工作
 
-1. **[NEW] [SPEC-007-Speaker-Diarization-FunASR.md](file:///Users/leipeng/Documents/Projects/local-asr-service/docs/SPEC-007-Speaker-Diarization-FunASR.md)**: 创建了详细的技术规范，包含模型加载和结果解析的伪代码。
-2. **[UPDATE] [SPEC-005-Speaker-Diarization.md](file:///Users/leipeng/Documents/Projects/local-asr-service/docs/SPEC-005-Speaker-Diarization.md)**: 将方案 C (FunASR + Cam++) 标记为**已选中 (Chosen)**，并指向 SPEC-007。
+1. **[UPDATE] [SPEC-007-Speaker-Diarization-FunASR.md](file:///Users/leipeng/Documents/Projects/local-asr-service/docs/SPEC-007-Speaker-Diarization-FunASR.md)**: 已更新为“已实现”状态，记录了 Paraformer 的配置与 M4 Pro 的性能数据。
+2. **[UPDATE] [SPEC-005-Speaker-Diarization.md](file:///Users/leipeng/Documents/Projects/local-asr-service/docs/SPEC-005-Speaker-Diarization.md)**: 确认方案 C (Paraformer + Cam++) 为标准实现路径。
+3. **[DONE] 核心实现**: `FunASREngine` 已支持加载 Paraformer 并在转录中提取 Speaker ID 与时间戳。
 
 ## 🔧 实施路线图 (Next Steps)
 
