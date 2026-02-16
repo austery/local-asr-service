@@ -75,19 +75,20 @@ async def create_transcription(
             detail="Unsupported file type. Only audio files are allowed."
         )
     
-    # 2. 文件大小校验
-    content = await file.read()
-    file_size_mb = len(content) / (1024 * 1024)
+    # 2. 文件大小校验（通过底层文件对象的 seek/tell 避免读取全部内容到内存）
+    file.file.seek(0, 2)  # seek to end
+    file_size_bytes = file.file.tell()
+    file_size_mb = file_size_bytes / (1024 * 1024)
     max_size_mb = MAX_UPLOAD_SIZE_MB
-    
+
     if file_size_mb > max_size_mb:
         logger.warning(f"[{request_id}] File too large: {file_size_mb:.2f}MB (max: {max_size_mb}MB)")
         raise HTTPException(
             status_code=413,
             detail=f"File size exceeds maximum allowed ({max_size_mb} MB)"
         )
-    
-    await file.seek(0)
+
+    file.file.seek(0)  # reset for downstream reading
     
     logger.info(f"[{request_id}] Processing file: {file.filename} ({file_size_mb:.2f}MB, format={output_format})")
     

@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 
 class TestMlxAudioEngine:
@@ -25,7 +25,7 @@ class TestMlxAudioEngine:
         """Mock AudioChunkingService"""
         with patch("src.core.mlx_engine.AudioChunkingService") as mock:
             mock_instance = MagicMock()
-            mock_instance.process_audio = AsyncMock(return_value=["test.wav"])
+            mock_instance.process_audio = MagicMock(return_value=["test.wav"])
             mock.return_value = mock_instance
             yield mock
 
@@ -98,7 +98,7 @@ class TestMlxAudioEngine:
         mock_load_model.return_value = mock_model
         
         # Mock chunking service 返回单个文件（无切片）
-        mock_chunking_service.return_value.process_audio = AsyncMock(
+        mock_chunking_service.return_value.process_audio = MagicMock(
             return_value=["test.wav"]
         )
         
@@ -134,7 +134,7 @@ class TestMlxAudioEngine:
         mock_load_model.return_value = mock_model
         
         # Mock chunking service 返回3个切片
-        mock_chunking_service.return_value.process_audio = AsyncMock(
+        mock_chunking_service.return_value.process_audio = MagicMock(
             return_value=["chunk_0.wav", "chunk_1.wav", "chunk_2.wav"]
         )
         
@@ -167,7 +167,7 @@ class TestMlxAudioEngine:
         mock_model = MagicMock()
         mock_load_model.return_value = mock_model
         
-        mock_chunking_service.return_value.process_audio = AsyncMock(
+        mock_chunking_service.return_value.process_audio = MagicMock(
             return_value=["test.wav"]
         )
         

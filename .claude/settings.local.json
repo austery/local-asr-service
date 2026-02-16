@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/pengl/projects/local-asr-service remote -v)"
+    ]
+  }
+}

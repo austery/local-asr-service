@@ -90,8 +90,7 @@ class MlxAudioEngine:
         
         try:
             # 步骤1: 检查音频是否需要切片
-            import asyncio
-            chunks = asyncio.run(self.chunking_service.process_audio(file_path))
+            chunks = self.chunking_service.process_audio(file_path)
             
             # 步骤2: 转录所有切片
             results = []

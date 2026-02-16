@@ -55,6 +55,7 @@ async def lifespan(app: FastAPI):
     
     logger.info("🛑 System shutting down...")
     if hasattr(app.state, "service"):
+        await app.state.service.stop_worker()
         app.state.service.engine.release()
 
 # === 初始化 FastAPI ===

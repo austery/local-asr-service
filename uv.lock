@@ -713,7 +713,7 @@ wheels = [
 [[package]]
 name = "local-asr-service"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "funasr", extra = ["llm"] },

@@ -96,38 +96,41 @@ class AudioChunkingService:
                 "Install with: brew install ffmpeg"
             ) from e
     
-    async def process_audio(self, input_path: str) -> List[str]:
+    def process_audio(self, input_path: str) -> List[str]:
         """
-        处理音频：归一化并在必要时切片
-        
+        处理音频：归一化并在必要时切片。
+
+        注意：此方法是同步的（内部全是 subprocess.run 调用），
+        在 Service 层通过 run_in_threadpool 调用。
+
         Args:
             input_path: 原始音频文件路径
-            
+
         Returns:
             音频文件路径列表（如果不需要切片则只有一个路径）
         """
         print(f"🎵 Processing audio: {Path(input_path).name}")
-        
+
         # Step 1: 归一化音频（mono, 16kHz）
-        normalized = await self._normalize_audio(input_path)
+        normalized = self._normalize_audio(input_path)
         print(f"   ✓ Normalized: {normalized.file_size_bytes / 1024 / 1024:.2f}MB, "
               f"{normalized.duration_seconds:.1f}s")
-        
+
         # Step 2: 检查是否需要切片
         if normalized.duration_seconds <= self.max_duration_seconds:
             print(f"   ✓ Duration OK, no chunking needed")
             return [normalized.normalized_path]
-        
+
         # Step 3: 需要切片
         print(f"   ⚠️  Audio duration ({normalized.duration_seconds / 60:.1f} min) "
               f"exceeds limit ({self.max_duration_seconds / 60:.1f} min)")
-        
+
         # 策略A: 尝试静音切片（自适应阈值）
         thresholds = ["-40dB", "-35dB", "-30dB", "-25dB"]
         for threshold in thresholds:
             print(f"   🔍 Trying silence-based splitting at {threshold}...")
             try:
-                chunks = await self._try_silence_split(
+                chunks = self._try_silence_split(
                     normalized.normalized_path,
                     normalized.duration_seconds,
                     threshold,
@@ -138,15 +141,15 @@ class AudioChunkingService:
             except Exception as e:
                 print(f"   ⚠️  Failed at {threshold}: {e}")
                 continue
-        
+
         # 策略B: Fallback 到重叠切片
         print(f"   ⚠️  All silence detection attempts failed. Using overlap splitting.")
-        return await self._split_with_overlap(
+        return self._split_with_overlap(
             normalized.normalized_path,
             normalized.duration_seconds,
         )
     
-    async def _normalize_audio(self, input_path: str) -> AudioNormalizationResult:
+    def _normalize_audio(self, input_path: str) -> AudioNormalizationResult:
         """
         归一化音频到最优格式 (WAV PCM 16kHz Mono)
         - 单声道（语音不需要立体声）
@@ -174,7 +177,7 @@ class AudioChunkingService:
                 if "16000" in output and ("1" in output or "mono" in output):
                     print(f"   ✨ Audio is already 16kHz mono WAV. Skipping normalization.")
                     file_size = input_p.stat().st_size
-                    duration = await self._get_audio_duration(input_path)
+                    duration = self._get_audio_duration(input_path)
                     return AudioNormalizationResult(
                         normalized_path=input_path,
                         file_size_bytes=file_size,
@@ -207,7 +210,7 @@ class AudioChunkingService:
             )
             
             file_size = Path(output_path).stat().st_size
-            duration = await self._get_audio_duration(output_path)
+            duration = self._get_audio_duration(output_path)
             
             return AudioNormalizationResult(
                 normalized_path=output_path,
@@ -217,7 +220,7 @@ class AudioChunkingService:
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Audio normalization failed: {e.stderr}") from e
     
-    async def _get_audio_duration(self, audio_path: str) -> float:
+    def _get_audio_duration(self, audio_path: str) -> float:
         """使用 ffprobe 获取音频时长"""
         cmd = [
             "ffprobe",
@@ -239,7 +242,7 @@ class AudioChunkingService:
         except (subprocess.CalledProcessError, ValueError) as e:
             raise RuntimeError(f"Failed to get audio duration: {e}") from e
     
-    async def _detect_silence(
+    def _detect_silence(
         self,
         audio_path: str,
         threshold: str,
@@ -297,7 +300,7 @@ class AudioChunkingService:
             print(f"   ❌ Silence detection failed: {e}")
             return []
     
-    async def _try_silence_split(
+    def _try_silence_split(
         self,
         audio_path: str,
         duration_seconds: float,
@@ -309,7 +312,7 @@ class AudioChunkingService:
         如果切分点不足或切片仍过大，返回空列表
         """
         # 1. 检测静音
-        silences = await self._detect_silence(audio_path, threshold)
+        silences = self._detect_silence(audio_path, threshold)
         if not silences:
             return []
         
@@ -341,11 +344,11 @@ class AudioChunkingService:
             return []
         
         # 6. 执行切分
-        chunks = await self._split_audio_at_points(audio_path, unique_splits)
+        chunks = self._split_audio_at_points(audio_path, unique_splits)
         
         # 7. 验证所有切片都在时长限制内
         all_valid = all(
-            await self._get_audio_duration(chunk) <= self.max_duration_seconds
+            self._get_audio_duration(chunk) <= self.max_duration_seconds
             for chunk in chunks
         )
         
@@ -372,14 +375,14 @@ class AudioChunkingService:
         nearest = min(silences, key=lambda s: abs(midpoint(s) - target_time))
         return midpoint(nearest)
     
-    async def _split_audio_at_points(
+    def _split_audio_at_points(
         self,
         audio_path: str,
         split_times: List[float],
     ) -> List[str]:
         """在指定时间点切分音频"""
         audio_p = Path(audio_path)
-        duration = await self._get_audio_duration(audio_path)
+        duration = self._get_audio_duration(audio_path)
         
         # 添加起点和终点
         all_points = [0.0] + split_times + [duration]
@@ -420,7 +423,7 @@ class AudioChunkingService:
         
         return chunk_paths
     
-    async def _split_with_overlap(
+    def _split_with_overlap(
         self,
         audio_path: str,
         duration_seconds: float,

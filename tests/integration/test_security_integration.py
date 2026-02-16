@@ -110,21 +110,24 @@ class TestCORSConfiguration:
     def test_cors_wildcard_allows_all_origins(self):
         """测试 CORS 通配符允许所有源"""
         app = create_test_app_with_cors("*")
-        client = TestClient(app)
-        
-        # 模拟来自任意源的请求
-        response = client.options(
-            "/v1/audio/transcriptions",
-            headers={
-                "Origin": "https://any-origin.com",
-                "Access-Control-Request-Method": "POST"
-            }
-        )
-        
-        # 验证：允许访问
-        assert response.status_code == 200
-        assert "access-control-allow-origin" in response.headers
-        assert response.headers["access-control-allow-origin"] == "*"
+        with TestClient(app) as client:
+            # 模拟来自任意源的请求
+            response = client.options(
+                "/v1/audio/transcriptions",
+                headers={
+                    "Origin": "https://any-origin.com",
+                    "Access-Control-Request-Method": "POST"
+                }
+            )
+
+            # 验证：允许访问
+            assert response.status_code == 200
+            assert "access-control-allow-origin" in response.headers
+            # 注意：当 allow_credentials=True 时，Starlette 的 CORSMiddleware
+            # 会回显具体的 Origin 而非 "*"（CORS 规范要求）
+            assert response.headers["access-control-allow-origin"] in (
+                "*", "https://any-origin.com"
+            )
 
 
 class TestFileCleanupOnError:
@@ -178,23 +181,22 @@ class TestRequestTracking:
     def test_request_id_in_response_header(self):
         """测试响应头包含 X-Request-ID"""
         app = create_test_app_with_cors("*")
-        client = TestClient(app)
-        
-        # 创建测试文件
-        files = {"file": ("test.wav", BytesIO(b"fake audio"), "audio/wav")}
-        data = {
-            "model": "test",
-            "language": "auto",
-            "response_format": "json",
-            "clean_tags": "true"
-        }
-        
-        response = client.post("/v1/audio/transcriptions", files=files, data=data)
-        
-        # 验证：响应头包含 X-Request-ID
-        assert response.status_code == 200
-        assert "X-Request-ID" in response.headers
-        assert len(response.headers["X-Request-ID"]) > 0
+        with TestClient(app) as client:
+            # 创建测试文件
+            files = {"file": ("test.wav", BytesIO(b"fake audio"), "audio/wav")}
+            data = {
+                "model": "test",
+                "language": "auto",
+                "response_format": "json",
+                "clean_tags": "true"
+            }
+
+            response = client.post("/v1/audio/transcriptions", files=files, data=data)
+
+            # 验证：响应头包含 X-Request-ID
+            assert response.status_code == 200
+            assert "X-Request-ID" in response.headers
+            assert len(response.headers["X-Request-ID"]) > 0
 
 
 class TestEndToEndSecurityFlow:
@@ -203,36 +205,35 @@ class TestEndToEndSecurityFlow:
     def test_secure_request_lifecycle(self):
         """测试安全的完整请求生命周期"""
         app = create_test_app_with_cors("http://localhost")
-        client = TestClient(app)
-        
-        # 创建测试文件（合法大小、合法类型）
-        files = {"file": ("test.wav", BytesIO(b"fake audio"), "audio/wav")}
-        data = {
-            "model": "test",
-            "language": "auto",
-            "response_format": "json",
-            "clean_tags": "true"
-        }
-        
-        # 发送请求
-        response = client.post(
-            "/v1/audio/transcriptions",
-            files=files,
-            data=data,
-            headers={"Origin": "http://localhost"}
-        )
-        
-        # 验证：请求成功
-        assert response.status_code == 200
-        
-        # 验证：包含必要的安全头
-        assert "X-Request-ID" in response.headers
-        assert "access-control-allow-origin" in response.headers
-        
-        # 验证：响应不泄露内部信息
-        response_data = response.json()
-        assert "text" in response_data
-        assert "duration" in response_data
+        with TestClient(app) as client:
+            # 创建测试文件（合法大小、合法类型）
+            files = {"file": ("test.wav", BytesIO(b"fake audio"), "audio/wav")}
+            data = {
+                "model": "test",
+                "language": "auto",
+                "response_format": "json",
+                "clean_tags": "true"
+            }
+
+            # 发送请求
+            response = client.post(
+                "/v1/audio/transcriptions",
+                files=files,
+                data=data,
+                headers={"Origin": "http://localhost"}
+            )
+
+            # 验证：请求成功
+            assert response.status_code == 200
+
+            # 验证：包含必要的安全头
+            assert "X-Request-ID" in response.headers
+            assert "access-control-allow-origin" in response.headers
+
+            # 验证：响应不泄露内部信息
+            response_data = response.json()
+            assert "text" in response_data
+            assert "duration" in response_data
     
     def test_blocked_by_file_size_limit(self):
         """测试文件大小限制阻止请求"""

@@ -8,26 +8,38 @@ from typing import Optional, Union, List, Dict
 # SEACO-Paraformer 是目前阿里最成熟的串联模型，中文识别 SOTA
 DEFAULT_MODEL_ID = "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 
+# 支持时间戳（和说话人分离）的模型白名单
+# SenseVoice 等其他模型不支持时间戳，不能加载 spk_model
+TIMESTAMP_CAPABLE_MODELS = {
+    "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+    "iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+}
+
 
 class FunASREngine:
     """
-    FunASR/Paraformer 推理引擎封装类。
+    FunASR 推理引擎封装类。
     负责模型的生命周期管理（加载、推理、资源释放）。
     实现 ASREngine Protocol。
-    
-    SPEC-007: 支持说话人分离 (Speaker Diarization) 和多格式输出。
+
+    支持两种模式：
+    - Paraformer 模型：完整管道 (VAD + ASR + Punc + CAM++ 说话人分离)
+    - SenseVoice 等模型：纯转录模式 (VAD + ASR + Punc，无说话人分离)
     """
 
     def __init__(self, model_id: str = DEFAULT_MODEL_ID, device: Optional[str] = None):
         self.model_id = model_id
-        # 自动检测 M4 Pro (MPS) 环境
+        self.supports_timestamp = model_id in TIMESTAMP_CAPABLE_MODELS
+        # 自动检测 Apple Silicon (MPS) 环境
         if device is None:
             self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         else:
             self.device = device
-        
+
         self.model = None
         print(f"⚙️ Engine initialized. Target device: {self.device}")
+        if not self.supports_timestamp:
+            print(f"ℹ️  Model '{model_id}' does not support timestamps. Speaker diarization disabled.")
 
     def load(self):
         """
@@ -46,38 +58,30 @@ class FunASREngine:
         
         try:
             start_time = time.time()
-            
-            # SPEC-007: Paraformer + VAD + Punc + Cam++ 组合
-            # 这是实现说话人分离的完整管道
-            self.model = AutoModel(
+
+            # 根据模型能力决定加载的管道组件
+            # Paraformer: VAD + ASR + Punc + CAM++ (完整说话人分离)
+            # SenseVoice 等: VAD + ASR + Punc (无说话人分离，因为不支持时间戳)
+            model_kwargs = dict(
                 model=self.model_id,
                 vad_model="fsmn-vad",  # 语音活动检测，用于切分长音频
                 vad_kwargs={"max_single_segment_time": 30000},  # 30秒切片优化
                 punc_model="ct-punc",  # 标点符号模型
-                spk_model="cam++",     # 声纹识别模型（说话人分离）
                 device=self.device,
                 disable_update=True,   # 禁止每次都去 check update，加快启动速度
-                log_level="ERROR"      # 减少刷屏日志
+                log_level="ERROR",     # 减少刷屏日志
             )
+            if self.supports_timestamp:
+                model_kwargs["spk_model"] = "cam++"  # 声纹识别模型（说话人分离）
+
+            self.model = AutoModel(**model_kwargs)
             
             duration = time.time() - start_time
             print(f"✅ Model loaded successfully in {duration:.2f}s")
             
-            # 简单的 Warmup (预热)，防止第一次推理卡顿
-            self._warmup()
-            
         except Exception as e:
             print(f"❌ Failed to load model: {e}")
             raise e
-
-    def _warmup(self):
-        """执行一次空推理，让 MPS 图编译完成"""
-        print("🔥 Warming up model...")
-        try:
-            # 实际 FunASR 在加载时内部会有初始化
-            pass 
-        except Exception:
-            pass
 
     def transcribe_file(
         self, 
@@ -113,10 +117,11 @@ class FunASREngine:
         # 从 kwargs 提取 FunASR 特定参数
         use_itn = kwargs.get("use_itn", True)
 
-        # Paraformer 主要针对中文优化，但也支持部分语言
-        # 注意: Paraformer 的 language 参数与 SenseVoice 不同
-        
-        # 调用 FunASR (SPEC-007: 启用说话人分离后会返回 sentence_info)
+        # SenseVoice 不支持时间戳/说话人分离，强制降级为 txt
+        if not self.supports_timestamp and output_format == "srt":
+            output_format = "txt"
+
+        # 调用 FunASR 推理
         res = self.model.generate(
             input=file_path,
             cache={},
@@ -125,10 +130,16 @@ class FunASREngine:
             merge_vad=True,        # 自动合并短句
             merge_length_s=15
         )
-        
+
         # 解析结果
         result_data = res[0] if res else {}
         text = result_data.get("text", "")
+
+        # SenseVoice 输出包含特殊标签 (<|zh|><|NEUTRAL|> 等)，需要清洗
+        if not self.supports_timestamp:
+            from src.adapters.text import clean_sensevoice_tags
+            text = clean_sensevoice_tags(text)
+
         sentence_info = result_data.get("sentence_info", [])
 
         # === 内存优化：打扫战场 ===
@@ -209,7 +220,7 @@ class FunASREngine:
         
         格式:
         1
-        00:00:05,000 --> 00:01:190,000
+        00:00:05,000 --> 00:00:20,000
         [Speaker 0]: so what is some of the questions？
         """
         lines = []

@@ -78,7 +78,7 @@ The codebase is organized into layers:
 - **`src/services`**: Async task queue management and scheduling.
 - **`src/core`**: ASR engine abstraction and implementations:
   - `base_engine.py`: Engine Protocol (interface)
-  - `funasr_engine.py`: FunASR/SenseVoice implementation
+  - `funasr_engine.py`: FunASR/Paraformer implementation (supports speaker diarization)
   - `mlx_engine.py`: MLX Audio implementation
   - `factory.py`: Engine factory (creates engine based on config)
 - **`src/adapters`**: Pure functions for text cleaning and audio processing.

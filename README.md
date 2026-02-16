@@ -1,11 +1,11 @@
 # **🎙️ Local ASR Service (Mac Silicon Optimized)**
 
-一个专为 Apple Silicon (M-series) 芯片优化的高性能、本地化语音转录服务。  
+一个专为 Apple Silicon (M-series) 芯片优化的高性能、本地化语音转录服务。
 支持**双引擎架构**：
-- **FunASR 引擎**：支持 **Paraformer** (SOTA 中文识别) 和 **Cam++** 声纹模型，实现 **说话人分离 (Diarization)**。
+- **FunASR 引擎**：支持 **Paraformer** (SOTA 中文识别) + **Cam++** 声纹模型，实现 **说话人分离 (Diarization)**。也可切换至 **SenseVoice** 模型用于极速纯转录。
 - **MLX Audio 引擎**：Apple MLX 原生模型 (Qwen3-ASR, Whisper 等)
 
-提供兼容 OpenAI Whisper 格式的 HTTP 接口。
+提供兼容 OpenAI Whisper 格式的 HTTP 接口，官方端口 **50070**。
 
 ## **📖 项目简介**
 
@@ -15,13 +15,12 @@
 
 ### **核心特性**
 
-* **🚀 极速推理**: 支持 Torch MPS 和 Apple MLX 双加速后端。  
+* **🚀 极速推理**: 支持 Torch MPS 和 Apple MLX 双加速后端。
 * **🔄 双引擎架构**: 通过环境变量在 FunASR 和 MLX Audio 引擎间无缝切换。
 * **✂️ 智能音频切片**: MLX 引擎支持超长音频自动切片（静音检测 + 重叠策略），无需手动预处理。
-* **🛡️ 显存保护**: 内置 asyncio.Queue 生产者-消费者模型，严格串行处理任务，防止并发请求撑爆统一内存。  
+* **🛡️ 显存保护**: 内置 asyncio.Queue 生产者-消费者模型，严格串行处理任务，防止并发请求撑爆统一内存。
 * **👥 说话人分离 (Diarization)**: 集成 Cam++ 模型，自动识别不同说话人（Speaker 0, Speaker 1...）。
 * **🔌 OpenAI 兼容**: 提供与 POST /v1/audio/transcriptions 完全一致的接口，并扩展了多格式输出。
-* **🧹 智能清洗**: 自动清洗 SenseVoice/Paraformer 输出的富文本标签，只返回纯净文本。
 
 ## **🏗️ 系统架构 (The Architecture)**
 
@@ -36,20 +35,20 @@
 
 当一个请求到达时，系统内部的流转如下：
 
-graph TD  
-    A[Client] -->|POST /transcriptions| B(API Layer / Routes)  
-    B -->|1. 校验参数 & 写入临时文件| C{Service Queue}  
-    C -->|2. 入队 (非阻塞)| D[Asyncio Queue (Max 50)]  
-    B -.->|3. 等待 Future 结果| A  
-      
-    subgraph "Background Worker (Serial)"  
-    D -->|4. 消费者取出任务| E[Engine Layer]  
-    E -->|5. MPS 推理 (Paraformer/SenseVoice)| F[FunASR Model]  
-    F -->|6. 返回 Raw Text| E  
-    E -->|7. 格式化输出 (Adapters)| G[Result]  
-    end  
-      
-    G -->|8. 唤醒 Future| B  
+graph TD
+    A[Client] -->|POST /transcriptions| B(API Layer / Routes)
+    B -->|1. 校验参数 & 写入临时文件| C{Service Queue}
+    C -->|2. 入队 (非阻塞)| D[Asyncio Queue (Max 50)]
+    B -.->|3. 等待 Future 结果| A
+
+    subgraph "Background Worker (Serial)"
+    D -->|4. 消费者取出任务| E[Engine Layer]
+    E -->|5. MPS 推理 (Paraformer/Qwen3-ASR)| F[FunASR / MLX Model]
+    F -->|6. 返回 Raw Text| E
+    E -->|7. 格式化输出 (Adapters)| G[Result]
+    end
+
+    G -->|8. 唤醒 Future| B
     B -->|9. 返回 JSON/Text/SRT| A
 
 ## **🛠️ 环境准备 (Installation)**
@@ -82,8 +81,8 @@ source .venv/bin/activate
 #### **🐢 方案 B: 使用 Conda (传统)**
 
 ```bash
-conda create -n sensevoice python=3.11  
-conda activate sensevoice  
+conda create -n local-asr python=3.11
+conda activate local-asr
 pip install -e .
 ```
 
@@ -112,19 +111,51 @@ LOG_LEVEL=INFO
 
 **注意**：如果不创建 `.env` 文件，服务会使用内置默认值。
 
+## **📊 FunASR 模型对比: Paraformer vs SenseVoice**
+
+本项目的 FunASR 引擎支持两种主要模型，各有优势：
+
+| 维度 | **SEACO-Paraformer** (默认) | **SenseVoiceSmall** |
+|------|--------------------------|---------------------|
+| 模型 ID | `iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | `iic/SenseVoiceSmall` |
+| 架构 | 非自回归 encoder-decoder + CIF 预测器 | 非自回归 **encoder-only** (无 decoder) |
+| 速度 (RTF) | **~0.19-0.21** (M1 Max 实测) | **~0.007** (极快，约快 30 倍) |
+| 纯中文准确率 | **更好** (CER 1.95%) | 好 (CER 2.96%) |
+| 中英混合 | MER 9.65% | **更好** (MER 6.71%) |
+| 时间戳 | **支持** | 不支持 |
+| 说话人分离 | **支持** (配合 CAM++) | 不支持 |
+| 情绪识别 | 不支持 | **支持** (`<\|HAPPY\|>`, `<\|NEUTRAL\|>` 等) |
+| 音频事件检测 | 不支持 | **支持** (`<\|BGM\|>`, `<\|Laughter\|>` 等) |
+| 热词定制 | **支持** (SeACo bias) | 不支持 |
+
+**实测性能 (Paraformer, M1 Max, FunASR pipeline: VAD + ASR + Punc + Speaker Diarization):**
+
+| 音频时长 | 推理时间 | RTF |
+|----------|----------|-----|
+| 9s | 2.25s | 0.215 |
+| 64s | 13.33s | 0.193 |
+| 19s | 4.13s | 0.200 |
+
+**如何选择：**
+- **需要说话人分离**（播客、会议、多人对话）→ 用 **Paraformer** (默认)
+- **需要极速纯转录**（语音输入、短音频、低延迟）→ 用 **SenseVoice**
+- **需要情绪/事件标签**（情感分析、音频标注）→ 用 **SenseVoice**
+
+> **注意**: SenseVoice 输出包含特殊标签 (如 `<|zh|><|NEUTRAL|><|Speech|>`)，本项目内置 `clean_sensevoice_tags()` 自动清洗。
+
 ## **🚀 启动服务**
 
-使用 Paraformer 模型（默认，支持说话人分离）：
+### **方式 A: FunASR 引擎 (默认)**
 
 ```bash
-# 使用 uv 运行
+# 使用 Paraformer（默认，支持说话人分离）
 uv run python -m src.main
 
-# 或显式指定 SenseVoice (仅快速转录，不支持说话人分离)
+# 切换到 SenseVoice（极速纯转录，无说话人分离）
 FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main
 ```
 
-### **方式 B: MLX Audio 引擎 (推荐 M4 Pro/Max)**
+### **方式 B: MLX Audio 引擎**
 
 使用 Apple MLX 原生模型（Qwen3-ASR、Whisper 等）：
 
@@ -135,35 +166,59 @@ ENGINE_TYPE=mlx uv run python -m src.main
 # 使用 Whisper Large V3 Turbo
 ENGINE_TYPE=mlx MODEL_ID=mlx-community/whisper-large-v3-turbo uv run python -m src.main
 
-# 使用 Qwen3-ASR
+# 使用 Qwen3-ASR 8-bit
 ENGINE_TYPE=mlx MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit uv run python -m src.main
 ```
 
+### **切换模型**
+
+模型切换通过**环境变量**实现，需要**重启服务**：
+
+```bash
+# 方法 1: 命令行直接指定（临时）
+FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main
+
+# 方法 2: 修改 .env 文件（持久）
+# 编辑 .env，修改 FUNASR_MODEL_ID 或 ENGINE_TYPE，然后重启服务
+
+# 方法 3: 切换整个引擎
+ENGINE_TYPE=mlx uv run python -m src.main
+```
+
+> **提示**: 当前不支持运行时热切换模型，需停止服务后重启。模型首次使用会自动下载。
+
 ### **环境变量配置**
+
+**引擎与模型：**
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `ENGINE_TYPE` | `funasr` | 引擎类型: `funasr` 或 `mlx` |
-| `MODEL_ID` | (引擎默认) | 覆盖任意引擎的模型 ID |
-| `FUNASR_MODEL_ID` | `iic/speech_seaco_paraformer...` | FunASR 默认模型 (支持说话人分离) |
+| `MODEL_ID` | (引擎默认) | 覆盖任意引擎的模型 ID（优先级最高） |
+| `FUNASR_MODEL_ID` | `iic/speech_seaco_paraformer...` | FunASR 默认模型 (Paraformer, 支持说话人分离) |
 | `MLX_MODEL_ID` | `mlx-community/Qwen3-ASR-1.7B-4bit` | MLX 引擎默认模型 |
+
+**服务与安全：**
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
 | `HOST` | `0.0.0.0` | 服务监听地址 |
 | `PORT` | `50070` | 服务监听端口 |
 | `MAX_QUEUE_SIZE` | `50` | 最大并发队列深度 |
 | `MAX_UPLOAD_SIZE_MB` | `200` | 上传文件大小限制（MB） |
 | `ALLOWED_ORIGINS` | `http://localhost,http://127.0.0.1` | CORS 允许的源 |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
-| `HOST` | `0.0.0.0` | 服务监听地址 |
-| `PORT` | `50070` | 服务监听端口 |
-| `MAX_QUEUE_SIZE` | `50` | 最大队列深度 |
-| `MAX_AUDIO_DURATION_MINUTES` | `50` | 最大音频时长（仅 MLX 引擎，超过自动切片） |
 
 **音频处理配置（仅 MLX 引擎）：**
-- `SILENCE_THRESHOLD_SEC` - 静音检测最小时长（默认 0.5秒）
-- `SILENCE_NOISE_DB` - 静音噪音阈值（默认 -30dB）
-- `AUDIO_SAMPLE_RATE` - 音频采样率（默认 16000Hz）
-- `AUDIO_BITRATE` - 音频比特率（默认 64k）
-- `CHUNK_OVERLAP_SECONDS` - 切片重叠时长（默认 15秒，fallback 策略）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MAX_AUDIO_DURATION_MINUTES` | `50` | 最大音频时长（超过自动切片） |
+| `SILENCE_THRESHOLD_SEC` | `0.5` | 静音检测最小时长（秒） |
+| `SILENCE_NOISE_DB` | `-30dB` | 静音噪音阈值 |
+| `AUDIO_SAMPLE_RATE` | `16000` | 音频采样率（Hz） |
+| `AUDIO_BITRATE` | `64k` | 音频比特率 |
+| `CHUNK_OVERLAP_SECONDS` | `15` | 切片重叠时长（秒，fallback 策略） |
 
 ### **支持的 MLX 模型**
 
@@ -253,9 +308,9 @@ curl http://localhost:50070/v1/audio/transcriptions \
 | `with_timestamp` | Boolean | `false` | txt 格式下是否包含行首时间戳 |
 | `language` | String | `auto` | 语言代码: `zh`, `en`, `auto` |
 
-> **💡 提示**: 
-> 1. 默认输出格式 (`txt`) 返回带说话人标记的平铺文本。
-> 2. `clean_tags` 参数仅在使用 SenseVoice 模型时有效，用于移除 `<|zh|>` 等特殊标签。
+> **💡 提示**:
+> 1. 默认输出格式 (`json`) 返回 OpenAI 兼容的 JSON 响应。
+> 2. `output_format=srt` 和 `with_timestamp=true` 仅在使用 Paraformer 模型时有效（SenseVoice 不支持时间戳）。
 
 ### **3\. 查看自动文档 (Swagger UI)**
 
@@ -269,11 +324,14 @@ curl http://localhost:50070/v1/audio/transcriptions \
 ```bash
 路径: ~/.cache/modelscope/hub/models/iic/
 
-已下载的模型示例：
-├─ speech_seaco_paraformer_large (支持时间戳/说话人)
-├─ SenseVoiceSmall (仅纯文本转录)
+Paraformer 完整管道所需模型：
+├─ speech_seaco_paraformer_large (ASR 主模型，支持时间戳/说话人)
+├─ speech_fsmn_vad (语音活动检测 VAD)
 ├─ punc_ct-transformer-cn-en (标点符号)
-└─ speech_fsmn_vad (语音活动检测)
+└─ speech_campplus_sv_zh-cn (CAM++ 声纹，说话人分离)
+
+备选模型（如有下载）：
+├─ SenseVoiceSmall (极速纯转录，不支持说话人分离)
 
 查看命令：
 ls -lh ~/.cache/modelscope/hub/models/iic/
@@ -308,23 +366,30 @@ du -sh ~/.cache/modelscope ~/.cache/huggingface
 
 ## **📂 项目结构**
 
-.  
-├── src  
-│   ├── adapters          \# 纯函数工具 (Clean Code)  
-│   │   └── text.py       \# 正则清洗逻辑  
-│   ├── api               \# 接口层  
-│   │   └── routes.py     \# 路由与 Pydantic 定义  
-│   ├── core              \# 核心业务  
-│   │   ├── base\_engine.py   \# 引擎抽象接口 (Protocol)  
-│   │   ├── funasr_engine.py # FunASR (Paraformer/SenseVoice) 实现  
-│   │   ├── mlx\_engine.py    \# MLX Audio 实现  
-│   │   └── factory.py       \# 引擎工厂  
-│   ├── services          \# 服务调度  
-│   │   └── transcription.py \# 队列与并发控制  
-│   ├── config.py         \# 环境变量配置  
-│   └── main.py           \# 程序入口与生命周期  
-├── pyproject.toml        \# 依赖配置  
-└── README.md             \# 本文档
+.
+├── src
+│   ├── adapters/            # 纯函数工具 (Clean Code)
+│   │   ├── text.py          # SenseVoice 标签清洗
+│   │   └── audio_chunking.py # 音频切片（静音检测 + 重叠策略）
+│   ├── api/                 # 接口层
+│   │   └── routes.py        # 路由与 Pydantic 定义
+│   ├── core/                # 核心业务
+│   │   ├── base_engine.py   # 引擎抽象接口 (Protocol)
+│   │   ├── funasr_engine.py # FunASR (Paraformer) 实现，支持说话人分离
+│   │   ├── mlx_engine.py    # MLX Audio 实现 (Qwen3-ASR, Whisper)
+│   │   └── factory.py       # 引擎工厂
+│   ├── services/            # 服务调度
+│   │   └── transcription.py # 异步队列与串行执行
+│   ├── config.py            # 环境变量配置
+│   └── main.py              # 程序入口与生命周期
+├── tests/
+│   ├── unit/                # 单元测试 (Mocked)
+│   ├── integration/         # API 集成测试
+│   ├── e2e/                 # 端到端测试 (真实模型)
+│   └── reliability/         # 并发与背压测试
+├── docs/                    # 设计文档与 SPEC
+├── pyproject.toml           # 依赖配置
+└── README.md                # 本文档
 
 ## **🧪 运行测试 (Testing)**
 
@@ -338,23 +403,27 @@ uv run python -m pytest
 
 ### **2. 测试分层说明**
 
-*   **Unit Tests (`tests/unit`)**:
-    *   `test_adapters.py`: 测试文本清洗逻辑（纯函数）。
-    *   `test_engine.py`: 测试 FunASR 引擎加载与推理（Mock 掉底层模型）。
-    *   `test_mlx_engine.py`: 测试 MLX Audio 引擎（Mock 掉 mlx\_audio）。
-    *   `test_config_factory.py`: 测试配置和引擎工厂。
-    *   `test_service.py`: 测试异步队列调度和临时文件生命周期。
-*   **Integration Tests (`tests/integration`)**:
-    *   `test_api.py`: 启动 FastAPI TestClient，验证 HTTP 接口契约（Mock 掉 Engine）。
-*   **E2E Tests (`tests/e2e`)**:
-    *   `test_full_flow.py`: **真实模型测试**。会加载真实模型并推理（需下载模型，速度较慢）。
-*   **Reliability Tests (`tests/reliability`)**:
-    *   `test_concurrency.py`: 测试高并发下的队列背压 (Backpressure) 和 Worker 错误恢复能力。
+*   **Unit Tests (`tests/unit/`)**:
+    *   `test_adapters.py`: SenseVoice 标签清洗逻辑。
+    *   `test_engine.py`: FunASR 引擎加载与推理（Mock 掉底层模型）。
+    *   `test_mlx_engine.py`: MLX Audio 引擎（Mock 掉 mlx_audio）。
+    *   `test_audio_chunking.py`: 音频切片、静音检测、SRT 格式。
+    *   `test_config_factory.py`: 配置和引擎工厂。
+    *   `test_service.py`: 异步队列调度和临时文件生命周期。
+*   **Integration Tests (`tests/integration/`)**:
+    *   `test_api.py`: FastAPI TestClient，验证 HTTP 接口契约（Mock Engine）。
+    *   `test_security_integration.py`: CORS、请求追踪、安全头。
+*   **E2E Tests (`tests/e2e/`)**:
+    *   `test_full_flow.py`: **真实模型测试**（需下载模型，速度较慢）。
+*   **Reliability Tests (`tests/reliability/`)**:
+    *   `test_concurrency.py`: 高并发队列背压和 Worker 错误恢复。
 
 
 
 ## **⚠️ 注意事项**
 
-1. **队列限制**: 默认队列深度为 50。如果请求超过 50 个，API 会立即返回 503 Service Busy。  
-2. **单例模式**: 由于 M 芯片统一内存特性，我们严格限制模型只加载一次。请勿开启多进程 (workers \> 1\) 模式运行，否则会导致显存成倍消耗。  
+1. **队列限制**: 默认队列深度为 50。如果请求超过 50 个，API 会立即返回 503 Service Busy。
+2. **单例模式**: 由于 M 芯片统一内存特性，我们严格限制模型只加载一次。请勿开启多进程 (workers > 1) 模式运行，否则会导致显存成倍消耗。
 3. **临时文件**: 上传的音频会暂存到磁盘以便 ffmpeg 处理，处理完成后会自动删除。
+4. **模型切换**: 目前需要停止服务、修改环境变量、重新启动。不支持运行时热切换。
+5. **端口历史**: 官方端口为 `50070`。早期使用 WhisperKit 默认的 `50060`，迁移时 +10 以区分。

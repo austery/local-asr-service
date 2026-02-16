@@ -98,6 +98,12 @@ class TranscriptionService:
                 shutil.rmtree(temp_dir, ignore_errors=True)
             raise e
 
+    async def stop_worker(self):
+        """优雅停止消费者循环"""
+        self.is_running = False
+        # 放入 None 哨兵唤醒阻塞在 queue.get() 的消费者
+        await self.queue.put(None)  # type: ignore[arg-type]
+
     async def _consume_loop(self):
         """
         消费者循环 (Strict Serial Execution)。
@@ -106,6 +112,10 @@ class TranscriptionService:
         while self.is_running:
             # 从队列获取任务
             job: TranscriptionJob = await self.queue.get()
+
+            # None 哨兵表示该退出了
+            if job is None:
+                break
             
             queue_time = time.time() - job.received_at
             self.logger.info(f"[{job.uid}] Starting transcription (queue_time={queue_time:.2f}s)")
