@@ -9,6 +9,8 @@
 - 切分点对齐算法
 - Fallback 重叠切片
 """
+import struct
+import wave
 import pytest
 from unittest.mock import patch, MagicMock, call
 from pathlib import Path
@@ -48,34 +50,24 @@ class TestNormalization:
     """测试音频归一化逻辑"""
 
     def test_skip_normalization_for_optimal_wav(self, service, mock_ffmpeg, tmp_path):
-        """16kHz mono WAV 应该跳过 FFmpeg 转码"""
-        # 创建一个假的 WAV 文件
+        """16kHz mono WAV 应该跳过 FFmpeg 转码 (uses Python wave module, no subprocess)"""
+        # Create a real 16kHz mono WAV file (0.1s of silence)
         wav_file = tmp_path / "test.wav"
-        wav_file.write_bytes(b"RIFF" + b"\x00" * 100)
-
-        # Mock ffprobe 返回 16kHz mono
-        def side_effect(*args, **kwargs):
-            cmd = args[0]
-            if cmd[0] == "ffprobe" and "-show_entries" in cmd:
-                if "stream=channels,sample_rate" in cmd:
-                    result = MagicMock()
-                    result.stdout = "16000,1"
-                    return result
-                elif "format=duration" in cmd:
-                    result = MagicMock()
-                    result.stdout = "10.5"
-                    return result
-            return MagicMock(stdout="", stderr="")
-
-        mock_ffmpeg.side_effect = side_effect
+        num_frames = 1600  # 0.1s at 16kHz
+        with wave.open(str(wav_file), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # 16-bit
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00\x00" * num_frames)
 
         result = service._normalize_audio(str(wav_file))
 
         assert result.normalized_path == str(wav_file)
-        assert result.duration_seconds == 10.5
-        # 不应该调用 ffmpeg 转码（只有 ffprobe 调用）
+        assert abs(result.duration_seconds - 0.1) < 0.01
+        # No ffprobe or ffmpeg calls for format detection — wave module handles it
         for c in mock_ffmpeg.call_args_list:
             assert c[0][0][0] != "ffmpeg" or "-version" in c[0][0]
+            assert c[0][0][0] != "ffprobe" or "-version" in c[0][0]
 
     def test_normalize_non_wav(self, service, mock_ffmpeg, tmp_path):
         """非 WAV 文件应该执行 FFmpeg 转码"""
@@ -109,23 +101,14 @@ class TestProcessAudio:
 
     def test_short_audio_no_chunking(self, service, mock_ffmpeg, tmp_path):
         """短音频（<50min）应直接返回，不切片"""
+        # Create a real 16kHz mono WAV file (2 minutes = 120s)
         wav_file = tmp_path / "short.wav"
-        wav_file.write_bytes(b"RIFF" + b"\x00" * 100)
-
-        def side_effect(*args, **kwargs):
-            cmd = args[0]
-            result = MagicMock()
-            result.stdout = ""
-            result.stderr = ""
-            result.returncode = 0
-            if cmd[0] == "ffprobe":
-                if "stream=channels,sample_rate" in cmd:
-                    result.stdout = "16000,1"
-                elif "format=duration" in cmd:
-                    result.stdout = "120.0"  # 2 分钟
-            return result
-
-        mock_ffmpeg.side_effect = side_effect
+        num_frames = 16000 * 120  # 120s at 16kHz
+        with wave.open(str(wav_file), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00\x00" * num_frames)
 
         chunks = service.process_audio(str(wav_file))
 

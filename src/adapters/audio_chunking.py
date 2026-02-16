@@ -12,6 +12,7 @@ Reference: puresubs/AudioChunkingService.ts
 import os
 import re
 import subprocess
+import wave
 from pathlib import Path
 from typing import List, Optional, NamedTuple
 from dataclasses import dataclass
@@ -157,34 +158,22 @@ class AudioChunkingService:
         - PCM s16le 编码（无损，解码极快）
         """
         input_p = Path(input_path)
-        
-        # 优化：如果是 WAV 文件，检查是否已经是目标格式
+
+        # Fast path: use Python's wave module to check WAV format (no subprocess)
         if input_p.suffix.lower() == ".wav":
             try:
-                # 检查格式
-                cmd_check = [
-                    "ffprobe", 
-                    "-v", "error", 
-                    "-select_streams", "a:0", 
-                    "-show_entries", "stream=channels,sample_rate", 
-                    "-of", "csv=p=0", 
-                    input_path
-                ]
-                result = subprocess.run(cmd_check, stdout=subprocess.PIPE, text=True)
-                # 输出通常是 "16000,1" 或 "1,16000" 取决于版本，或者分行
-                # 我们简单判断是否包含 16000 和 1
-                output = result.stdout.strip()
-                if "16000" in output and ("1" in output or "mono" in output):
-                    print(f"   ✨ Audio is already 16kHz mono WAV. Skipping normalization.")
-                    file_size = input_p.stat().st_size
-                    duration = self._get_audio_duration(input_path)
-                    return AudioNormalizationResult(
-                        normalized_path=input_path,
-                        file_size_bytes=file_size,
-                        duration_seconds=duration,
-                    )
-            except Exception as e:
-                print(f"   ⚠️  Format check failed, proceeding to normalize: {e}")
+                with wave.open(input_path, "rb") as wf:
+                    if wf.getnchannels() == 1 and wf.getframerate() == self.sample_rate:
+                        duration = wf.getnframes() / wf.getframerate()
+                        file_size = input_p.stat().st_size
+                        print(f"   ✨ Audio is already {self.sample_rate}Hz mono WAV. Skipping normalization.")
+                        return AudioNormalizationResult(
+                            normalized_path=input_path,
+                            file_size_bytes=file_size,
+                            duration_seconds=duration,
+                        )
+            except wave.Error:
+                pass  # Not a valid WAV — fall through to ffmpeg normalization
 
         output_path = str(input_p.with_suffix(".normalized.wav"))
         

@@ -89,30 +89,24 @@ context: 基于项目分析和市场调研，制定的改进路线图。
 
 ---
 
-### P0-2: 短音频快速路径 (Short Audio Fast Path)
+### P0-2: 短音频快速路径 (Short Audio Fast Path) ✅ 已完成
 
 **问题**: 本地语音输入通常 <30s、固定格式 (16kHz mono WAV)。当前每次请求都走完整的 FFmpeg 转码 + 分片逻辑，对短音频来说是不必要的开销。
 
-**方案**:
-- 检测输入音频格式：如果已经是 16kHz mono WAV/PCM，跳过 FFmpeg 转码
-- 检测音频时长：<30s 则跳过分片逻辑，直接送入模型
-- 保持现有长音频路径不变（PureSubs 场景）
-
-**涉及文件**:
-- `src/adapters/audio_chunking.py` — 快速路径判断
-- `tests/unit/test_adapters.py` — 新增短音频路径测试
-
-**预期收益**: 本地语音输入场景下减少 100-300ms 延迟（FFmpeg 子进程开销）
+**实现**:
+- WAV 格式检测改用 Python `wave` 模块（零 subprocess 开销），替代原来的 `ffprobe` 子进程
+- 16kHz mono WAV 输入跳过 FFmpeg 归一化 + 直接通过 `wave` 获取时长（无 `ffprobe` 调用）
+- 短音频 (<50min) 自动跳过切片逻辑（已有）
+- FunASR 引擎路径本身不经过 AudioChunkingService（无 FFmpeg 开销）
+- 更新了测试使用真实 WAV 文件替代 mock ffprobe 响应
 
 ---
 
-### P0-3: 端口文档对齐
+### P0-3: 端口文档对齐 ✅ 已完成
 
-**背景**: 早期使用 WhisperKit 默认端口 `50060`，后来迁移到 `50070`（+10 以区分）。PureSubs 的 `LocalWhisperService.ts` 默认值仍写着 `50060`。
+**背景**: 早期使用 WhisperKit 默认端口 `50060`，后来迁移到 `50070`（+10 以区分）。
 
-**方案**: 非本项目代码改动，但需在文档中明确记录端口演变历史，避免未来混淆。
-- 在本项目 README 或 SPEC-001 中注明官方端口为 `50070`
-- PureSubs 侧的 `LOCAL_WHISPER_URL` 默认值需要同步更新（单独处理）
+**实现**: README 已在多处记录官方端口 `50070`，包括端口演变历史说明。PureSubs 侧的 `LOCAL_WHISPER_URL` 更新需在该项目单独处理。
 
 ---
 
@@ -202,18 +196,16 @@ uv run python benchmarks/run.py --engine mlx --model-id "mlx-community/Qwen3-ASR
 ```
 P0-1 引擎能力声明 ✅
   │
-  ├──→ P0-2 短音频快速路径（下一步）
+  ├──→ P0-2 短音频快速路径 ✅
   │
   └──→ P1-1 模型状态端点 ✅（与 P0-1 一同完成）
           │
-          └──→ P1-2 Benchmark 脚本（可并行）
+          └──→ P1-2 Benchmark 脚本
 
-P0-3 端口文档对齐（独立，随时可做）
-P1-3 ruff + mypy（独立，随时可做）
+P0-3 端口文档对齐 ✅（README 已记录）
+P1-3 ruff + mypy
 ```
 
 **剩余工作量排序**（从小到大）：
-1. P0-3 端口文档 — 10 分钟
-2. P1-3 ruff + mypy — 30 分钟
-3. P0-2 短音频快速路径 — 1 个文件改动
-4. P1-2 Benchmark 脚本 — 新建脚本 + 测试音频准备
+1. P1-3 ruff + mypy — 配置 + 修复类型错误
+2. P1-2 Benchmark 脚本 — 新建脚本 + 测试音频准备
