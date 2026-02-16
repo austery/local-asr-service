@@ -75,24 +75,17 @@ context: 基于项目分析和市场调研，制定的改进路线图。
 
 > 目标：让服务在日常使用中零意外，无效请求明确拒绝而非静默降级。
 
-### P0-1: 引擎能力声明 (Engine Capabilities Protocol)
+### P0-1: 引擎能力声明 (Engine Capabilities Protocol) ✅ 已完成
 
 **问题**: 存在隐式约束 — SenseVoice 不支持 timestamp，因此不能做 diarization；但如果用户请求 `output_format=srt` + SenseVoice 引擎，当前行为是静默降级而非明确报错。
 
-**方案**:
-- 在 `ASREngine` Protocol 上新增 `capabilities` 属性，返回 `set[str]`
-- 能力标签：`timestamp`、`diarization`、`language_detect`
-- API 层在处理请求时校验引擎能力，不匹配则返回 `400 Bad Request` 并说明原因
-- PureSubs 端可以据此智能调整请求参数
-
-**涉及文件**:
-- `src/core/base_engine.py` — Protocol 定义
-- `src/core/funasr_engine.py` — FunASR 能力声明
-- `src/core/mlx_engine.py` — MLX 能力声明
-- `src/api/routes.py` — 校验逻辑
-- `tests/unit/` — 新增能力校验测试
-
-**关联 SPEC**: SPEC-002 (需更新)
+**实现**:
+- `EngineCapabilities` frozen dataclass：`timestamp`、`diarization`、`emotion_tags`、`language_detect`
+- 前缀匹配解析模型能力（FunASR + MLX 各自维护能力表）
+- API 层校验：不兼容的格式/参数组合返回 `400 Bad Request`
+- 新增 `response_format` 参数作为 OpenAI 兼容别名（`verbose_json` → `json`，`text` → `txt`，`vtt` → `srt`）
+- SenseVoice 启动不再加载 `spk_model="cam++"` — 解决 `KeyError: 'timestamp'` 崩溃
+- 总测试数 67 → 85（新增 18 个能力校验 + API 测试）
 
 ---
 
@@ -127,31 +120,22 @@ context: 基于项目分析和市场调研，制定的改进路线图。
 
 > 目标：新模型来了能快速评估，运行时状态一目了然。
 
-### P1-1: 模型状态端点 (GET /v1/models/current)
+### P1-1: 模型状态端点 (GET /v1/models/current) ✅ 已完成
 
 **问题**: 当前无法在运行时确认加载了哪个模型、引擎类型、支持哪些能力。
 
-**方案**:
-- 新增 `GET /v1/models/current` 端点
-- 返回：`engine_type`、`model_id`、`capabilities`、加载时间、队列状态
+**实现** (与 P0-1 一同完成):
+- `GET /v1/models/current` 返回 `engine_type`、`model_id`、`capabilities` dict、`queue_size`、`max_queue_size`
 - 响应示例：
   ```json
   {
     "engine_type": "funasr",
     "model_id": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
-    "capabilities": ["timestamp", "diarization", "language_detect"],
-    "loaded_at": "2026-02-16T09:00:00Z",
+    "capabilities": {"timestamp": true, "diarization": true, "emotion_tags": false, "language_detect": true},
     "queue_size": 0,
     "max_queue_size": 50
   }
   ```
-
-**涉及文件**:
-- `src/api/routes.py` — 新端点
-- `src/core/base_engine.py` — 需要 P0-1 的 capabilities 先完成
-- `tests/integration/test_api.py` — 端点测试
-
-**依赖**: P0-1 (capabilities)
 
 ---
 

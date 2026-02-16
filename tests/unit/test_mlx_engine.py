@@ -1,5 +1,37 @@
 import pytest
 from unittest.mock import MagicMock, patch
+from src.core.base_engine import EngineCapabilities
+from src.core.mlx_engine import _resolve_mlx_capabilities
+
+
+class TestMlxCapabilities:
+    """Test MLX per-model capability resolution."""
+
+    def test_qwen3_asr_capabilities(self):
+        """Qwen3-ASR models get timestamp + language_detect."""
+        caps = _resolve_mlx_capabilities("mlx-community/Qwen3-ASR-1.7B-4bit")
+        assert caps.timestamp is True
+        assert caps.language_detect is True
+        assert caps.diarization is False
+        assert caps.emotion_tags is False
+
+    def test_whisper_capabilities(self):
+        """Whisper models get timestamp + language_detect."""
+        caps = _resolve_mlx_capabilities("mlx-community/whisper-large-v3")
+        assert caps.timestamp is True
+        assert caps.language_detect is True
+
+    def test_unknown_model_conservative_defaults(self):
+        """Unknown MLX models get all-false capabilities."""
+        caps = _resolve_mlx_capabilities("some-org/unknown-model")
+        assert caps == EngineCapabilities()
+
+    def test_capabilities_property(self):
+        """Engine exposes capabilities as a property."""
+        with patch("src.core.mlx_engine.AudioChunkingService"):
+            from src.core.mlx_engine import MlxAudioEngine
+            engine = MlxAudioEngine(model_id="mlx-community/Qwen3-ASR-1.7B-4bit")
+            assert engine.capabilities.timestamp is True
 
 
 class TestMlxAudioEngine:

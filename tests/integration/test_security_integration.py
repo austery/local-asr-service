@@ -4,8 +4,9 @@ Tests CORS configuration, file cleanup on errors, and end-to-end security flow.
 """
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 from io import BytesIO
+from src.core.base_engine import EngineCapabilities
 
 
 @pytest.fixture
@@ -29,12 +30,17 @@ def create_test_app_with_cors(allowed_origins: str):
     engine = MagicMock()
     engine.load = MagicMock()
     engine.transcribe_file = MagicMock(return_value="Test transcription")
-    
+    type(engine).capabilities = PropertyMock(
+        return_value=EngineCapabilities(timestamp=True, diarization=True, language_detect=True)
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         service = TranscriptionService(engine=engine, max_queue_size=10)
         await service.start_worker()
         app.state.service = service
+        app.state.engine = engine
+        app.state.engine_type = "funasr"
         app.state.model_id = "test-model"
         yield
         engine.release = MagicMock()

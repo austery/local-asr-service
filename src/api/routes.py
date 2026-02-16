@@ -1,9 +1,10 @@
 """
 API routes for speech transcription service.
 """
+from dataclasses import asdict
 from fastapi import APIRouter, File, UploadFile, Form, Request, HTTPException
 from fastapi.responses import PlainTextResponse
-from typing import Optional, Union
+from typing import Optional
 from pydantic import BaseModel, Field
 import logging
 from src.config import MAX_UPLOAD_SIZE_MB
@@ -18,6 +19,13 @@ ALLOWED_AUDIO_TYPES = {
     "audio/flac",
     "audio/ogg",
     "audio/webm"
+}
+
+# OpenAI response_format → internal output_format mapping
+_RESPONSE_FORMAT_MAP = {
+    "verbose_json": "json",
+    "text": "txt",
+    "vtt": "srt",
 }
 
 # API Request/Response Models
@@ -47,26 +55,28 @@ router = APIRouter()
 async def create_transcription(
     request: Request,
     file: UploadFile = File(..., description="Audio file (wav, mp3, m4a, etc.)"),
-    model: str = Form("paraformer", description="Model ID (currently uses Paraformer for speaker diarization)"),
+    model: str = Form("paraformer", description="Model ID (informational — actual model set by server config)"),
     language: str = Form("auto", description="Language code (auto, zh, en)"),
-    output_format: str = Form("json", description="Output format: 'json' (default, OpenAI compatible), 'txt' (clean text only), 'srt' (subtitle)"),
+    response_format: Optional[str] = Form(None, description="OpenAI-compatible format: json, verbose_json, text, vtt, srt"),
+    output_format: str = Form("json", description="Output format: json (default), txt, srt"),
     with_timestamp: bool = Form(False, description="Include timestamps in txt output (e.g., [02:15] [Speaker 0]: ...)"),
     ):
     """
     Transcribe audio file with speaker diarization.
-    
+
     Output Formats:
-    - **txt** (default): Clean text with speaker labels, suitable for RAG/LLM
-    - **json**: Full structured data with segments and timestamps
+    - **json** (default): Full structured data with segments and timestamps (OpenAI verbose_json compatible)
+    - **txt**: Clean text with speaker labels, suitable for RAG/LLM
     - **srt**: Standard SRT subtitle format
-    
-    Examples:
-    - Basic: `curl -F "file=@audio.mp3" http://localhost:50070/v1/audio/transcriptions`
-    - With timestamps: `curl -F "file=@audio.mp3" -F "with_timestamp=true" ...`
-    - JSON format: `curl -F "file=@audio.mp3" -F "output_format=json" ...`
+
+    OpenAI Compatibility:
+    - `response_format=verbose_json` maps to `json` with segments
+    - `response_format=text` maps to `txt`
+    - `response_format=vtt` maps to `srt`
+    - `model` parameter is accepted but informational (server uses configured model)
     """
     request_id = getattr(request.state, "request_id", "unknown")
-    
+
     # 1. 文件类型校验
     if file.content_type not in ALLOWED_AUDIO_TYPES:
         logger.warning(f"[{request_id}] Unsupported file type: {file.content_type}")
@@ -74,7 +84,7 @@ async def create_transcription(
             status_code=415,
             detail="Unsupported file type. Only audio files are allowed."
         )
-    
+
     # 2. 文件大小校验（通过底层文件对象的 seek/tell 避免读取全部内容到内存）
     file.file.seek(0, 2)  # seek to end
     file_size_bytes = file.file.tell()
@@ -89,41 +99,70 @@ async def create_transcription(
         )
 
     file.file.seek(0)  # reset for downstream reading
-    
-    logger.info(f"[{request_id}] Processing file: {file.filename} ({file_size_mb:.2f}MB, format={output_format})")
-    
-    # 3. 获取 Service
+
+    # 3. Resolve effective output format (response_format takes precedence)
+    effective_format = response_format if response_format is not None else output_format
+    effective_format = _RESPONSE_FORMAT_MAP.get(effective_format, effective_format)
+
+    # 4. Capability validation — fail fast with clear 400 errors
+    engine = request.app.state.engine
+    caps = engine.capabilities
+
+    if effective_format == "srt" and not caps.timestamp:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"SRT format requires timestamp support, but the current model "
+                f"({request.app.state.model_id}) does not produce timestamps. "
+                f"Use output_format=json or output_format=txt instead, "
+                f"or switch to a Paraformer model."
+            ),
+        )
+
+    if with_timestamp and not caps.timestamp:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"with_timestamp=true requires timestamp support, but the current model "
+                f"({request.app.state.model_id}) does not produce timestamps. "
+                f"Set with_timestamp=false, or switch to a Paraformer model."
+            ),
+        )
+
+    logger.info(f"[{request_id}] Processing file: {file.filename} ({file_size_mb:.2f}MB, format={effective_format})")
+
+    # 5. 获取 Service
     service = request.app.state.service
 
     try:
-        # 4. 构造参数
+        # 6. 构造参数
         params = {
             "language": language,
-            "output_format": output_format,
+            "output_format": effective_format,
             "with_timestamp": with_timestamp,
         }
 
-        # 5. 提交任务
+        # 7. 提交任务
         result = await service.submit(file, params, request_id=request_id)
-        
-        # 6. 根据格式返回不同响应
+
+        # 8. 根据格式返回不同响应
         # SRT 格式返回纯文本（字幕文件格式）
-        if output_format == "srt":
+        if effective_format == "srt":
             return PlainTextResponse(
                 content=result if isinstance(result, str) else result.get("text", ""),
                 media_type="text/plain; charset=utf-8"
             )
-        
+
         # JSON 和 TXT 格式都返回 JSON 响应（OpenAI API 兼容）
         # TXT 格式只返回 text 字段，不含 segments
         if isinstance(result, dict):
             text = result.get("text", "")
             segments_data = result.get("segments", [])
             duration = result.get("duration", 0.0)
-            
+
             # 格式化 segments（仅 json 格式包含）
             segments = None
-            if output_format == "json" and segments_data:
+            if effective_format == "json" and segments_data:
                 segments = [
                     {
                         "id": i,
@@ -134,7 +173,7 @@ async def create_transcription(
                     }
                     for i, seg in enumerate(segments_data)
                 ]
-            
+
             return TranscriptionResponse(
                 text=text,
                 duration=duration,
@@ -157,7 +196,7 @@ async def create_transcription(
             status_code=500,
             detail=f"Internal server error occurred. (Request ID: {request_id})"
         )
-    
+
     except Exception as e:
         logger.error(f"[{request_id}] Unexpected error: {e}", exc_info=True)
         raise HTTPException(
@@ -165,3 +204,20 @@ async def create_transcription(
             detail=f"Internal server error occurred. (Request ID: {request_id})"
         )
 
+
+@router.get("/v1/models/current")
+async def get_current_model(request: Request):
+    """
+    Return the currently loaded model and its capabilities.
+    Useful for clients to discover what formats/features are available.
+    """
+    engine = request.app.state.engine
+    service = request.app.state.service
+
+    return {
+        "engine_type": request.app.state.engine_type,
+        "model_id": request.app.state.model_id,
+        "capabilities": asdict(engine.capabilities),
+        "queue_size": service.queue.qsize(),
+        "max_queue_size": service.queue.maxsize,
+    }

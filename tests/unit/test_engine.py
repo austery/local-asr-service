@@ -1,6 +1,74 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from src.core.funasr_engine import FunASREngine, DEFAULT_MODEL_ID
+from src.core.base_engine import EngineCapabilities
+from src.core.funasr_engine import (
+    FunASREngine, DEFAULT_MODEL_ID, _resolve_capabilities,
+)
+
+class TestEngineCapabilities:
+    """Test EngineCapabilities dataclass and prefix-matching resolution."""
+
+    def test_paraformer_capabilities(self):
+        """Paraformer models get timestamp + diarization + language_detect."""
+        caps = _resolve_capabilities(DEFAULT_MODEL_ID)
+        assert caps.timestamp is True
+        assert caps.diarization is True
+        assert caps.language_detect is True
+        assert caps.emotion_tags is False
+
+    def test_sensevoice_capabilities(self):
+        """SenseVoice models get emotion_tags + language_detect, no timestamp/diarization."""
+        caps = _resolve_capabilities("iic/SenseVoiceSmall")
+        assert caps.timestamp is False
+        assert caps.diarization is False
+        assert caps.emotion_tags is True
+        assert caps.language_detect is True
+
+    def test_unknown_model_conservative_defaults(self):
+        """Unknown models get all-false capabilities (conservative)."""
+        caps = _resolve_capabilities("iic/some_unknown_model")
+        assert caps.timestamp is False
+        assert caps.diarization is False
+        assert caps.emotion_tags is False
+        assert caps.language_detect is False
+
+    def test_capabilities_frozen(self):
+        """Capabilities dataclass is immutable."""
+        caps = EngineCapabilities(timestamp=True)
+        with pytest.raises(AttributeError):
+            caps.timestamp = False  # type: ignore[misc]
+
+    def test_sensevoice_load_no_spk_model(self):
+        """SenseVoice model should NOT load spk_model='cam++' during load()."""
+        with patch("src.core.funasr_engine.AutoModel") as mock_auto:
+            engine = FunASREngine(model_id="iic/SenseVoiceSmall", device="cpu")
+            engine.load()
+            call_kwargs = mock_auto.call_args.kwargs
+            assert "spk_model" not in call_kwargs
+
+    def test_paraformer_load_with_spk_model(self):
+        """Paraformer model SHOULD load spk_model='cam++' during load()."""
+        with patch("src.core.funasr_engine.AutoModel") as mock_auto:
+            engine = FunASREngine(model_id=DEFAULT_MODEL_ID, device="cpu")
+            engine.load()
+            call_kwargs = mock_auto.call_args.kwargs
+            assert call_kwargs["spk_model"] == "cam++"
+
+    def test_longest_prefix_match(self):
+        """Longer prefix should win over shorter prefix."""
+        # "iic/speech_seaco_paraformer" is longer than "iic/speech_paraformer"
+        caps = _resolve_capabilities(
+            "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+        )
+        assert caps.timestamp is True
+        assert caps.diarization is True
+
+    def test_capabilities_property_on_engine(self):
+        """Engine exposes capabilities as a property."""
+        engine = FunASREngine(model_id="iic/SenseVoiceSmall", device="cpu")
+        assert engine.capabilities.emotion_tags is True
+        assert engine.capabilities.diarization is False
+
 
 class TestFunASREngine:
     """
@@ -36,10 +104,10 @@ class TestFunASREngine:
     def test_load_model(self, mock_auto_model):
         """测试模型加载逻辑"""
         engine = FunASREngine(device="cpu")
-        
+
         # 执行加载
         engine.load()
-        
+
         # 验证 AutoModel 是否被正确调用
         mock_auto_model.assert_called_once()
         call_kwargs = mock_auto_model.call_args.kwargs
@@ -50,7 +118,7 @@ class TestFunASREngine:
         # SPEC-007: 验证说话人分离模型配置
         assert call_kwargs["spk_model"] == "cam++"
         assert call_kwargs["vad_model"] == "fsmn-vad"
-        
+
         # 验证 engine.model 是否被赋值
         assert engine.model is not None
 
@@ -59,7 +127,7 @@ class TestFunASREngine:
         engine = FunASREngine()
         engine.load()
         engine.load() # 第二次调用
-        
+
         # 应该只初始化一次
         assert mock_auto_model.call_count == 1
 
@@ -74,7 +142,7 @@ class TestFunASREngine:
         # 1. Setup Mock
         mock_instance = MagicMock()
         mock_auto_model.return_value = mock_instance
-        
+
         # 模拟 generate 返回值: 包含 sentence_info (说话人分离结果)
         mock_instance.generate.return_value = [{
             "text": "Hello World",
@@ -83,20 +151,20 @@ class TestFunASREngine:
                 {"text": "World", "start": 500, "end": 1000, "spk": 0}
             ]
         }]
-        
+
         # 2. Load Engine
         engine = FunASREngine()
         engine.load()
-        
+
         # 3. Execute (默认 output_format="json")
         result = engine.transcribe_file("test.wav", output_format="json")
-        
+
         # 4. Assertions - JSON 格式返回 dict
         assert isinstance(result, dict)
         assert result["text"] == "Hello World"
         assert "segments" in result
         assert len(result["segments"]) == 2
-        
+
         # 验证 generate 调用参数
         mock_instance.generate.assert_called_once()
         call_kwargs = mock_instance.generate.call_args.kwargs
@@ -113,12 +181,12 @@ class TestFunASREngine:
                 {"text": "Hello", "start": 0, "end": 500, "spk": 0}
             ]
         }]
-        
+
         engine = FunASREngine()
         engine.load()
-        
+
         result = engine.transcribe_file("test.wav", output_format="txt")
-        
+
         # TXT 格式返回字符串
         assert isinstance(result, str)
         assert "[Speaker 0]" in result
@@ -130,12 +198,12 @@ class TestFunASREngine:
         mock_auto_model.return_value = mock_instance
         # 只返回 text，没有 sentence_info
         mock_instance.generate.return_value = [{"text": "Simple text"}]
-        
+
         engine = FunASREngine()
         engine.load()
-        
+
         result = engine.transcribe_file("test.wav", output_format="json")
-        
+
         # 应该返回 dict，但 segments 为 None
         assert isinstance(result, dict)
         assert result["text"] == "Simple text"
@@ -148,14 +216,14 @@ class TestFunASREngine:
         mock_instance = MagicMock()
         mock_auto_model.return_value = mock_instance
         mock_instance.generate.return_value = [{"text": "MPS Test"}]
-        
+
         # Initialize with MPS
         engine = FunASREngine(device="mps")
         engine.load()
-        
+
         # Execute
         engine.transcribe_file("test.wav")
-        
+
         # Verify cleanup
         mock_torch.mps.empty_cache.assert_called_once()
         # Ensure CUDA cleanup was NOT called
@@ -167,14 +235,14 @@ class TestFunASREngine:
         mock_instance = MagicMock()
         mock_auto_model.return_value = mock_instance
         mock_instance.generate.return_value = [{"text": "CUDA Test"}]
-        
+
         # Initialize with CUDA
         engine = FunASREngine(device="cuda")
         engine.load()
-        
+
         # Execute
         engine.transcribe_file("test.wav")
-        
+
         # Verify cleanup
         mock_torch.cuda.empty_cache.assert_called_once()
         mock_torch.mps.empty_cache.assert_not_called()
@@ -185,10 +253,10 @@ class TestFunASREngine:
         engine = FunASREngine(device="mps")
         engine.load()
         assert engine.model is not None
-        
+
         # Execute release
         engine.release()
-        
+
         # Verify
         assert engine.model is None
         mock_torch.mps.empty_cache.assert_called()

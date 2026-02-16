@@ -46,6 +46,7 @@ async def lifespan(app: FastAPI):
     
     # 4. 依赖注入
     app.state.service = service
+    app.state.engine = engine
     app.state.engine_type = ENGINE_TYPE
     app.state.model_id = get_model_id()
     

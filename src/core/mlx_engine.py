@@ -13,6 +13,34 @@ from mlx_audio.stt.utils import load_model
 from mlx_audio.stt.generate import generate_transcription
 
 from src.adapters.audio_chunking import AudioChunkingService
+from src.core.base_engine import EngineCapabilities
+
+# Per-model capability profiles (prefix-matched, longest prefix wins)
+_MLX_MODEL_CAPABILITIES: Dict[str, EngineCapabilities] = {
+    "mlx-community/Qwen3-ASR": EngineCapabilities(
+        timestamp=True, language_detect=True,
+    ),
+    "mlx-community/whisper": EngineCapabilities(
+        timestamp=True, language_detect=True,
+    ),
+    "mlx-community/parakeet": EngineCapabilities(
+        timestamp=True,
+    ),
+}
+
+# Conservative default for unknown MLX models
+_MLX_DEFAULT_CAPS = EngineCapabilities()
+
+
+def _resolve_mlx_capabilities(model_id: str) -> EngineCapabilities:
+    """Resolve capabilities via longest-prefix match against model_id."""
+    best_match = ""
+    best_caps = _MLX_DEFAULT_CAPS
+    for prefix, caps in _MLX_MODEL_CAPABILITIES.items():
+        if model_id.startswith(prefix) and len(prefix) > len(best_match):
+            best_match = prefix
+            best_caps = caps
+    return best_caps
 
 
 class MlxAudioEngine:
@@ -24,9 +52,14 @@ class MlxAudioEngine:
 
     def __init__(self, model_id: str = "mlx-community/Qwen3-ASR-1.7B-4bit"):
         self.model_id = model_id
+        self._capabilities = _resolve_mlx_capabilities(model_id)
         self.model = None
         self.chunking_service = AudioChunkingService()
         print(f"⚙️ MLX Engine initialized. Model: {self.model_id}")
+
+    @property
+    def capabilities(self) -> EngineCapabilities:
+        return self._capabilities
 
     def load(self) -> None:
         """

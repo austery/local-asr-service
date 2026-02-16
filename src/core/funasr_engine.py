@@ -4,16 +4,41 @@ import gc
 from funasr import AutoModel
 from typing import Optional, Union, List, Dict
 
+from src.core.base_engine import EngineCapabilities
+
 # 推荐使用的 Paraformer 模型 ID (支持时间戳，必须用于说话人分离)
 # SEACO-Paraformer 是目前阿里最成熟的串联模型，中文识别 SOTA
 DEFAULT_MODEL_ID = "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 
-# 支持时间戳（和说话人分离）的模型白名单
-# SenseVoice 等其他模型不支持时间戳，不能加载 spk_model
-TIMESTAMP_CAPABLE_MODELS = {
-    "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
-    "iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+# Per-model capability profiles (prefix-matched, longest prefix wins)
+_FUNASR_MODEL_CAPABILITIES: Dict[str, EngineCapabilities] = {
+    "iic/speech_seaco_paraformer": EngineCapabilities(
+        timestamp=True, diarization=True, language_detect=True,
+    ),
+    "iic/speech_paraformer": EngineCapabilities(
+        timestamp=True, diarization=True, language_detect=True,
+    ),
+    "iic/SenseVoiceSmall": EngineCapabilities(
+        emotion_tags=True, language_detect=True,
+    ),
+    "iic/SenseVoiceLarge": EngineCapabilities(
+        emotion_tags=True, language_detect=True,
+    ),
 }
+
+# Conservative default for unknown FunASR models
+_FUNASR_DEFAULT_CAPS = EngineCapabilities()
+
+
+def _resolve_capabilities(model_id: str) -> EngineCapabilities:
+    """Resolve capabilities via longest-prefix match against model_id."""
+    best_match = ""
+    best_caps = _FUNASR_DEFAULT_CAPS
+    for prefix, caps in _FUNASR_MODEL_CAPABILITIES.items():
+        if model_id.startswith(prefix) and len(prefix) > len(best_match):
+            best_match = prefix
+            best_caps = caps
+    return best_caps
 
 
 class FunASREngine:
@@ -29,7 +54,7 @@ class FunASREngine:
 
     def __init__(self, model_id: str = DEFAULT_MODEL_ID, device: Optional[str] = None):
         self.model_id = model_id
-        self.supports_timestamp = model_id in TIMESTAMP_CAPABLE_MODELS
+        self._capabilities = _resolve_capabilities(model_id)
         # 自动检测 Apple Silicon (MPS) 环境
         if device is None:
             self.device = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -38,8 +63,12 @@ class FunASREngine:
 
         self.model = None
         print(f"⚙️ Engine initialized. Target device: {self.device}")
-        if not self.supports_timestamp:
-            print(f"ℹ️  Model '{model_id}' does not support timestamps. Speaker diarization disabled.")
+        if not self._capabilities.diarization:
+            print(f"ℹ️  Model '{model_id}' does not support diarization. Speaker model disabled.")
+
+    @property
+    def capabilities(self) -> EngineCapabilities:
+        return self._capabilities
 
     def load(self):
         """
@@ -55,14 +84,14 @@ class FunASREngine:
 
         print(f"🚀 Loading model '{self.model_id}' on {self.device}...")
         print("   (If this is the first run, it will download the model automatically. Please wait.)")
-        
+
         try:
             start_time = time.time()
 
             # 根据模型能力决定加载的管道组件
             # Paraformer: VAD + ASR + Punc + CAM++ (完整说话人分离)
             # SenseVoice 等: VAD + ASR + Punc (无说话人分离，因为不支持时间戳)
-            model_kwargs = dict(
+            model_kwargs: Dict[str, object] = dict(
                 model=self.model_id,
                 vad_model="fsmn-vad",  # 语音活动检测，用于切分长音频
                 vad_kwargs={"max_single_segment_time": 30000},  # 30秒切片优化
@@ -71,21 +100,21 @@ class FunASREngine:
                 disable_update=True,   # 禁止每次都去 check update，加快启动速度
                 log_level="ERROR",     # 减少刷屏日志
             )
-            if self.supports_timestamp:
+            if self._capabilities.diarization:
                 model_kwargs["spk_model"] = "cam++"  # 声纹识别模型（说话人分离）
 
             self.model = AutoModel(**model_kwargs)
-            
+
             duration = time.time() - start_time
             print(f"✅ Model loaded successfully in {duration:.2f}s")
-            
+
         except Exception as e:
             print(f"❌ Failed to load model: {e}")
             raise e
 
     def transcribe_file(
-        self, 
-        file_path: str, 
+        self,
+        file_path: str,
         language: str = "auto",
         output_format: str = "json",  # 选项: 'json', 'txt', 'srt'
         with_timestamp: bool = False,  # txt/srt 中是否包含时间戳
@@ -93,7 +122,7 @@ class FunASREngine:
     ) -> Union[Dict, str, List[Dict]]:
         """
         执行推理，支持多种输出格式。
-        
+
         Args:
             file_path: 音频文件路径
             language: 语言代码 (auto, zh, en, yue, ja, ko)
@@ -102,13 +131,13 @@ class FunASREngine:
                 - 'txt': 返回人类易读文本 (适合 RAG/LLM)
                 - 'srt': 返回 SRT 字幕格式
             with_timestamp: 如果是 txt 格式，是否在行首保留 [00:12] 时间标记
-            
+
         Returns:
             根据 output_format 返回不同格式:
             - json: {"text": str, "segments": List[Dict]}
             - txt: str
             - srt: str
-            
+
         注意：这是同步阻塞方法，必须在 Service 层通过线程池调用。
         """
         if not self.model:
@@ -116,10 +145,6 @@ class FunASREngine:
 
         # 从 kwargs 提取 FunASR 特定参数
         use_itn = kwargs.get("use_itn", True)
-
-        # SenseVoice 不支持时间戳/说话人分离，强制降级为 txt
-        if not self.supports_timestamp and output_format == "srt":
-            output_format = "txt"
 
         # 调用 FunASR 推理
         res = self.model.generate(
@@ -136,7 +161,7 @@ class FunASREngine:
         text = result_data.get("text", "")
 
         # SenseVoice 输出包含特殊标签 (<|zh|><|NEUTRAL|> 等)，需要清洗
-        if not self.supports_timestamp:
+        if self._capabilities.emotion_tags:
             from src.adapters.text import clean_sensevoice_tags
             text = clean_sensevoice_tags(text)
 
@@ -161,7 +186,7 @@ class FunASREngine:
             return self._format_as_txt(sentence_info, with_timestamp)
         elif output_format == "srt":
             return self._format_as_srt(sentence_info)
-        
+
         # 默认返回 JSON
         return self._format_as_json(text, sentence_info)
 
@@ -185,21 +210,21 @@ class FunASREngine:
         """
         生成人类易读的访谈文本。
         适合用于 RAG 知识库或 LLM 处理。
-        
+
         格式样例:
         - 纯净模式: [Speaker 0]: 大家好...
         - 带时间戳: [02:15] [Speaker 0]: 大家好...
         """
         lines = []
-        
+
         for info in sentence_info:
             spk = info.get("spk")
             text = info.get("text", "")
             start_ms = info.get("start", 0)
-            
+
             # 格式化说话人标签
             spk_tag = f"[Speaker {spk}]" if spk is not None else "[Unknown]"
-            
+
             # 格式化时间戳 (仅当用户需要时)
             time_tag = ""
             if with_timestamp and start_ms is not None:
@@ -211,36 +236,36 @@ class FunASREngine:
             # 组合一行
             line = f"{time_tag}{spk_tag}: {text}"
             lines.append(line)
-            
+
         return "\n".join(lines)
 
     def _format_as_srt(self, sentence_info: List[Dict]) -> str:
         """
         生成标准 SRT 字幕格式。
-        
+
         格式:
         1
         00:00:05,000 --> 00:00:20,000
         [Speaker 0]: so what is some of the questions？
         """
         lines = []
-        
+
         for idx, info in enumerate(sentence_info, start=1):
             spk = info.get("spk", 0)
             text = info.get("text", "")
             start_ms = info.get("start", 0)
             end_ms = info.get("end", 0)
-            
+
             # 毫秒转 SRT 时间格式 (HH:MM:SS,mmm)
             start_srt = self._ms_to_srt_time(start_ms)
             end_srt = self._ms_to_srt_time(end_ms)
-            
+
             # SRT 格式
             lines.append(str(idx))
             lines.append(f"{start_srt} --> {end_srt}")
             lines.append(f"[Speaker {spk}]: {text}")
             lines.append("")  # 空行分隔
-            
+
         return "\n".join(lines)
 
     def _ms_to_srt_time(self, ms: int) -> str:
@@ -262,11 +287,11 @@ class FunASREngine:
             print(f"♻️ Releasing model '{self.model_id}'...")
             del self.model
             self.model = None
-            
+
             if self.device == "mps":
                 torch.mps.empty_cache()
             elif self.device == "cuda":
                 torch.cuda.empty_cache()
-            
+
             gc.collect()
             print("✅ Model released and memory cleared.")
