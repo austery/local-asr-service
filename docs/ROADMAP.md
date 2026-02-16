@@ -133,38 +133,40 @@ context: 基于项目分析和市场调研，制定的改进路线图。
 
 ---
 
-### P1-2: Benchmark 自动化脚本
+### P1-2: Benchmark 自动化脚本 ✅ 已完成
 
 **问题**: 每次试新模型都是手动记录性能数据（如 SPEC-007 中的 benchmark），缺乏标准化对比。
 
-**方案**:
-- 创建 `benchmarks/run.py` 脚本
-- 标准测试集：准备 3 个音频文件（短/中/长，中英文混合）
-- 输出指标：RTF (Real-Time Factor)、首字延迟、内存峰值、WER (如有参考文本)
-- 结果输出为 JSON + 终端表格，方便对比
+**实现**:
+- `benchmarks/run.py` — HTTP 客户端向运行中的服务发请求，测量 RTF、延迟、segment 数
+- `benchmarks/samples/` — 标准测试音频目录（gitignored，README 说明获取方式）
+- `benchmarks/results/` — JSON 结果存档（gitignored）
+- 支持单文件、`--all`、`--save`、`--format json/txt/srt`
+- 自动检测 `/v1/models/current` 获取引擎和能力信息
+- 测试音频 fixture: `tests/fixtures/two_speakers_60s.wav`（60s 双人英语对话）
 
-**涉及文件**:
-- `benchmarks/run.py` — 新建
-- `benchmarks/samples/` — 标准测试音频（gitignore 大文件，README 说明获取方式）
-- `benchmarks/results/` — 历史结果存档
+**基准结果 (M1 Max, Paraformer)**:
+- 60s audio → 7.85s elapsed, RTF 0.13, 7.6x realtime, 21 segments
 
 **使用方式**:
 ```bash
-uv run python benchmarks/run.py --engine funasr --model-id "iic/..."
-uv run python benchmarks/run.py --engine mlx --model-id "mlx-community/Qwen3-ASR-1.7B-4bit"
+uv run python benchmarks/run.py                    # Default fixture
+uv run python benchmarks/run.py --file path/to.wav # Specific file
+uv run python benchmarks/run.py --all --save       # All files, save JSON
 ```
 
 ---
 
-### P1-3: 代码质量工具链 (ruff + mypy)
+### P1-3: 代码质量工具链 (ruff + mypy) ✅ 已完成
 
 **问题**: `pyproject.toml` 中缺少 ruff 和 mypy 配置，与用户编码规范不一致。
 
-**方案**:
-- 添加 `[tool.mypy]` strict 配置
-- 添加 `[tool.ruff]` 配置（target Python 3.11）
-- 修复现有代码中可能出现的类型错误
-- 可选：添加 pre-commit hook
+**实现**:
+- 添加 `[tool.ruff]` 配置（target Python 3.11，line-length 100）+ `[tool.ruff.lint]` 启用 pyflakes/pycodestyle/isort/bugbear/upgrade 规则
+- 添加 `[tool.mypy]` strict 配置（`disallow_untyped_defs`、`warn_return_any`、`no_implicit_optional`）
+- 修复 199 个 ruff 错误（自动修复 + 手动修复）
+- 修复 24 个 mypy 类型错误（完整类型注解覆盖所有 15 个源文件）
+- ruff check + ruff format + mypy 全部通过，85 个测试不变
 
 ---
 
@@ -200,12 +202,10 @@ P0-1 引擎能力声明 ✅
   │
   └──→ P1-1 模型状态端点 ✅（与 P0-1 一同完成）
           │
-          └──→ P1-2 Benchmark 脚本
+          └──→ P1-2 Benchmark 脚本 ✅
 
 P0-3 端口文档对齐 ✅（README 已记录）
-P1-3 ruff + mypy
+P1-3 ruff + mypy ✅
 ```
 
-**剩余工作量排序**（从小到大）：
-1. P1-3 ruff + mypy — 配置 + 修复类型错误
-2. P1-2 Benchmark 脚本 — 新建脚本 + 测试音频准备
+**全部 P0/P1 任务已完成。** 下一步进入 P2（新模型评估），按需执行。

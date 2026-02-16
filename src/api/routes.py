@@ -1,24 +1,29 @@
 """
 API routes for speech transcription service.
 """
-from dataclasses import asdict
-from fastapi import APIRouter, File, UploadFile, Form, Request, HTTPException
-from fastapi.responses import PlainTextResponse
-from typing import Optional
-from pydantic import BaseModel, Field
+
 import logging
+from dataclasses import asdict
+
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field
+
 from src.config import MAX_UPLOAD_SIZE_MB
 
 logger = logging.getLogger(__name__)
 
 # 支持的音频 MIME 类型白名单
 ALLOWED_AUDIO_TYPES = {
-    "audio/wav", "audio/x-wav",
-    "audio/mpeg", "audio/mp3",
-    "audio/mp4", "audio/x-m4a",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/x-m4a",
     "audio/flac",
     "audio/ogg",
-    "audio/webm"
+    "audio/webm",
 }
 
 # OpenAI response_format → internal output_format mapping
@@ -28,39 +33,51 @@ _RESPONSE_FORMAT_MAP = {
     "vtt": "srt",
 }
 
+
 # API Request/Response Models
 class Segment(BaseModel):
     """Segment with timestamp and optional speaker info"""
+
     id: int
-    speaker: Optional[str] = None  # Speaker ID (e.g., "Speaker 0")
+    speaker: str | None = None  # Speaker ID (e.g., "Speaker 0")
     start: float = 0.0  # 毫秒
-    end: float = 0.0    # 毫秒
+    end: float = 0.0  # 毫秒
     text: str
+
 
 class TranscriptionResponse(BaseModel):
     """
     JSON response format with full structured data.
     Used when output_format='json'.
     """
+
     text: str
-    duration: Optional[float] = None
-    language: Optional[str] = None
-    model: Optional[str] = None
-    segments: Optional[list[Segment]] = Field(None, description="详细分段信息（带说话人识别）")
+    duration: float | None = None
+    language: str | None = None
+    model: str | None = None
+    segments: list[Segment] | None = Field(None, description="详细分段信息（带说话人识别）")
+
 
 # Router
 router = APIRouter()
 
-@router.post("/v1/audio/transcriptions")
+
+@router.post("/v1/audio/transcriptions", response_model=None)
 async def create_transcription(
     request: Request,
     file: UploadFile = File(..., description="Audio file (wav, mp3, m4a, etc.)"),
-    model: str = Form("paraformer", description="Model ID (informational — actual model set by server config)"),
+    model: str = Form(
+        "paraformer", description="Model ID (informational — actual model set by server config)"
+    ),
     language: str = Form("auto", description="Language code (auto, zh, en)"),
-    response_format: Optional[str] = Form(None, description="OpenAI-compatible format: json, verbose_json, text, vtt, srt"),
+    response_format: str | None = Form(
+        None, description="OpenAI-compatible format: json, verbose_json, text, vtt, srt"
+    ),
     output_format: str = Form("json", description="Output format: json (default), txt, srt"),
-    with_timestamp: bool = Form(False, description="Include timestamps in txt output (e.g., [02:15] [Speaker 0]: ...)"),
-    ):
+    with_timestamp: bool = Form(
+        False, description="Include timestamps in txt output (e.g., [02:15] [Speaker 0]: ...)"
+    ),
+) -> TranscriptionResponse | PlainTextResponse:
     """
     Transcribe audio file with speaker diarization.
 
@@ -81,8 +98,7 @@ async def create_transcription(
     if file.content_type not in ALLOWED_AUDIO_TYPES:
         logger.warning(f"[{request_id}] Unsupported file type: {file.content_type}")
         raise HTTPException(
-            status_code=415,
-            detail="Unsupported file type. Only audio files are allowed."
+            status_code=415, detail="Unsupported file type. Only audio files are allowed."
         )
 
     # 2. 文件大小校验（通过底层文件对象的 seek/tell 避免读取全部内容到内存）
@@ -92,10 +108,11 @@ async def create_transcription(
     max_size_mb = MAX_UPLOAD_SIZE_MB
 
     if file_size_mb > max_size_mb:
-        logger.warning(f"[{request_id}] File too large: {file_size_mb:.2f}MB (max: {max_size_mb}MB)")
+        logger.warning(
+            f"[{request_id}] File too large: {file_size_mb:.2f}MB (max: {max_size_mb}MB)"
+        )
         raise HTTPException(
-            status_code=413,
-            detail=f"File size exceeds maximum allowed ({max_size_mb} MB)"
+            status_code=413, detail=f"File size exceeds maximum allowed ({max_size_mb} MB)"
         )
 
     file.file.seek(0)  # reset for downstream reading
@@ -129,7 +146,9 @@ async def create_transcription(
             ),
         )
 
-    logger.info(f"[{request_id}] Processing file: {file.filename} ({file_size_mb:.2f}MB, format={effective_format})")
+    logger.info(
+        f"[{request_id}] Processing file: {file.filename} ({file_size_mb:.2f}MB, format={effective_format})"
+    )
 
     # 5. 获取 Service
     service = request.app.state.service
@@ -150,7 +169,7 @@ async def create_transcription(
         if effective_format == "srt":
             return PlainTextResponse(
                 content=result if isinstance(result, str) else result.get("text", ""),
-                media_type="text/plain; charset=utf-8"
+                media_type="text/plain; charset=utf-8",
             )
 
         # JSON 和 TXT 格式都返回 JSON 响应（OpenAI API 兼容）
@@ -161,16 +180,16 @@ async def create_transcription(
             duration = result.get("duration", 0.0)
 
             # 格式化 segments（仅 json 格式包含）
-            segments = None
+            segments: list[Segment] | None = None
             if effective_format == "json" and segments_data:
                 segments = [
-                    {
-                        "id": i,
-                        "speaker": seg.get("speaker"),
-                        "start": seg.get("start", 0.0),
-                        "end": seg.get("end", 0.0),
-                        "text": seg.get("text", "")
-                    }
+                    Segment(
+                        id=i,
+                        speaker=seg.get("speaker"),
+                        start=seg.get("start", 0.0),
+                        end=seg.get("end", 0.0),
+                        text=seg.get("text", ""),
+                    )
                     for i, seg in enumerate(segments_data)
                 ]
 
@@ -178,35 +197,38 @@ async def create_transcription(
                 text=text,
                 duration=duration,
                 language=language if language != "auto" else "zh",
-                model=request.app.state.model_id if hasattr(request.app.state, "model_id") else "paraformer",
-                segments=segments
+                model=request.app.state.model_id
+                if hasattr(request.app.state, "model_id")
+                else "paraformer",
+                segments=segments,
             )
         else:
             return TranscriptionResponse(
-                text=result,
+                text=str(result),
                 language=language if language != "auto" else "zh",
-                model="paraformer"
+                model="paraformer",
+                segments=None,
             )
 
     except RuntimeError as e:
         if "Queue is full" in str(e):
-            raise HTTPException(status_code=503, detail="Server is busy (Queue Full). Please try again later.")
+            raise HTTPException(
+                status_code=503, detail="Server is busy (Queue Full). Please try again later."
+            ) from None
         logger.error(f"[{request_id}] Runtime error: {e}", exc_info=True)
         raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error occurred. (Request ID: {request_id})"
-        )
+            status_code=500, detail=f"Internal server error occurred. (Request ID: {request_id})"
+        ) from None
 
     except Exception as e:
         logger.error(f"[{request_id}] Unexpected error: {e}", exc_info=True)
         raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error occurred. (Request ID: {request_id})"
-        )
+            status_code=500, detail=f"Internal server error occurred. (Request ID: {request_id})"
+        ) from None
 
 
 @router.get("/v1/models/current")
-async def get_current_model(request: Request):
+async def get_current_model(request: Request) -> dict[str, object]:
     """
     Return the currently loaded model and its capabilities.
     Useful for clients to discover what formats/features are available.

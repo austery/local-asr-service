@@ -3,9 +3,10 @@
 通过环境变量控制服务行为。
 支持从 .env 文件加载配置。
 """
+
 import os
-from typing import Literal
 from pathlib import Path
+from typing import Literal
 
 # 加载 .env 文件（如果存在）
 from dotenv import load_dotenv
@@ -28,13 +29,17 @@ ENGINE_TYPE: EngineType = os.getenv("ENGINE_TYPE", "funasr")  # type: ignore
 # FunASR 默认模型
 # NOTE: 使用 Paraformer 以支持说话人分离 (SPEC-007)
 # SenseVoice 不支持时间戳预测，无法与 cam++ 配合
-FUNASR_MODEL_ID = os.getenv("FUNASR_MODEL_ID", "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch")
+FUNASR_MODEL_ID = os.getenv(
+    "FUNASR_MODEL_ID",
+    "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+)
 
 # MLX 默认模型
 MLX_MODEL_ID = os.getenv("MLX_MODEL_ID", "mlx-community/Qwen3-ASR-1.7B-4bit")
 
 # 通用 MODEL_ID（优先级高于引擎特定配置）
 MODEL_ID = os.getenv("MODEL_ID", None)
+
 
 def get_model_id() -> str:
     """获取当前引擎应使用的模型 ID"""
@@ -43,6 +48,7 @@ def get_model_id() -> str:
     if ENGINE_TYPE == "mlx":
         return MLX_MODEL_ID
     return FUNASR_MODEL_ID
+
 
 # === 服务配置 ===
 HOST = os.getenv("HOST", "0.0.0.0")

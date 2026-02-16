@@ -4,24 +4,27 @@ MLX Audio 推理引擎封装类。
 支持自动音频切片（长音频超过限制时）。
 支持说话人分离（某些模型特性）。
 """
-import time
-import gc
-from pathlib import Path
-from typing import Optional, Dict, Any, List, Union
 
-from mlx_audio.stt.utils import load_model
+import gc
+import time
+from pathlib import Path
+from typing import Any
+
 from mlx_audio.stt.generate import generate_transcription
+from mlx_audio.stt.utils import load_model
 
 from src.adapters.audio_chunking import AudioChunkingService
 from src.core.base_engine import EngineCapabilities
 
 # Per-model capability profiles (prefix-matched, longest prefix wins)
-_MLX_MODEL_CAPABILITIES: Dict[str, EngineCapabilities] = {
+_MLX_MODEL_CAPABILITIES: dict[str, EngineCapabilities] = {
     "mlx-community/Qwen3-ASR": EngineCapabilities(
-        timestamp=True, language_detect=True,
+        timestamp=True,
+        language_detect=True,
     ),
     "mlx-community/whisper": EngineCapabilities(
-        timestamp=True, language_detect=True,
+        timestamp=True,
+        language_detect=True,
     ),
     "mlx-community/parakeet": EngineCapabilities(
         timestamp=True,
@@ -74,7 +77,9 @@ class MlxAudioEngine:
             return
 
         print(f"🚀 Loading MLX model '{self.model_id}'...")
-        print("   (If this is the first run, it will download the model automatically. Please wait.)")
+        print(
+            "   (If this is the first run, it will download the model automatically. Please wait.)"
+        )
 
         try:
             start_time = time.time()
@@ -86,16 +91,13 @@ class MlxAudioEngine:
             raise e
 
     def transcribe_file(
-        self, 
-        file_path: str, 
-        language: str = "auto", 
-        **kwargs
-    ) -> Union[str, Dict[str, Any]]:
+        self, file_path: str, language: str = "auto", **kwargs: Any
+    ) -> str | dict[str, Any]:
         """
         执行推理，返回转录结果。
         自动处理长音频切片。
         支持多种输出格式（txt, json, srt, vtt）。
-        
+
         Args:
             file_path: 音频文件路径
             language: 语言代码 (当前 mlx-audio 部分模型支持)
@@ -103,7 +105,7 @@ class MlxAudioEngine:
                 - verbose: bool - 详细输出
                 - format: str - 输出格式 (txt, json, srt, vtt)
                 - response_format: str - OpenAI 兼容的响应格式参数
-            
+
         Returns:
             txt 格式: 转录文本字符串
             json 格式: 包含 text 和 segments 的字典（说话人信息）
@@ -114,35 +116,33 @@ class MlxAudioEngine:
         verbose = kwargs.get("verbose", False)
         # 支持两种参数名：format (mlx-audio) 和 response_format (OpenAI)
         output_format = kwargs.get("format") or kwargs.get("response_format", "txt")
-        
+
         # 标准化格式名称
         if output_format in ["json", "verbose_json"]:
             output_format = "json"
         elif output_format not in ["txt", "srt", "vtt"]:
             output_format = "txt"  # 默认文本格式
-        
+
         try:
             # 步骤1: 检查音频是否需要切片
             chunks = self.chunking_service.process_audio(file_path)
-            
+
             # 步骤2: 转录所有切片
             results = []
             for i, chunk_path in enumerate(chunks):
                 print(f"🎙️ Transcribing chunk {i + 1}/{len(chunks)} (format: {output_format})...")
                 try:
                     result = generate_transcription(
-                        model=self.model,
-                        audio=chunk_path,
-                        format=output_format,
-                        verbose=verbose
+                        model=self.model, audio=chunk_path, format=output_format, verbose=verbose
                     )
                     results.append(result)
                 finally:
                     # 清理临时切片文件
-                    if chunk_path != chunks[0] or len(chunks) > 1:
-                        if ".chunk_" in chunk_path or len(chunks) > 1:
-                            Path(chunk_path).unlink(missing_ok=True)
-            
+                    if (chunk_path != chunks[0] or len(chunks) > 1) and (
+                        ".chunk_" in chunk_path or len(chunks) > 1
+                    ):
+                        Path(chunk_path).unlink(missing_ok=True)
+
             # 步骤3: 根据格式合并结果
             if output_format == "json":
                 final_result = self._merge_json_results(results)
@@ -150,47 +150,47 @@ class MlxAudioEngine:
                 # txt, srt, vtt 格式
                 texts = []
                 for result in results:
-                    text = result.text.strip() if hasattr(result, 'text') else str(result).strip()
+                    text = result.text.strip() if hasattr(result, "text") else str(result).strip()
                     texts.append(text)
                 final_result = " ".join(texts)
-            
+
             if len(chunks) > 1:
                 print(f"✅ Successfully merged {len(chunks)} chunks")
-            
+
             return final_result
-            
+
         except Exception as e:
             print(f"❌ MLX transcription failed: {e}")
             raise e
-    
-    def _merge_json_results(self, results: List[Any]) -> Dict[str, Any]:
+
+    def _merge_json_results(self, results: list[Any]) -> dict[str, Any]:
         """
         合并多个 JSON 格式的转录结果。
-        
+
         Args:
             results: mlx-audio 返回的结果对象列表
-            
+
         Returns:
             合并后的字典，包含 text 和 segments
         """
         if not results:
             return {"text": "", "segments": []}
-        
+
         # 如果只有一个结果，直接转换
         if len(results) == 1:
             return self._result_to_dict(results[0])
-        
+
         # 合并多个结果
         all_text = []
         all_segments = []
         time_offset = 0.0
-        
-        for i, result in enumerate(results):
+
+        for _i, result in enumerate(results):
             result_dict = self._result_to_dict(result)
-            
+
             # 累加文本
             all_text.append(result_dict.get("text", ""))
-            
+
             # 调整时间戳并合并 segments
             segments = result_dict.get("segments", [])
             for segment in segments:
@@ -200,60 +200,53 @@ class MlxAudioEngine:
                 if "end" in adjusted_segment:
                     adjusted_segment["end"] += time_offset
                 all_segments.append(adjusted_segment)
-            
+
             # 更新时间偏移（使用最后一个 segment 的结束时间）
             if segments and "end" in segments[-1]:
                 time_offset = segments[-1]["end"] + time_offset
-        
-        return {
-            "text": " ".join(all_text),
-            "segments": all_segments
-        }
-    
-    def _result_to_dict(self, result: Any) -> Dict[str, Any]:
+
+        return {"text": " ".join(all_text), "segments": all_segments}
+
+    def _result_to_dict(self, result: Any) -> dict[str, Any]:
         """
         将 mlx-audio 结果对象转换为字典。
-        
+
         Args:
             result: mlx-audio 返回的结果对象
-            
+
         Returns:
             包含 text 和 segments 的字典
         """
-        result_dict = {"text": "", "segments": []}
-        
+        result_dict: dict[str, Any] = {"text": "", "segments": []}
+
         # 提取文本
-        if hasattr(result, 'text'):
+        if hasattr(result, "text"):
             result_dict["text"] = result.text.strip()
         elif isinstance(result, dict):
             result_dict["text"] = result.get("text", "")
-        
+
         # 提取 segments（说话人信息）
-        if hasattr(result, 'segments'):
+        if hasattr(result, "segments"):
             segments = result.segments
             if isinstance(segments, list):
-                result_dict["segments"] = [
-                    self._normalize_segment(seg) for seg in segments
-                ]
+                result_dict["segments"] = [self._normalize_segment(seg) for seg in segments]
         elif isinstance(result, dict) and "segments" in result:
-            result_dict["segments"] = [
-                self._normalize_segment(seg) for seg in result["segments"]
-            ]
-        
+            result_dict["segments"] = [self._normalize_segment(seg) for seg in result["segments"]]
+
         return result_dict
-    
-    def _normalize_segment(self, segment: Any) -> Dict[str, Any]:
+
+    def _normalize_segment(self, segment: Any) -> dict[str, Any]:
         """
         标准化 segment 格式。
-        
+
         Args:
             segment: 原始 segment 对象或字典
-            
+
         Returns:
             标准化的 segment 字典
         """
         normalized = {}
-        
+
         # 处理字典格式
         if isinstance(segment, dict):
             normalized = segment.copy()
@@ -262,7 +255,7 @@ class MlxAudioEngine:
             for attr in ["speaker", "start", "end", "text"]:
                 if hasattr(segment, attr):
                     normalized[attr] = getattr(segment, attr)
-        
+
         return normalized
 
     def release(self) -> None:

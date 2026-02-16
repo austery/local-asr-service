@@ -19,3 +19,6 @@ temp_*
 *.wav
 *.mp3
 *.m4a
+
+# Benchmark results (generated)
+benchmarks/results/*.json

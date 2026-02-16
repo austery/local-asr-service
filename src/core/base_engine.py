@@ -2,8 +2,9 @@
 ASR 引擎抽象接口定义。
 使用 Protocol 实现结构化子类型 (Structural Subtyping)。
 """
+
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,7 @@ class EngineCapabilities:
     Frozen so capabilities are immutable after engine initialization.
     Used by the API layer to validate requests before they reach the engine.
     """
+
     timestamp: bool = False
     diarization: bool = False
     emotion_tags: bool = False
@@ -39,7 +41,9 @@ class ASREngine(Protocol):
         """
         ...
 
-    def transcribe_file(self, file_path: str, language: str = "auto", **kwargs) -> str:
+    def transcribe_file(
+        self, file_path: str, language: str = "auto", **kwargs: Any
+    ) -> str | dict[str, Any]:
         """
         执行推理，返回转录文本。
 

@@ -1,8 +1,9 @@
-import torch
-import time
 import gc
+import time
+from typing import Any
+
+import torch
 from funasr import AutoModel
-from typing import Optional, Union, List, Dict
 
 from src.core.base_engine import EngineCapabilities
 
@@ -11,18 +12,24 @@ from src.core.base_engine import EngineCapabilities
 DEFAULT_MODEL_ID = "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 
 # Per-model capability profiles (prefix-matched, longest prefix wins)
-_FUNASR_MODEL_CAPABILITIES: Dict[str, EngineCapabilities] = {
+_FUNASR_MODEL_CAPABILITIES: dict[str, EngineCapabilities] = {
     "iic/speech_seaco_paraformer": EngineCapabilities(
-        timestamp=True, diarization=True, language_detect=True,
+        timestamp=True,
+        diarization=True,
+        language_detect=True,
     ),
     "iic/speech_paraformer": EngineCapabilities(
-        timestamp=True, diarization=True, language_detect=True,
+        timestamp=True,
+        diarization=True,
+        language_detect=True,
     ),
     "iic/SenseVoiceSmall": EngineCapabilities(
-        emotion_tags=True, language_detect=True,
+        emotion_tags=True,
+        language_detect=True,
     ),
     "iic/SenseVoiceLarge": EngineCapabilities(
-        emotion_tags=True, language_detect=True,
+        emotion_tags=True,
+        language_detect=True,
     ),
 }
 
@@ -52,7 +59,7 @@ class FunASREngine:
     - SenseVoice 等模型：纯转录模式 (VAD + ASR + Punc，无说话人分离)
     """
 
-    def __init__(self, model_id: str = DEFAULT_MODEL_ID, device: Optional[str] = None):
+    def __init__(self, model_id: str = DEFAULT_MODEL_ID, device: str | None = None):
         self.model_id = model_id
         self._capabilities = _resolve_capabilities(model_id)
         # 自动检测 Apple Silicon (MPS) 环境
@@ -70,7 +77,7 @@ class FunASREngine:
     def capabilities(self) -> EngineCapabilities:
         return self._capabilities
 
-    def load(self):
+    def load(self) -> None:
         """
         加载模型。
         这一步会触发 FunASR 的自动检查机制：
@@ -83,7 +90,9 @@ class FunASREngine:
             return
 
         print(f"🚀 Loading model '{self.model_id}' on {self.device}...")
-        print("   (If this is the first run, it will download the model automatically. Please wait.)")
+        print(
+            "   (If this is the first run, it will download the model automatically. Please wait.)"
+        )
 
         try:
             start_time = time.time()
@@ -91,14 +100,14 @@ class FunASREngine:
             # 根据模型能力决定加载的管道组件
             # Paraformer: VAD + ASR + Punc + CAM++ (完整说话人分离)
             # SenseVoice 等: VAD + ASR + Punc (无说话人分离，因为不支持时间戳)
-            model_kwargs: Dict[str, object] = dict(
+            model_kwargs: dict[str, object] = dict(
                 model=self.model_id,
                 vad_model="fsmn-vad",  # 语音活动检测，用于切分长音频
                 vad_kwargs={"max_single_segment_time": 30000},  # 30秒切片优化
                 punc_model="ct-punc",  # 标点符号模型
                 device=self.device,
-                disable_update=True,   # 禁止每次都去 check update，加快启动速度
-                log_level="ERROR",     # 减少刷屏日志
+                disable_update=True,  # 禁止每次都去 check update，加快启动速度
+                log_level="ERROR",  # 减少刷屏日志
             )
             if self._capabilities.diarization:
                 model_kwargs["spk_model"] = "cam++"  # 声纹识别模型（说话人分离）
@@ -112,14 +121,14 @@ class FunASREngine:
             print(f"❌ Failed to load model: {e}")
             raise e
 
-    def transcribe_file(
+    def transcribe_file(  # type: ignore[override]
         self,
         file_path: str,
         language: str = "auto",
         output_format: str = "json",  # 选项: 'json', 'txt', 'srt'
         with_timestamp: bool = False,  # txt/srt 中是否包含时间戳
-        **kwargs
-    ) -> Union[Dict, str, List[Dict]]:
+        **kwargs: Any,
+    ) -> dict[str, Any] | str:
         """
         执行推理，支持多种输出格式。
 
@@ -150,10 +159,10 @@ class FunASREngine:
         res = self.model.generate(
             input=file_path,
             cache={},
-            use_itn=use_itn,       # 逆文本标准化 (一百 -> 100)
-            batch_size_s=60,       # 批处理大小 (60秒音频切片)
-            merge_vad=True,        # 自动合并短句
-            merge_length_s=15
+            use_itn=use_itn,  # 逆文本标准化 (一百 -> 100)
+            batch_size_s=60,  # 批处理大小 (60秒音频切片)
+            merge_vad=True,  # 自动合并短句
+            merge_length_s=15,
         )
 
         # 解析结果
@@ -163,6 +172,7 @@ class FunASREngine:
         # SenseVoice 输出包含特殊标签 (<|zh|><|NEUTRAL|> 等)，需要清洗
         if self._capabilities.emotion_tags:
             from src.adapters.text import clean_sensevoice_tags
+
             text = clean_sensevoice_tags(text)
 
         sentence_info = result_data.get("sentence_info", [])
@@ -190,7 +200,7 @@ class FunASREngine:
         # 默认返回 JSON
         return self._format_as_json(text, sentence_info)
 
-    def _format_as_json(self, text: str, sentence_info: List[Dict]) -> Dict:
+    def _format_as_json(self, text: str, sentence_info: list[dict]) -> dict:
         """
         返回完整的结构化数据。
         这是你的"数字资产"，包含所有原始信息以便后续处理。
@@ -200,13 +210,13 @@ class FunASREngine:
                 "speaker": f"Speaker {info.get('spk', 0)}",
                 "text": info.get("text", ""),
                 "start": info.get("start", 0),  # 毫秒
-                "end": info.get("end", 0)       # 毫秒
+                "end": info.get("end", 0),  # 毫秒
             }
             for info in sentence_info
         ]
         return {"text": text, "segments": segments}
 
-    def _format_as_txt(self, sentence_info: List[Dict], with_timestamp: bool) -> str:
+    def _format_as_txt(self, sentence_info: list[dict], with_timestamp: bool) -> str:
         """
         生成人类易读的访谈文本。
         适合用于 RAG 知识库或 LLM 处理。
@@ -239,7 +249,7 @@ class FunASREngine:
 
         return "\n".join(lines)
 
-    def _format_as_srt(self, sentence_info: List[Dict]) -> str:
+    def _format_as_srt(self, sentence_info: list[dict]) -> str:
         """
         生成标准 SRT 字幕格式。
 
@@ -278,7 +288,7 @@ class FunASREngine:
         milliseconds = ms % 1000
         return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
-    def release(self):
+    def release(self) -> None:
         """
         释放显存资源。
         用于热更新模型或服务关闭时清理资源。
