@@ -103,6 +103,6 @@ curl -X POST http://localhost:50070/v1/audio/transcriptions \
 ```
 
 ## 5. 下一步计划 (Next Steps)
-1.  **评估 Pyannote 在 M4 Pro 上的性能**: 测试其在 MPS 后端的兼容性。
+1.  **评估 Pyannote 在 M1 Max 上的性能**: 测试其在 MPS 后端的兼容性。
 2.  **原型开发**: 编写脚本 `examples/demo_diarization.py` 验证对齐算法。
 3.  **集成**: 决定是否将其作为可选插件 (`Feature Flag`) 引入主分支。

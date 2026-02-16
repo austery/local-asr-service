@@ -37,7 +37,7 @@ Cam++ 需要精准的时间戳来切分音频段并识别说话人。Paraformer 
 ### 2.3 关键优势
 - **物理级分离**: 基于声纹特征而非逻辑推断，准确率高。
 - **自动下载**: 通过 `AutoModel` 参数配置，无需手动维护模型权重。
-- **MPS 优化**: 在 Mac M4 Pro 上 RTF ~0.016（16秒处理5分钟音频）。
+- **MPS 优化**: 在 Mac M1 Max 上 RTF ~0.016（16秒处理5分钟音频）。
 - **多格式输出**: 支持 JSON/TXT/SRT 格式，满足不同场景需求。
 
 ## 3. 实现要求 (Implementation Requirements)
@@ -85,7 +85,7 @@ def transcribe_file(
 
 ## 4. 性能与资源 (Performance & Resources)
 
-### 4.1 测试结果 (Mac M4 Pro)
+### 4.1 测试结果 (Mac M1 Max)
 
 | 指标 | 结果 |
 |-----|------|

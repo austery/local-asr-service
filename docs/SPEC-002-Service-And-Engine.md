@@ -8,7 +8,7 @@ relatedSpecs: [SPEC-101, SPEC-103]
 ---
 
 ## 1. 目标
-实现 ADR-001 中的 "Service Layer" (调度) 和 "Core Layer" (计算)，确保 M4 Pro 上的显存安全并支持多引擎。
+实现 ADR-001 中的 "Service Layer" (调度) 和 "Core Layer" (计算)，确保 M1 Max 上的显存安全并支持多引擎。
 
 ## 2. 架构组件
 

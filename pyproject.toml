@@ -1,7 +1,7 @@
 [project]
 name = "local-asr-service"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local ASR service optimized for Apple Silicon with FunASR/MLX dual-engine support, speaker diarization, and OpenAI-compatible API"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [

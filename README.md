@@ -9,7 +9,7 @@
 
 ## **📖 项目简介**
 
-本项目旨在解决在 Mac (M4 Pro/Max) 上运行语音识别时的痛点：**并发导致的显存爆炸 (OOM)** 和 **非标准化的脚本代码**。
+本项目旨在解决在 Mac (M1/M2/M3/M4 Max/Pro) 上运行语音识别时的痛点：**并发导致的显存爆炸 (OOM)** 和 **非标准化的脚本代码**。
 
 我们采用 **Clean Architecture (整洁架构)**，将 API 接口、调度队列和推理引擎严格分离。
 
@@ -20,7 +20,9 @@
 * **✂️ 智能音频切片**: MLX 引擎支持超长音频自动切片（静音检测 + 重叠策略），无需手动预处理。
 * **🛡️ 显存保护**: 内置 asyncio.Queue 生产者-消费者模型，严格串行处理任务，防止并发请求撑爆统一内存。
 * **👥 说话人分离 (Diarization)**: 集成 Cam++ 模型，自动识别不同说话人（Speaker 0, Speaker 1...）。
-* **🔌 OpenAI 兼容**: 提供与 POST /v1/audio/transcriptions 完全一致的接口，并扩展了多格式输出。
+* **🔌 OpenAI 兼容**: 提供与 POST /v1/audio/transcriptions 完全一致的接口，支持 `response_format` 参数（`verbose_json`/`text`/`srt`）。
+* **🎯 能力声明与校验**: 引擎能力自动检测，API 层校验不兼容请求并返回清晰 400 错误（如 SenseVoice + SRT）。
+* **📊 性能基准测试**: 内置 benchmark 脚本，自动测量 RTF、延迟、throughput。
 
 ## **🏗️ 系统架构 (The Architecture)**
 
@@ -245,78 +247,171 @@ uvicorn src.main:app \--host 0.0.0.0 \--port 50070 \--workers 1
 
 服务启动后，你可以通过 curl 或任何 API 工具进行测试。
 
-### **1\. 健康检查**
+### **1. 健康检查**
 
-curl http://localhost:50070/health  
+```bash
+curl http://localhost:50070/health
 # 返回: {"status": "healthy", "engine_type": "funasr", "model": "iic/speech_seaco_paraformer..."}
+```
 
-#### **1. 文本转录 (默认模式)**
+### **2. 查询当前模型和能力**
 
-你最常用的模式，返回纯净的说话人标记文本，适合 RAG 或 LLM。
+```bash
+curl http://localhost:50070/v1/models/current | jq
+```
+
+**返回示例：**
+```json
+{
+  "engine_type": "funasr",
+  "model_id": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+  "capabilities": {
+    "timestamp": true,
+    "diarization": true,
+    "emotion_tags": false,
+    "language_detect": true
+  },
+  "queue_size": 0,
+  "max_queue_size": 50
+}
+```
+
+### **3. 转录接口**
+
+#### **3.1 JSON 格式 (默认，OpenAI 兼容)**
 
 ```bash
 curl http://localhost:50070/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg"
 ```
 
-**预期输出 (Plain Text):**
+**返回 (JSON，OpenAI verbose_json 兼容):**
+```json
+{
+  "text": "[Speaker 0]: 大家好...\n[Speaker 1]: 好的...",
+  "duration": 5.2,
+  "language": "zh",
+  "model": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+  "segments": [
+    {"id": 0, "speaker": "Speaker 0", "start": 50, "end": 1200, "text": "大家好..."},
+    {"id": 1, "speaker": "Speaker 1", "start": 1200, "end": 2500, "text": "好的..."}
+  ]
+}
+```
+
+#### **3.2 纯文本格式 (适合 RAG/LLM)**
+
+```bash
+curl http://localhost:50070/v1/audio/transcriptions \
+  -F "file=@audio.mp3;type=audio/mpeg" \
+  -F "output_format=txt"
+```
+
+**返回 (Plain Text):**
 ```text
 [Speaker 0]: 大家好，今天我们来聊聊...
 [Speaker 1]: 好的，那我们开始吧。
 ```
 
-#### **2. 带时间戳模式**
+#### **3.3 带时间戳的文本**
 
 ```bash
 curl http://localhost:50070/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
+  -F "output_format=txt" \
   -F "with_timestamp=true"
 ```
 
-**预期输出:**
+**返回:**
 ```text
 [00:00] [Speaker 0]: 大家好，今天我们来聊聊...
 [00:05] [Speaker 1]: 好的，那我们开始吧。
 ```
 
-#### **3. JSON 格式 (完整结构化数据)**
+#### **3.4 SRT 字幕格式**
 
 ```bash
 curl http://localhost:50070/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
-  -F "output_format=json"
+  -F "output_format=srt"
 ```
 
-**预期输出:**
-```json
-{
-  "text": "...",
-  "duration": 5.2,
-  "segments": [
-    {"id": 0, "speaker": "Speaker 0", "start": 50, "end": 1200, "text": "..."},
-    ...
-  ]
-}
+**返回 (SRT 字幕):**
+```srt
+1
+00:00:00,050 --> 00:00:01,200
+[Speaker 0]: 大家好，今天我们来聊聊...
+
+2
+00:00:01,200 --> 00:00:02,500
+[Speaker 1]: 好的，那我们开始吧。
+```
+
+#### **3.5 OpenAI 兼容参数**
+
+使用 `response_format` 参数（OpenAI API 标准）：
+
+```bash
+# verbose_json → json
+curl http://localhost:50070/v1/audio/transcriptions \
+  -F "file=@audio.mp3;type=audio/mpeg" \
+  -F "response_format=verbose_json"
+
+# text → txt
+curl http://localhost:50070/v1/audio/transcriptions \
+  -F "file=@audio.mp3;type=audio/mpeg" \
+  -F "response_format=text"
+
+# vtt → srt
+curl http://localhost:50070/v1/audio/transcriptions \
+  -F "file=@audio.mp3;type=audio/mpeg" \
+  -F "response_format=vtt"
 ```
 
 #### **参数说明**
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `file` | File | **必填** | 音频文件 (wav, mp3, m4a 等) |
-| `output_format` | String | `txt` | 输出格式: `txt`, `json`, `srt` |
-| `with_timestamp` | Boolean | `false` | txt 格式下是否包含行首时间戳 |
+| `file` | File | **必填** | 音频文件 (wav, mp3, m4a, flac, ogg 等) |
+| `output_format` | String | `json` | 输出格式: `json`, `txt`, `srt` |
+| `response_format` | String | `None` | OpenAI 兼容别名: `verbose_json`, `text`, `srt`, `vtt` |
+| `with_timestamp` | Boolean | `false` | txt 格式下是否包含行首时间戳 `[MM:SS]` |
 | `language` | String | `auto` | 语言代码: `zh`, `en`, `auto` |
+| `model` | String | (信息性) | 模型 ID（服务端配置优先，此参数仅用于 API 兼容） |
 
 > **💡 提示**:
-> 1. 默认输出格式 (`json`) 返回 OpenAI 兼容的 JSON 响应。
-> 2. `output_format=srt` 和 `with_timestamp=true` 仅在使用 Paraformer 模型时有效（SenseVoice 不支持时间戳）。
+> 1. 默认输出格式 (`json`) 返回 OpenAI `verbose_json` 兼容的 JSON 响应（含 segments）。
+> 2. `response_format` 优先级高于 `output_format`（前者覆盖后者）。
+> 3. `output_format=srt` 和 `with_timestamp=true` 仅在使用 Paraformer 等支持 timestamp 的模型时有效。
+> 4. 请求不兼容的格式（如 SenseVoice + SRT）会返回 400 错误并说明原因。
 
-### **3\. 查看自动文档 (Swagger UI)**
+### **4. 查看自动文档 (Swagger UI)**
 
-浏览器访问：[http://localhost:50070/docs](https://www.google.com/search?q=http://localhost:50070/docs)
+浏览器访问：http://localhost:50070/docs
 
-### **4\. 模型存储位置**
+### **5. 性能基准测试**
+
+使用内置 benchmark 脚本测量转录性能：
+
+```bash
+# 使用默认 fixture (tests/fixtures/two_speakers_60s.wav)
+uv run python benchmarks/run.py
+
+# 测试指定文件
+uv run python benchmarks/run.py --file path/to/audio.wav
+
+# 测试所有样本并保存结果
+uv run python benchmarks/run.py --all --save
+
+# 测试不同输出格式
+uv run python benchmarks/run.py --format txt
+```
+
+**基准结果 (M1 Max, Paraformer, 60s English audio):**
+- Elapsed: 7.85s, RTF: 0.13, 7.6x realtime
+- 21 segments detected with speaker diarization
+
+### **6. 模型存储位置**
 
 服务会自动下载并缓存模型到以下位置：
 
@@ -366,30 +461,37 @@ du -sh ~/.cache/modelscope ~/.cache/huggingface
 
 ## **📂 项目结构**
 
+```
 .
-├── src
+├── src/
 │   ├── adapters/            # 纯函数工具 (Clean Code)
 │   │   ├── text.py          # SenseVoice 标签清洗
 │   │   └── audio_chunking.py # 音频切片（静音检测 + 重叠策略）
 │   ├── api/                 # 接口层
-│   │   └── routes.py        # 路由与 Pydantic 定义
+│   │   └── routes.py        # 路由、Pydantic 模型、能力校验
 │   ├── core/                # 核心业务
-│   │   ├── base_engine.py   # 引擎抽象接口 (Protocol)
-│   │   ├── funasr_engine.py # FunASR (Paraformer) 实现，支持说话人分离
+│   │   ├── base_engine.py   # 引擎抽象接口 (Protocol) + EngineCapabilities
+│   │   ├── funasr_engine.py # FunASR (Paraformer/SenseVoice) 实现
 │   │   ├── mlx_engine.py    # MLX Audio 实现 (Qwen3-ASR, Whisper)
 │   │   └── factory.py       # 引擎工厂
 │   ├── services/            # 服务调度
 │   │   └── transcription.py # 异步队列与串行执行
 │   ├── config.py            # 环境变量配置
 │   └── main.py              # 程序入口与生命周期
+├── benchmarks/
+│   ├── run.py               # 性能基准测试脚本
+│   ├── samples/             # 测试音频样本（gitignored）
+│   └── results/             # 基准测试结果 JSON（gitignored）
 ├── tests/
 │   ├── unit/                # 单元测试 (Mocked)
 │   ├── integration/         # API 集成测试
 │   ├── e2e/                 # 端到端测试 (真实模型)
-│   └── reliability/         # 并发与背压测试
+│   ├── reliability/         # 并发与背压测试
+│   └── fixtures/            # 测试音频 fixture（gitignored）
 ├── docs/                    # 设计文档与 SPEC
-├── pyproject.toml           # 依赖配置
+├── pyproject.toml           # 依赖配置 (uv)
 └── README.md                # 本文档
+```
 
 ## **🧪 运行测试 (Testing)**
 
@@ -403,20 +505,34 @@ uv run python -m pytest
 
 ### **2. 测试分层说明**
 
-*   **Unit Tests (`tests/unit/`)**:
-    *   `test_adapters.py`: SenseVoice 标签清洗逻辑。
-    *   `test_engine.py`: FunASR 引擎加载与推理（Mock 掉底层模型）。
-    *   `test_mlx_engine.py`: MLX Audio 引擎（Mock 掉 mlx_audio）。
-    *   `test_audio_chunking.py`: 音频切片、静音检测、SRT 格式。
-    *   `test_config_factory.py`: 配置和引擎工厂。
-    *   `test_service.py`: 异步队列调度和临时文件生命周期。
+*   **Unit Tests (`tests/unit/`)** — 85 tests total:
+    *   `test_adapters.py`: SenseVoice 标签清洗逻辑
+    *   `test_engine.py`: FunASR 引擎能力声明、加载、推理（Mock 模型）
+    *   `test_mlx_engine.py`: MLX Audio 引擎能力声明（Mock mlx_audio）
+    *   `test_audio_chunking.py`: 音频切片、静音检测、SRT 格式、wave 模块优化
+    *   `test_config_factory.py`: 配置和引擎工厂
+    *   `test_service.py`: 异步队列调度和临时文件生命周期
+    *   `test_security.py`: 安全相关单元测试
 *   **Integration Tests (`tests/integration/`)**:
-    *   `test_api.py`: FastAPI TestClient，验证 HTTP 接口契约（Mock Engine）。
-    *   `test_security_integration.py`: CORS、请求追踪、安全头。
+    *   `test_api.py`: FastAPI TestClient，验证 HTTP 接口契约、能力校验、OpenAI 兼容性（Mock Engine）
+    *   `test_security_integration.py`: CORS、请求追踪、安全头
 *   **E2E Tests (`tests/e2e/`)**:
-    *   `test_full_flow.py`: **真实模型测试**（需下载模型，速度较慢）。
+    *   `test_full_flow.py`: **真实模型测试**（需下载模型，速度较慢）
 *   **Reliability Tests (`tests/reliability/`)**:
-    *   `test_concurrency.py`: 高并发队列背压和 Worker 错误恢复。
+    *   `test_concurrency.py`: 高并发队列背压和 Worker 错误恢复
+
+### **3. 代码质量检查**
+
+```bash
+# 类型检查 (mypy strict mode)
+uv run mypy src/
+
+# 代码风格检查 (ruff)
+uv run ruff check src/
+
+# 代码格式化 (ruff)
+uv run ruff format src/
+```
 
 
 
