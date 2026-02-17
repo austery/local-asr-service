@@ -3,6 +3,7 @@ API routes for speech transcription service.
 """
 
 import logging
+import os
 from dataclasses import asdict
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
@@ -24,6 +25,17 @@ ALLOWED_AUDIO_TYPES = {
     "audio/flac",
     "audio/ogg",
     "audio/webm",
+}
+
+# 支持的文件扩展名（用于 fallback 判断）
+ALLOWED_AUDIO_EXTENSIONS = {
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".mp4",
+    ".flac",
+    ".ogg",
+    ".webm",
 }
 
 # OpenAI response_format → internal output_format mapping
@@ -95,10 +107,25 @@ async def create_transcription(
     request_id = getattr(request.state, "request_id", "unknown")
 
     # 1. 文件类型校验
-    if file.content_type not in ALLOWED_AUDIO_TYPES:
-        logger.warning(f"[{request_id}] Unsupported file type: {file.content_type}")
+    # 优先检查 MIME 类型，如果是 application/octet-stream 则 fallback 到扩展名判断
+    is_valid_type = file.content_type in ALLOWED_AUDIO_TYPES
+
+    if not is_valid_type and file.content_type == "application/octet-stream":
+        # Fallback: 通过文件扩展名判断（curl 经常不设置正确的 Content-Type）
+        file_ext = os.path.splitext(file.filename or "")[1].lower()
+        is_valid_type = file_ext in ALLOWED_AUDIO_EXTENSIONS
+        if is_valid_type:
+            logger.info(
+                f"[{request_id}] Accepted file by extension fallback: {file.filename} (ext={file_ext})"
+            )
+
+    if not is_valid_type:
+        logger.warning(
+            f"[{request_id}] Unsupported file: {file.filename} (type={file.content_type})"
+        )
         raise HTTPException(
-            status_code=415, detail="Unsupported file type. Only audio files are allowed."
+            status_code=415,
+            detail=f"Unsupported file type. Expected audio file, got: {file.content_type}"
         )
 
     # 2. 文件大小校验（通过底层文件对象的 seek/tell 避免读取全部内容到内存）
