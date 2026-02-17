@@ -20,6 +20,11 @@ temp_*
 *.mp3
 *.m4a
 
+# Exception: Keep test fixtures for reproducible testing
+!tests/fixtures/*.wav
+!tests/fixtures/*.mp3
+!tests/fixtures/*.m4a
+
 # Benchmark results (generated)
 benchmarks/results/*.json
 
