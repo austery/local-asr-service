@@ -248,3 +248,15 @@ P1-3 ruff + mypy ✅
 ```
 
 **全部 P0/P1 任务已完成。** 下一步进入 P2（新模型评估），按需执行。
+
+---
+
+## Hotfix 记录
+
+### HF-001: FunASR distribute_spk NoneType Bug (2026-02-21) ✅
+
+**问题**: 某些音频触发 FunASR CAM++ 的 `distribute_spk` 函数 `TypeError: '>' not supported between instances of 'float' and 'NoneType'`，导致 HTTP 500。
+
+**根因**: 第三方库 `funasr/models/campplus/utils.py:203` 在 `sv_output` 中存在 `spk_st=None` 时未做防护。
+
+**修复**: `src/core/funasr_engine.py` 模块级 monkey-patch，过滤无效 None 时间戳条目。详见 SPEC-007 §7。

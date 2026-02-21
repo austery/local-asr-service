@@ -94,3 +94,24 @@ The codebase is organized into layers:
 ## Key Constraints
 - **Single Worker**: Always run with `workers=1` to avoid OOM on Mac Silicon.
 - **Queue Limit**: The service implements a max queue depth of 50 to prevent overload.
+- **No raw pip**: This project uses `uv`. Always use `uv add` / `uv sync`, never `pip install`.
+- **No `any` type**: All code must be fully typed. `any` is forbidden; use proper generics or `Unknown`.
+
+## Known Issues & Workarounds
+
+### FunASR distribute_spk NoneType Bug (Fixed 2026-02-21)
+FunASR's `campplus/utils.py:distribute_spk` crashes with `TypeError: '>' not supported between instances of 'float' and 'NoneType'` when `sv_output` contains entries with `None` timestamps (happens on short or ambiguous audio segments).
+
+**Fix**: A module-level monkey-patch is applied in `src/core/funasr_engine.py` at import time. It replaces `funasr.models.campplus.utils.distribute_spk` with a version that filters out `None` timing entries before processing.
+
+**Do not remove this patch** — the underlying FunASR library bug has not been fixed upstream.
+
+## Architecture Decisions
+- **Engine capabilities** are declared at startup via `EngineCapabilities` frozen dataclass (`src/core/base_engine.py`). API layer validates compatibility before queuing — do not bypass this.
+- **Monkey-patching third-party libraries** is acceptable in `funasr_engine.py` only, at module level, with a clear comment. Do not patch elsewhere.
+- **Temporary files** for uploads are written to disk (not held in memory) — see `src/services/transcription.py`. Always cleaned in `finally` blocks.
+
+## Testing Notes
+- Run `uv run python -m pytest` for all tests. E2E tests (`tests/e2e/`) require the real model to be downloaded and are slow.
+- Unit tests mock the engine entirely — do not add real model calls to unit tests.
+- Test count baseline: 85 tests (as of 2026-02-16). Do not reduce this.

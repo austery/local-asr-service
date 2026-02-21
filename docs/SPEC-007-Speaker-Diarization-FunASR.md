@@ -6,7 +6,7 @@ priority: P1
 owner: User
 relatedSpecs: [SPEC-002, SPEC-005]
 created: 2026-02-01
-updated: 2026-02-01
+updated: 2026-02-21
 ---
 
 ## 1. 目标 (Goal)
@@ -113,6 +113,38 @@ def transcribe_file(
 - **Speaker Mapping**: 将 Speaker ID 映射为具体的角色（如"医生"、"患者"）
 - **Evidence-based EMR**: 在生成的病历中自动关联说话人与时间戳引用
 - **API 层集成**: 通过 `response_format` 参数暴露多格式输出能力
+
+---
+
+## 7. 已知 Bug 修复 (Bug Fixes)
+
+### 7.1 FunASR distribute_spk NoneType Bug (2026-02-21)
+
+**错误现象**:
+```
+TypeError: '>' not supported between instances of 'float' and 'NoneType'
+  File "funasr/models/campplus/utils.py", line 203, in distribute_spk
+    overlap = max(min(sentence_end, spk_ed) - max(sentence_start, spk_st), 0)
+```
+
+**根因**: FunASR `campplus/utils.py` 的 `distribute_spk` 函数在处理某些短片段或无法识别说话人的音频段时，`sv_output` 中存在 `spk_st=None` 或 `spk_ed=None` 的条目，导致 float 与 NoneType 之间的大小比较失败。这是第三方库的 bug。
+
+**修复方案**: 在 `src/core/funasr_engine.py` 模块导入时注入 monkey-patch，过滤掉无效的 None 条目：
+
+```python
+def _patched_distribute_spk(sentence_list, sd_time_list):
+    # 过滤 spk_st/spk_ed 为 None 的无效条目
+    valid = [(st, ed, spk) for st, ed, spk in sd_time_list if st is not None and ed is not None]
+    sd_time_ms = [(st * 1000, ed * 1000, spk) for st, ed, spk in valid]
+    for d in sentence_list:
+        ...
+    return sentence_list
+
+import funasr.models.campplus.utils as _campplus_utils
+_campplus_utils.distribute_spk = _patched_distribute_spk
+```
+
+**行为影响**: 被过滤的条目对应的句子 `spk` 会 fallback 到 `0`（默认说话人），不会崩溃。其余句子说话人识别结果不受影响。
 
 ---
 

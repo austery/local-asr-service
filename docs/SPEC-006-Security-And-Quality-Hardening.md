@@ -1,12 +1,12 @@
 ---
 - specId: SPEC-006
 - title: 安全与质量加固 (Security & Quality Hardening)
-- status: 📝 草案 (Draft)
+- status: ✅ 已实现
 - priority: P1
 - owner: User
 - relatedSpecs: [ADR-001, SPEC-101, SPEC-102, SPEC-103, SPEC-004]
 - created: 2026-01-31
-- updated: 2026-01-31
+- updated: 2026-02-16
 ---
 
 ## 1. 目标 (Goal)
@@ -177,39 +177,38 @@ ALLOWED_ORIGINS=*
 
 ## 7. 验收标准 (Acceptance Criteria)
 
-- [ ] 任何超限上传均返回 413，且无残留临时文件
-- [ ] 非音频文件返回 415
-- [ ] 生产错误响应不包含堆栈与内部路径
-- [ ] 默认 CORS 仅允许 localhost/127.0.0.1
-- [ ] 每个请求有唯一 request_id 并记录关键耗时
-- [ ] 新增测试通过且不影响现有测试
-- [ ] README 更新新增环境变量说明
+- [x] 任何超限上传均返回 413，且无残留临时文件
+- [x] 非音频文件返回 415（含文件名扩展名 fallback 校验）
+- [x] 生产错误响应不包含堆栈与内部路径
+- [x] 默认 CORS 仅允许 localhost/127.0.0.1
+- [x] 每个请求有唯一 request_id 并记录关键耗时
+- [x] 新增测试通过且不影响现有测试（85 tests）
+- [x] README 更新新增环境变量说明
 
 ## 8. 实施计划 (Implementation Plan)
 
-### Phase 1: 配置与中间件 (Config & Middleware)
-- [ ] 新增 `MAX_UPLOAD_SIZE_MB`、`ALLOWED_ORIGINS` 环境变量到 `src/config.py`
-- [ ] 在 `src/main.py` 添加 CORS 中间件
-- [ ] 添加请求日志中间件（生成 request_id）
+### Phase 1: 配置与中间件 (Config & Middleware) ✅
+- [x] 新增 `MAX_UPLOAD_SIZE_MB`、`ALLOWED_ORIGINS` 环境变量到 `src/config.py`
+- [x] 在 `src/main.py` 添加 CORS 中间件
+- [x] 添加请求日志中间件（生成 request_id）
 
-### Phase 2: API 层校验 (API Validation)
-- [ ] 在 `src/api/routes.py` 添加文件大小校验
-- [ ] 添加 MIME 类型校验
-- [ ] 错误响应标准化处理
+### Phase 2: API 层校验 (API Validation) ✅
+- [x] 在 `src/api/routes.py` 添加文件大小校验（`file.file.seek/tell` 零内存读取）
+- [x] 添加 MIME 类型校验 + 文件扩展名 fallback
+- [x] 错误响应标准化处理
 
-### Phase 3: 可观测性增强 (Observability)
-- [ ] 在 `src/services/transcription.py` 添加耗时统计
-- [ ] 日志输出格式化（包含 request_id 与耗时）
+### Phase 3: 可观测性增强 (Observability) ✅
+- [x] 在 `src/services/transcription.py` 添加耗时统计
+- [x] 日志输出格式化（包含 request_id 与耗时）
 
-### Phase 4: 测试补充 (Testing)
-- [ ] 编写单元测试
-- [ ] 编写集成测试
-- [ ] 编写可靠性测试
+### Phase 4: 测试补充 (Testing) ✅
+- [x] 编写单元测试 (`tests/unit/test_security.py`)
+- [x] 编写集成测试 (`tests/integration/test_security_integration.py`)
+- [x] 编写可靠性测试 (`tests/reliability/test_concurrency.py`)
 
-### Phase 5: 文档更新 (Documentation)
-- [ ] 更新 README.md 环境变量说明
-- [ ] 更新 `.env.example`
-- [ ] 添加安全最佳实践文档（可选）
+### Phase 5: 文档更新 (Documentation) ✅
+- [x] 更新 README.md 环境变量说明
+- [x] 更新 `.env.example`
 
 ## 9. 兼容性与取舍 (Compatibility & Trade-offs)
 

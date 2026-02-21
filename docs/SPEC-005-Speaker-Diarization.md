@@ -1,14 +1,15 @@
 ---
 specId: SPEC-005
 title: 说话人分离 (Speaker Diarization)
-status: 🚧 规划中
+status: ✅ 已实现 (via FunASR + CAM++，见 SPEC-007)
 priority: P2
 owner: User
-relatedSpecs: [SPEC-101, SPEC-102]
+relatedSpecs: [SPEC-101, SPEC-102, SPEC-007]
+updated: 2026-02-21
 ---
 
 ## 1. 目标 (Goal)
-在现有的 ASR 转录服务基础上，增加**说话人分离 (Speaker Diarization)** 能力，即“谁在什么时候说了什么”。
+在现有的 ASR 转录服务基础上，增加**说话人分离 (Speaker Diarization)** 能力，即”谁在什么时候说了什么”。
 
 ## 2. 当前状态 (Current Status)
 
@@ -19,15 +20,18 @@ relatedSpecs: [SPEC-101, SPEC-102]
 - 数据模型 `Segment` 已包含 `speaker` 字段 (nullable)。
 
 ### 2.2 模型层现状
-⚠️ **当前模型限制**
-- 默认使用的 **Qwen3-ASR-1.7B-4bit** 虽然转录精度高、速度快，但**不原生支持**说话人分离。
-- `speaker` 字段目前始终返回 `null`。
+✅ **已通过 FunASR 引擎实现**（见 [SPEC-007](./SPEC-007-Speaker-Diarization-FunASR.md)）
 
-| 模型 | 说话人分离 | 长音频支持 | 处理速度 | 推荐 |
-|-----|----------|-----------|---------|-----|
-| **Qwen3-ASR-1.7B-4bit** | ❌ | ✅ (>17min) | ⚡ 快 | ✅ 默认 |
-| **Whisper-Large-v3** | ❌ | ✅ | 🐢 较慢 | 备选 |
-| **Pyannote** | ✅ | ✅ | - | 需集成 |
+- FunASR (Paraformer + CAM++) 引擎完整支持说话人分离。
+- `speaker` 字段由 CAM++ 声纹模型填充，返回 `”Speaker 0”`, `”Speaker 1”` 等。
+- MLX 引擎（Qwen3-ASR、Whisper）不支持 diarization，`speaker` 仍返回 `null`。
+
+| 引擎/模型 | 说话人分离 | 长音频支持 | 处理速度 | 推荐 |
+|---------|----------|-----------|---------|-----|
+| **FunASR + Paraformer + CAM++** | ✅ | ✅ | ⚡ RTF ~0.13 | ✅ 需要分离时默认 |
+| **MLX Qwen3-ASR-1.7B-4bit** | ❌ | ✅ (>50min) | ⚡ 极快 | ✅ 纯转录默认 |
+| **MLX Whisper-Large-v3** | ❌ | ✅ | 🐢 较慢 | 备选 |
+| **Pyannote** | ✅ | ✅ | - | 未集成（被方案C取代）|
 
 ## 3. 架构设计 (Architecture)
 
@@ -103,6 +107,10 @@ curl -X POST http://localhost:50070/v1/audio/transcriptions \
 ```
 
 ## 5. 下一步计划 (Next Steps)
-1.  **评估 Pyannote 在 M1 Max 上的性能**: 测试其在 MPS 后端的兼容性。
-2.  **原型开发**: 编写脚本 `examples/demo_diarization.py` 验证对齐算法。
-3.  **集成**: 决定是否将其作为可选插件 (`Feature Flag`) 引入主分支。
+~~1.  **评估 Pyannote 在 M1 Max 上的性能**~~ — 方案 C (CAM++) 已取代，不再追求。
+~~2.  **原型开发**~~ — 已通过 SPEC-007 直接集成。
+~~3.  **集成**~~ — 已在 FunASR 引擎中原生实现。
+
+**当前遗留问题**:
+- FunASR CAM++ 存在 `distribute_spk` None 时间戳 Bug（已于 2026-02-21 修复，见 SPEC-007 §7）。
+- MLX 引擎的说话人分离能力取决于未来模型支持，暂无计划。
