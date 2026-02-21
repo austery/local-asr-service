@@ -7,6 +7,31 @@ from funasr import AutoModel
 
 from src.core.base_engine import EngineCapabilities
 
+# Monkey-patch for FunASR bug: distribute_spk crashes when sv_output contains
+# entries with spk_st=None or spk_ed=None (happens on short/ambiguous segments).
+# See: funasr/models/campplus/utils.py:203
+def _patched_distribute_spk(sentence_list: list, sd_time_list: list) -> list:
+    valid = [(st, ed, spk) for st, ed, spk in sd_time_list if st is not None and ed is not None]
+    sd_time_ms = [(st * 1000, ed * 1000, spk) for st, ed, spk in valid]
+    for d in sentence_list:
+        sentence_start = d["start"]
+        sentence_end = d["end"]
+        sentence_spk = 0
+        max_overlap = 0
+        for spk_st, spk_ed, spk in sd_time_ms:
+            overlap = max(min(sentence_end, spk_ed) - max(sentence_start, spk_st), 0)
+            if overlap > max_overlap:
+                max_overlap = overlap
+                sentence_spk = spk
+            if overlap > 0 and sentence_spk == spk:
+                max_overlap += overlap
+        d["spk"] = int(sentence_spk)
+    return sentence_list
+
+
+import funasr.models.campplus.utils as _campplus_utils
+_campplus_utils.distribute_spk = _patched_distribute_spk
+
 # 推荐使用的 Paraformer 模型 ID (支持时间戳，必须用于说话人分离)
 # SEACO-Paraformer 是目前阿里最成熟的串联模型，中文识别 SOTA
 DEFAULT_MODEL_ID = "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
