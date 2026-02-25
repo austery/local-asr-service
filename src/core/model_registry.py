@@ -57,14 +57,14 @@ _REGISTRY: dict[str, ModelSpec] = {
             alias="parakeet",
             model_id="mlx-community/parakeet-tdt-0.6b-v2",
             engine_type="mlx",
-            description="NVIDIA Parakeet (English only, very fast).",
+            description="NVIDIA Parakeet (English only, very fast). Short clips only — OOM on files > ~5 min (known issue, unfixed).",
             capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=False),
         ),
         ModelSpec(
             alias="sensevoice-small",
             model_id="iic/SenseVoiceSmall",
             engine_type="funasr",
-            description="SenseVoice Small — emotion tags + language detect, no diarization or timestamps.",
+            description="SenseVoice Small — fastest model (80-85x realtime). Best for: bulk speed-first processing, language detection, emotion tagging. NOT recommended for transcription quality: struggles with mixed-language and proper nouns.",
             capabilities=EngineCapabilities(timestamp=False, diarization=False, emotion_tags=True, language_detect=True),
         ),
     ]

@@ -79,7 +79,7 @@ class ModelSpec:
 | alias | engine_type | model_id | timestamp | diarization | emotion_tags | 适用场景 |
 |-------|-------------|----------|-----------|-------------|--------------|---------|
 | `paraformer` | `funasr` | `iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | ✅ | ✅ | ❌ | 中文 + 说话人分离（默认 FunASR）|
-| `sensevoice-small` | `funasr` | `iic/SenseVoiceSmall` | ❌ | ❌ | ✅ | 情绪标签 + 语言检测，轻量 |
+| `sensevoice-small` | `funasr` | `iic/SenseVoiceSmall` | ❌ | ❌ | ✅ | **最快模型（80-85x）**；速度优先/情感标签场景；转录质量较差，不推荐常规使用 |
 | `qwen3-asr-mini` | `mlx` | `mlx-community/Qwen3-ASR-1.7B-4bit` | ✅ | ❌ | ❌ | 短音频，低延迟（默认 MLX）|
 | `qwen3-asr` | `mlx` | `mlx-community/Qwen3-ASR-1.7B-8bit` | ✅ | ❌ | ❌ | 中等精度 |
 | `parakeet` | `mlx` | `mlx-community/parakeet-tdt-0.6b-v2` | ✅ | ❌ | ❌ | 英文专用极速 |
@@ -371,3 +371,70 @@ Step 5: 更新 CLAUDE.md + ROADMAP.md
 
 - **CPU engine**（faster-whisper / CTranslate2）：用于 Linux VPS 部署，届时开独立 SPEC。
 - **模型预热队列**：预测下一个 job 所需模型，提前在后台加载以消除换模延迟（P3 优化）。
+- **MLX 长音频分块**：Parakeet 在 > 5 分钟音频上触发 Metal OOM（known issue），需降低 MLX 引擎的分块时长阈值。
+
+---
+
+## 12. 实测基准数据（2026-02-25）
+
+> 使用 `benchmarks/run.py --compare` two-pass 模式，消除热切换开销后的纯推理性能。
+> M1 Max，单进程，服务启动于 `ENGINE_TYPE=funasr`（paraformer 为第一个加载的模型）。
+
+### 12.1 测试音频
+
+| 文件 | 时长 | 语言 | 说明 |
+|------|------|------|------|
+| `tests/fixtures/two_speakers_60s.wav` | 60s | 中英混合 | 关于 Claude Code 的对话片段，2人 |
+| `test1.wav` | 28.9 min | 英文 | 公司技术会议，多人 |
+| `chatwithJustin.wav` | 23.2 min | **中英夹杂** | 父子日常对话，2人 |
+
+### 12.2 纯推理速度（inference only，已排除热切换）
+
+| 模型 | 60s 混合 | 29min 英文 | 23min 中英 | 规律 |
+|------|---------|-----------|-----------|------|
+| **sensevoice-small** | 58.9x | **79.1x** | **83.3x** | FunASR 流式批处理，长音频反而更快 |
+| **paraformer** | 49.4x | **65.3x** | **64.9x** | 同上，且含 diarization |
+| qwen3-asr (8-bit) | 26.2x | 15.3x | 13.0x | MLX 自回归，中文重场景退化明显 |
+| qwen3-asr-mini (4-bit) | 36.3x | 21.5x | 9.3x | 4-bit 对中文优化无明显收益 |
+| parakeet | **121.7x** | ❌ OOM | ❌ OOM | 英文短片极速；> 5min 长文件 Metal OOM |
+
+**关键发现**：
+- FunASR 引擎（paraformer / sensevoice-small）在长音频下性能**不退化**，因为内部有流式分块逻辑
+- MLX 模型的自回归生成在**中文**场景下比英文慢 2–3 倍（中文字符 token 密度更高）
+- qwen3-asr-mini（4-bit）在中文长音频下比 qwen3-asr（8-bit）**更慢**，量化对中文帮助有限
+
+### 12.3 转录质量（文本准确度）
+
+以同一段中英夹杂音频为例（内容：讨论加拿大大学选择，含人名 "Brook" 和地名 "Waterloo"）：
+
+| 模型 | 英文人名识别 | 中英切换 | 整体评价 |
+|------|------------|---------|---------|
+| **qwen3-asr** | "Brook，" ✅ | 自然，正确加空格 | 最佳综合质量 |
+| **paraformer** | "broke" ❌（误作英文单词）| 可用，有少量噪声 | 唯一支持 diarization |
+| qwen3-asr-mini | "Brook" ✅，但有幻觉（"华尔街"代替"滑铁卢"）| 基本可用 | 速度优先时的折中 |
+| sensevoice-small | "bro lock?" ❌ | 词语边界错乱 | 不适合转录质量要求 |
+
+### 12.4 最终选模决策
+
+| 使用场景 | 推荐模型 | 理由 |
+|---------|---------|------|
+| **多人对话（中文/中英混）** | `paraformer` | 唯一有 diarization，长文件速度好，默认启动模型 |
+| **单人英文长视频**（YouTube 博主） | `qwen3-asr` | 英文专有名词识别最准确（"Claude code" vs "cloud code"）|
+| **多人英文播客/会议** | `paraformer` | diarization + 英文基本可用，速度好 |
+| **中英混合单人**（质量优先）| `qwen3-asr` | 最佳格式化，正确处理双语边界 |
+| **语音输入短片段**（< 30s）| `qwen3-asr-mini` | 短片段下速度差异可忽略，4-bit 够用 |
+| **极速批处理**（质量要求低）| `sensevoice-small` | 最快（83x realtime），但转录质量较差 |
+| **英文短片**（< 5min）| `parakeet` | 最快（121x），英文专用；**注意 OOM 限制** |
+
+### 12.5 客户端选模建议（PureSubs 集成）
+
+```
+channel.is_multi_speaker AND language == "zh"  →  model=paraformer
+channel.is_multi_speaker AND language == "en"  →  model=paraformer
+channel.is_single_speaker AND language == "en" →  model=qwen3-asr
+channel.is_single_speaker AND language == "zh-en-mixed" → model=qwen3-asr
+voice_input (< 30s)                            →  model=qwen3-asr-mini
+```
+
+> **服务默认启动模型**：`paraformer`（`ENGINE_TYPE=funasr`），覆盖最多使用场景。
+> 只有客户端明确声明 `model=qwen3-asr` 或 `model=qwen3-asr-mini` 时才触发热切换。

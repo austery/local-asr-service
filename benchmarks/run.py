@@ -89,21 +89,45 @@ def get_registered_models(base_url: str) -> list[dict[str, Any]]:
     return models
 
 
+def _post_audio(
+    file_path: Path,
+    base_url: str,
+    mime_type: str,
+    post_data: dict[str, str],
+) -> tuple[requests.Response, float]:
+    """Send one transcription request and return (response, elapsed_seconds)."""
+    start_time = time.time()
+    with open(file_path, "rb") as f:
+        resp = requests.post(
+            f"{base_url}/v1/audio/transcriptions",
+            files={"file": (file_path.name, f, mime_type)},
+            data=post_data,
+            timeout=600,
+        )
+    return resp, time.time() - start_time
+
+
 def run_benchmark(
     file_path: Path,
     base_url: str,
     output_format: str = "json",
     model: str | None = None,
+    two_pass: bool = False,
 ) -> dict[str, Any]:
-    """Run a single benchmark against the transcription endpoint.
+    """Run a benchmark against the transcription endpoint.
 
     model=None uses whatever is currently loaded (no switch).
     model="paraformer" triggers a hot-swap via SPEC-108.
+
+    two_pass=True (used in --compare mode):
+      Pass 1 — triggers the hot-swap; elapsed includes swap + inference.
+      Pass 2 — model already loaded; elapsed is pure inference time.
+      Result includes both swap_elapsed_s and inference_elapsed_s so the
+      comparison table can show them as separate columns.
     """
     duration = get_audio_duration(file_path)
     file_size_mb = file_path.stat().st_size / (1024 * 1024)
 
-    # Determine MIME type
     mime_map = {
         ".wav": "audio/wav",
         ".mp3": "audio/mpeg",
@@ -116,36 +140,42 @@ def run_benchmark(
     model_label = model or "(current)"
     print(f"  Model: {model_label}")
     print(f"  File: {file_path.name}  ({duration:.1f}s, {file_size_mb:.2f}MB)")
-    print(f"  Format: {output_format}")
+    print(f"  Format: {output_format}  |  two_pass: {two_pass}")
 
-    # Build POST data — include model only when explicitly specified
     post_data: dict[str, str] = {"output_format": output_format}
     if model is not None:
         post_data["model"] = model
 
-    # Send request
-    start_time = time.time()
-    with open(file_path, "rb") as f:
-        resp = requests.post(
-            f"{base_url}/v1/audio/transcriptions",
-            files={"file": (file_path.name, f, mime_type)},
-            data=post_data,
-            timeout=600,
-        )
-    elapsed = time.time() - start_time
+    swap_elapsed: float | None = None
+
+    if two_pass:
+        # Pass 1: triggers model hot-swap (or no-op if already loaded)
+        print("  [pass 1/2] triggering swap...")
+        resp1, swap_elapsed = _post_audio(file_path, base_url, mime_type, post_data)
+        if resp1.status_code != 200:
+            return {
+                "model": model_label,
+                "file": file_path.name,
+                "error": f"HTTP {resp1.status_code} on warmup: {resp1.text[:200]}",
+                "swap_elapsed_s": round(swap_elapsed, 2),
+            }
+        print(f"  [pass 1/2] done  swap+inference={swap_elapsed:.1f}s")
+        print("  [pass 2/2] measuring inference...")
+
+    # Final (or only) timed pass — model is warm, no swap overhead
+    resp, elapsed = _post_audio(file_path, base_url, mime_type, post_data)
 
     if resp.status_code != 200:
         return {
+            "model": model_label,
             "file": file_path.name,
             "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
             "elapsed_seconds": elapsed,
         }
 
-    # Calculate metrics
     rtf = elapsed / duration if duration > 0 else 0
     speed_ratio = duration / elapsed if elapsed > 0 else 0
 
-    # Parse response
     result_data: dict[str, Any] = {}
     if output_format == "json":
         result_data = resp.json()
@@ -155,10 +185,7 @@ def run_benchmark(
         text = resp.text
         num_segments = 0
 
-    text_length = len(text)
-    text_preview = text[:150].replace("\n", " ")
-
-    return {
+    result: dict[str, Any] = {
         "model": model or "(current)",
         "file": file_path.name,
         "audio_duration_s": round(duration, 1),
@@ -167,10 +194,15 @@ def run_benchmark(
         "rtf": round(rtf, 4),
         "speed_ratio": round(speed_ratio, 1),
         "num_segments": num_segments,
-        "text_length": text_length,
-        "text_preview": text_preview,
+        "text_length": len(text),
+        "text_preview": text[:150].replace("\n", " "),
         "output_format": output_format,
     }
+    if swap_elapsed is not None:
+        result["swap_elapsed_s"] = round(swap_elapsed, 2)
+        result["swap_overhead_s"] = round(swap_elapsed - elapsed, 2)
+
+    return result
 
 
 def print_result(result: dict[str, Any]) -> None:
@@ -179,8 +211,11 @@ def print_result(result: dict[str, Any]) -> None:
         print(f"  ERROR: {result['error']}")
         return
 
-    print(f"  Elapsed: {result['elapsed_s']:.2f}s")
-    print(f"  RTF: {result['rtf']:.4f} ({result['speed_ratio']:.1f}x realtime)")
+    if "swap_elapsed_s" in result:
+        print(f"  Swap+infer: {result['swap_elapsed_s']:.2f}s  |  Inference: {result['elapsed_s']:.2f}s  |  Overhead: {result['swap_overhead_s']:.2f}s")
+    else:
+        print(f"  Elapsed: {result['elapsed_s']:.2f}s")
+    print(f"  RTF: {result['rtf']:.4f} ({result['speed_ratio']:.1f}x realtime)  [inference only]")
     print(f"  Segments: {result['num_segments']}, Text length: {result['text_length']} chars")
     print(f"  Preview: {result['text_preview'][:100]}...")
 
@@ -205,20 +240,38 @@ def print_comparison_table(
     results: list[dict[str, Any]],
     model_infos: dict[str, dict[str, Any]],
 ) -> None:
-    """Print a side-by-side model comparison table (multi-model, same file)."""
+    """Print a side-by-side model comparison table (multi-model, same file).
+
+    When results include swap_elapsed_s (two_pass mode), adds Swap and Overhead
+    columns so inference time can be compared fairly across models.
+    """
+    has_swap = any("swap_elapsed_s" in r for r in results if "error" not in r)
     col_w = 20
-    print("\n" + "=" * 95)
-    print("MODEL COMPARISON")
-    print("=" * 95)
-    print(
-        f"{'Model':<{col_w}} {'Engine':<8} {'Elapsed':>8} {'RTF':>8} {'Speed':>8} "
-        f"{'Segs':>5} {'Chars':>6}  Capabilities"
-    )
-    print("-" * 95)
+
+    if has_swap:
+        width = 115
+        print("\n" + "=" * width)
+        print("MODEL COMPARISON  (two-pass: inference time excludes model swap overhead)")
+        print("=" * width)
+        print(
+            f"{'Model':<{col_w}} {'Engine':<8} {'Swap+inf':>9} {'Overhead':>9} {'Infer':>8} "
+            f"{'RTF':>8} {'Speed':>8} {'Segs':>5} {'Chars':>6}  Capabilities"
+        )
+        print("-" * width)
+    else:
+        width = 95
+        print("\n" + "=" * width)
+        print("MODEL COMPARISON")
+        print("=" * width)
+        print(
+            f"{'Model':<{col_w}} {'Engine':<8} {'Elapsed':>8} {'RTF':>8} {'Speed':>8} "
+            f"{'Segs':>5} {'Chars':>6}  Capabilities"
+        )
+        print("-" * width)
 
     for r in results:
         if "error" in r:
-            print(f"{r['model']:<{col_w}} {'ERROR: ' + r['error'][:50]}")
+            print(f"{r['model']:<{col_w}} {'ERROR: ' + r['error'][:60]}")
             continue
 
         alias = r["model"]
@@ -228,12 +281,24 @@ def print_comparison_table(
         cap_flags = [k[:3] for k, v in caps_raw.items() if v]
         caps_str = " ".join(cap_flags) if cap_flags else "-"
 
-        print(
-            f"{alias:<{col_w}} {engine:<8} {r['elapsed_s']:>7.2f}s {r['rtf']:>8.4f} "
-            f"{r['speed_ratio']:>7.1f}x {r['num_segments']:>5} {r['text_length']:>6}  {caps_str}"
-        )
+        if has_swap:
+            swap_s = r.get("swap_elapsed_s", float("nan"))
+            overhead_s = r.get("swap_overhead_s", float("nan"))
+            print(
+                f"{alias:<{col_w}} {engine:<8} {swap_s:>8.2f}s {overhead_s:>8.2f}s "
+                f"{r['elapsed_s']:>7.2f}s {r['rtf']:>8.4f} {r['speed_ratio']:>7.1f}x "
+                f"{r['num_segments']:>5} {r['text_length']:>6}  {caps_str}"
+            )
+        else:
+            print(
+                f"{alias:<{col_w}} {engine:<8} {r['elapsed_s']:>7.2f}s {r['rtf']:>8.4f} "
+                f"{r['speed_ratio']:>7.1f}x {r['num_segments']:>5} {r['text_length']:>6}  {caps_str}"
+            )
 
-    print("=" * 95)
+    print("=" * width)
+    if has_swap:
+        print("Columns: Swap+inf=first request (swap+inference)  Overhead=swap cost  Infer=pure inference")
+        print("RTF & Speed are based on Infer time only — apples-to-apples model comparison.")
     print("Capabilities key: tim=timestamp  dia=diarization  emo=emotion_tags  lan=language_detect")
 
     # Print text previews for qualitative comparison
@@ -380,7 +445,9 @@ def main() -> None:
         results: list[dict[str, Any]] = []
         for i, alias in enumerate(model_aliases):
             print(f"[{i + 1}/{len(model_aliases)}] ─────────────────────────────")
-            result = run_benchmark(file_path, args.base_url, output_format=args.format, model=alias)
+            result = run_benchmark(
+                file_path, args.base_url, output_format=args.format, model=alias, two_pass=True
+            )
             print_result(result)
             results.append(result)
             print()

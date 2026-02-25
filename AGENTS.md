@@ -107,6 +107,21 @@ FunASR's `campplus/utils.py:distribute_spk` crashes with `TypeError: '>' not sup
 
 **Do not remove this patch** — the underlying FunASR library bug has not been fixed upstream.
 
+### Parakeet Metal OOM on Long Audio (Known Issue, unfixed)
+MLX Parakeet (`mlx-community/parakeet-tdt-0.6b-v2`) crashes with
+`[METAL] Command buffer execution failed: kIOGPUCommandBufferCallbackErrorOutOfMemory`
+when processing audio files longer than ~5–10 minutes. Root cause: the Python
+`AudioChunkingService` threshold is 50 min (too high for MLX Metal memory budget).
+The model loads fine; the OOM happens during inference on the full-length sequence.
+
+**Workaround**: Use parakeet only on short clips (< 5 min) until chunking is fixed.
+For long English audio, use `qwen3-asr` or `qwen3-asr-mini` instead.
+
+**Fix needed**: Lower `max_duration` threshold for MLX engines, or add a
+duration-based pre-split in `src/core/mlx_engine.py` before sending to Metal.
+The TypeScript reference implementation (silence-based chunking) lives at
+`/Users/leipeng/Documents/Projects/puresubs/packages/automation-engine-ytdlp/src/transcription/AudioChunkingService.ts`.
+
 ## Architecture Decisions
 - **Engine capabilities** are declared at startup via `EngineCapabilities` frozen dataclass (`src/core/base_engine.py`). API layer validates compatibility before queuing — do not bypass this.
 - **Monkey-patching third-party libraries** is acceptable in `funasr_engine.py` only, at module level, with a clear comment. Do not patch elsewhere.
