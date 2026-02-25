@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(git -C /Users/pengl/projects/local-asr-service remote -v)",
-      "Bash(git -C /Users/pengl/projects/local-asr-service diff --stat README.md)",
-      "Bash(lsof:*)"
-    ]
-  }
-}
