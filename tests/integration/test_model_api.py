@@ -36,11 +36,11 @@ def client(mock_create_engine):
     )
     mock_engine.transcribe_file.return_value = {"text": "test result", "segments": None}
 
-    # Patch lookup in main.py so startup resolves to qwen3-asr-mini instead of paraformer
+    # Patch lookup in main.py so startup resolves to qwen3-asr instead of paraformer
     # (avoids dependency on the default env var ENGINE_TYPE=funasr)
     from src.core.model_registry import lookup as real_lookup
 
-    qwen_spec = real_lookup("qwen3-asr-mini")
+    qwen_spec = real_lookup("qwen3-asr")
     with patch("src.main.lookup", return_value=qwen_spec):
         with TestClient(app) as c:
             yield c
@@ -80,9 +80,9 @@ def test_should_return_model_list_on_get_models(client) -> None:
     assert "models" in body
     aliases = [m["alias"] for m in body["models"]]
     assert "paraformer" in aliases
-    assert "qwen3-asr-mini" in aliases
+    assert "qwen3-asr" in aliases
     assert "sensevoice-small" in aliases
-    assert "parakeet" in aliases
+    
 
 
 # MA-2
@@ -90,8 +90,8 @@ def test_should_include_current_model_in_get_models_response(client) -> None:
     response = client.get("/v1/models")
 
     body = response.json()
-    # Client fixture resolves startup model to qwen3-asr-mini
-    assert body["current"] == "qwen3-asr-mini"
+    # Client fixture resolves startup model to qwen3-asr
+    assert body["current"] == "qwen3-asr"
 
 
 # MA-3
@@ -107,7 +107,7 @@ def test_should_succeed_when_valid_alias_provided(client, mock_create_engine) ->
     ):
         response = client.post(
             "/v1/audio/transcriptions",
-            data={"model": "qwen3-asr-mini", "language": "zh"},
+            data={"model": "qwen3-asr", "language": "zh"},
             files={"file": _audio_file()},
         )
 
@@ -207,4 +207,4 @@ def test_get_current_model_includes_alias(client) -> None:
     assert response.status_code == 200
     body = response.json()
     assert "model_alias" in body
-    assert body["model_alias"] == "qwen3-asr-mini"
+    assert body["model_alias"] == "qwen3-asr"

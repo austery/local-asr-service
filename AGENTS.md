@@ -44,19 +44,16 @@ uvicorn src.main:app --host 0.0.0.0 --port 50070 --workers 1
 | `ENGINE_TYPE` | `funasr` | Engine type: `funasr` or `mlx` |
 | `MODEL_ID` | (engine default) | Override model ID for any engine |
 | `FUNASR_MODEL_ID` | `iic/speech_seaco_paraformer...` | Default model for FunASR (supports diarization) |
-| `MLX_MODEL_ID` | `mlx-community/Qwen3-ASR-1.7B-4bit` | Default model for MLX engine |
+| `MLX_MODEL_ID` | `mlx-community/Qwen3-ASR-1.7B-8bit` | Default model for MLX engine |
 | `HOST` | `0.0.0.0` | Server host |
 | `PORT` | `50070` | Server port |
 | `MAX_QUEUE_SIZE` | `50` | Max concurrent requests in queue |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
-## Supported MLX Models
+## Supported Models
 
-When using `ENGINE_TYPE=mlx`, you can switch models via `MODEL_ID`:
-- `mlx-community/Qwen3-ASR-1.7B-4bit` - Alibaba Qwen3-ASR (default, recommended, fast & stable)
-- `mlx-community/whisper-large-v3-turbo-asr-fp16` - OpenAI Whisper Turbo
-- `mlx-community/Qwen3-ASR-1.7B-8bit` - Alibaba Qwen3-ASR
-- `mlx-community/parakeet-tdt-0.6b-v2` - NVIDIA Parakeet (English only)
+→ See [MODELS.md](./MODELS.md) for the full model list, benchmark results, and selection guide.
+Active aliases: `paraformer`, `qwen3-asr`, `sensevoice-small`.
 
 ## Testing
 The project uses `pytest` for all levels of testing.
@@ -115,7 +112,7 @@ when processing audio files longer than ~5–10 minutes. Root cause: the Python
 The model loads fine; the OOM happens during inference on the full-length sequence.
 
 **Workaround**: Use parakeet only on short clips (< 5 min) until chunking is fixed.
-For long English audio, use `qwen3-asr` or `qwen3-asr-mini` instead.
+For long English audio, use `qwen3-asr` instead.
 
 **Fix needed**: Lower `max_duration` threshold for MLX engines, or add a
 duration-based pre-split in `src/core/mlx_engine.py` before sending to Metal.

@@ -40,25 +40,11 @@ _REGISTRY: dict[str, ModelSpec] = {
             capabilities=EngineCapabilities(timestamp=True, diarization=True, emotion_tags=False, language_detect=True),
         ),
         ModelSpec(
-            alias="qwen3-asr-mini",
-            model_id="mlx-community/Qwen3-ASR-1.7B-4bit",
-            engine_type="mlx",
-            description="Fast & light Qwen3 ASR (4-bit). Best for single-speaker, low latency.",
-            capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=True),
-        ),
-        ModelSpec(
             alias="qwen3-asr",
             model_id="mlx-community/Qwen3-ASR-1.7B-8bit",
             engine_type="mlx",
-            description="Qwen3 ASR (8-bit, higher accuracy).",
+            description="Qwen3 ASR (8-bit). English single-speaker, low memory footprint vs paraformer.",
             capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=True),
-        ),
-        ModelSpec(
-            alias="parakeet",
-            model_id="mlx-community/parakeet-tdt-0.6b-v2",
-            engine_type="mlx",
-            description="NVIDIA Parakeet (English only, very fast). Short clips only — OOM on files > ~5 min (known issue, unfixed).",
-            capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=False),
         ),
         ModelSpec(
             alias="sensevoice-small",

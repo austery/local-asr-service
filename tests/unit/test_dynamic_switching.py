@@ -19,7 +19,7 @@ from src.services.transcription import TranscriptionService
 
 @pytest.fixture
 def mlx_spec():
-    return lookup("qwen3-asr-mini")
+    return lookup("qwen3-asr")
 
 
 @pytest.fixture
