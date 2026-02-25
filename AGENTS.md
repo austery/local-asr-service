@@ -77,10 +77,11 @@ The codebase is organized into layers:
 - **`src/api`**: HTTP routes and Pydantic models (contract definition).
 - **`src/services`**: Async task queue management and scheduling.
 - **`src/core`**: ASR engine abstraction and implementations:
-  - `base_engine.py`: Engine Protocol (interface)
+  - `base_engine.py`: Engine Protocol (interface) + EngineCapabilities
   - `funasr_engine.py`: FunASR/Paraformer implementation (supports speaker diarization)
   - `mlx_engine.py`: MLX Audio implementation
-  - `factory.py`: Engine factory (creates engine based on config)
+  - `model_registry.py`: Model alias registry (alias → ModelSpec mapping, SPEC-108)
+  - `factory.py`: Engine factory (creates engine from config or ModelSpec)
 - **`src/adapters`**: Pure functions for text cleaning and audio processing.
 - **`src/config.py`**: Centralized environment variable configuration.
 
@@ -110,8 +111,10 @@ FunASR's `campplus/utils.py:distribute_spk` crashes with `TypeError: '>' not sup
 - **Engine capabilities** are declared at startup via `EngineCapabilities` frozen dataclass (`src/core/base_engine.py`). API layer validates compatibility before queuing — do not bypass this.
 - **Monkey-patching third-party libraries** is acceptable in `funasr_engine.py` only, at module level, with a clear comment. Do not patch elsewhere.
 - **Temporary files** for uploads are written to disk (not held in memory) — see `src/services/transcription.py`. Always cleaned in `finally` blocks.
+- **Dynamic model switching** (SPEC-108): Per-request `model` field triggers hot-swap inside `_consume_loop`. `release()` always precedes `load()` (memory safety). Passthrough values (`None`, `""`, `"whisper-1"`) skip switching. See `src/core/model_registry.py` for the alias table.
+- **Model registry** (`src/core/model_registry.py`) is the single source of truth for supported model aliases. Add new models there first before referencing them anywhere else.
 
 ## Testing Notes
 - Run `uv run python -m pytest` for all tests. E2E tests (`tests/e2e/`) require the real model to be downloaded and are slow.
 - Unit tests mock the engine entirely — do not add real model calls to unit tests.
-- Test count baseline: 85 tests (as of 2026-02-16). Do not reduce this.
+- Test count baseline: 112 tests (as of 2026-02-25). Do not reduce this.

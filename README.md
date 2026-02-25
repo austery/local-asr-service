@@ -17,6 +17,7 @@
 
 * **🚀 极速推理**: 支持 Torch MPS 和 Apple MLX 双加速后端。
 * **🔄 双引擎架构**: 通过环境变量在 FunASR 和 MLX Audio 引擎间无缝切换。
+* **🎛️ 按请求动态换模** *(SPEC-108)*: 在每个转写请求中指定 `model` 字段，服务自动热换模型，无需重启。单人内容用轻模型、对谈内容用分词模型，内存按需分配。
 * **✂️ 智能音频切片**: MLX 引擎支持超长音频自动切片（静音检测 + 重叠策略），无需手动预处理。
 * **🛡️ 显存保护**: 内置 asyncio.Queue 生产者-消费者模型，严格串行处理任务，防止并发请求撑爆统一内存。
 * **👥 说话人分离 (Diarization)**: 集成 Cam++ 模型，自动识别不同说话人（Speaker 0, Speaker 1...）。
@@ -174,7 +175,40 @@ ENGINE_TYPE=mlx MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit uv run python -m src.
 
 ### **切换模型**
 
-模型切换通过**环境变量**实现，需要**重启服务**：
+#### **方式一：按请求动态换模（推荐，无需重启）**
+
+在每个请求的 `model` 字段中指定目标模型，服务会自动热换。换模期间请求透明等待，无需客户端重试：
+
+```bash
+# 单人内容 → 轻模型（快，低内存）
+curl http://localhost:50070/v1/audio/transcriptions \
+  -F "file=@monologue.mp3;type=audio/mpeg" \
+  -F "model=qwen3-asr-mini"
+
+# 对谈 Podcast → Paraformer（支持说话人分离）
+curl http://localhost:50070/v1/audio/transcriptions \
+  -F "file=@podcast.mp3;type=audio/mpeg" \
+  -F "model=paraformer"
+```
+
+查看所有可用模型：
+```bash
+curl http://localhost:50070/v1/models | jq
+```
+
+**内置模型 alias 列表：**
+
+| alias | 引擎 | 说明 | 说话人分离 |
+|-------|------|------|:---:|
+| `paraformer` | FunASR | 中文 SOTA，支持说话人分离，对谈首选 | ✅ |
+| `qwen3-asr-mini` | MLX | Qwen3-ASR 4-bit，单人内容首选，极低内存 | ❌ |
+| `qwen3-asr` | MLX | Qwen3-ASR 8-bit，精度更高 | ❌ |
+| `whisper-large` | MLX | Whisper Large v3 Turbo，多语言 | ❌ |
+| `parakeet` | MLX | NVIDIA Parakeet，英文专用极速 | ❌ |
+
+> **向后兼容**: 不传 `model` 字段（或传 `model=whisper-1`）时，使用服务启动时加载的默认模型，行为与旧版完全一致。
+
+#### **方式二：启动时固定模型（通过环境变量，需重启）**
 
 ```bash
 # 方法 1: 命令行直接指定（临时）
@@ -186,8 +220,6 @@ FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main
 # 方法 3: 切换整个引擎
 ENGINE_TYPE=mlx uv run python -m src.main
 ```
-
-> **提示**: 当前不支持运行时热切换模型，需停止服务后重启。模型首次使用会自动下载。
 
 ### **环境变量配置**
 
@@ -254,23 +286,46 @@ curl http://localhost:50070/health
 # 返回: {"status": "healthy", "engine_type": "funasr", "model": "iic/speech_seaco_paraformer..."}
 ```
 
-### **2. 查询当前模型和能力**
+### **2. 查询模型**
 
 ```bash
+# 列出所有可用模型（含 alias）
+curl http://localhost:50070/v1/models | jq
+
+# 查询当前已加载的模型和能力
 curl http://localhost:50070/v1/models/current | jq
 ```
 
-**返回示例：**
+**`GET /v1/models` 返回示例：**
+```json
+{
+  "models": [
+    {
+      "alias": "paraformer",
+      "model_id": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+      "engine_type": "funasr",
+      "description": "Mandarin + speaker diarization (FunASR). Best for multi-speaker podcasts.",
+      "capabilities": {"timestamp": true, "diarization": true, "emotion_tags": false, "language_detect": true}
+    },
+    {
+      "alias": "qwen3-asr-mini",
+      "model_id": "mlx-community/Qwen3-ASR-1.7B-4bit",
+      "engine_type": "mlx",
+      "description": "Fast & light Qwen3 ASR (4-bit). Best for single-speaker, low latency.",
+      "capabilities": {"timestamp": true, "diarization": false, "emotion_tags": false, "language_detect": true}
+    }
+  ],
+  "current": "paraformer"
+}
+```
+
+**`GET /v1/models/current` 返回示例：**
 ```json
 {
   "engine_type": "funasr",
   "model_id": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
-  "capabilities": {
-    "timestamp": true,
-    "diarization": true,
-    "emotion_tags": false,
-    "language_detect": true
-  },
+  "model_alias": "paraformer",
+  "capabilities": {"timestamp": true, "diarization": true, "emotion_tags": false, "language_detect": true},
   "queue_size": 0,
   "max_queue_size": 50
 }
@@ -377,7 +432,7 @@ curl http://localhost:50070/v1/audio/transcriptions \
 | `response_format` | String | `None` | OpenAI 兼容别名: `verbose_json`, `text`, `srt`, `vtt` |
 | `with_timestamp` | Boolean | `false` | txt 格式下是否包含行首时间戳 `[MM:SS]` |
 | `language` | String | `auto` | 语言代码: `zh`, `en`, `auto` |
-| `model` | String | (信息性) | 模型 ID（服务端配置优先，此参数仅用于 API 兼容） |
+| `model` | String | `None` | 模型 alias 或完整路径。传 `paraformer`/`qwen3-asr-mini` 等触发动态换模；不传或传 `whisper-1` 则使用当前加载的模型 |
 
 > **💡 提示**:
 > 1. 默认输出格式 (`json`) 返回 OpenAI `verbose_json` 兼容的 JSON 响应（含 segments）。
@@ -473,7 +528,8 @@ du -sh ~/.cache/modelscope ~/.cache/huggingface
 │   │   ├── base_engine.py   # 引擎抽象接口 (Protocol) + EngineCapabilities
 │   │   ├── funasr_engine.py # FunASR (Paraformer/SenseVoice) 实现
 │   │   ├── mlx_engine.py    # MLX Audio 实现 (Qwen3-ASR, Whisper)
-│   │   └── factory.py       # 引擎工厂
+│   │   ├── model_registry.py # 模型注册表 (alias → ModelSpec 映射)
+│   │   └── factory.py       # 引擎工厂 (支持按 ModelSpec 创建)
 │   ├── services/            # 服务调度
 │   │   └── transcription.py # 异步队列与串行执行
 │   ├── config.py            # 环境变量配置
@@ -505,7 +561,7 @@ uv run python -m pytest
 
 ### **2. 测试分层说明**
 
-*   **Unit Tests (`tests/unit/`)** — 85 tests total:
+*   **Unit Tests (`tests/unit/`)** — 85 + 22 = 107 tests:
     *   `test_adapters.py`: SenseVoice 标签清洗逻辑
     *   `test_engine.py`: FunASR 引擎能力声明、加载、推理（Mock 模型）
     *   `test_mlx_engine.py`: MLX Audio 引擎能力声明（Mock mlx_audio）
@@ -513,9 +569,12 @@ uv run python -m pytest
     *   `test_config_factory.py`: 配置和引擎工厂
     *   `test_service.py`: 异步队列调度和临时文件生命周期
     *   `test_security.py`: 安全相关单元测试
-*   **Integration Tests (`tests/integration/`)**:
+    *   `test_model_registry.py` *(SPEC-108)*: 模型注册表查找、alias 解析、能力声明（16 个测试）
+    *   `test_dynamic_switching.py` *(SPEC-108)*: 热换模型编排、幂等性、失败恢复（6 个测试）
+*   **Integration Tests (`tests/integration/`)** — 5 + 8 = 13 tests:
     *   `test_api.py`: FastAPI TestClient，验证 HTTP 接口契约、能力校验、OpenAI 兼容性（Mock Engine）
     *   `test_security_integration.py`: CORS、请求追踪、安全头
+    *   `test_model_api.py` *(SPEC-108)*: `GET /v1/models`、按请求换模、能力预校验、向后兼容（8 个测试）
 *   **E2E Tests (`tests/e2e/`)**:
     *   `test_full_flow.py`: **真实模型测试**（需下载模型，速度较慢）
 *   **Reliability Tests (`tests/reliability/`)**:
@@ -541,5 +600,5 @@ uv run ruff format src/
 1. **队列限制**: 默认队列深度为 50。如果请求超过 50 个，API 会立即返回 503 Service Busy。
 2. **单例模式**: 由于 M 芯片统一内存特性，我们严格限制模型只加载一次。请勿开启多进程 (workers > 1) 模式运行，否则会导致显存成倍消耗。
 3. **临时文件**: 上传的音频会暂存到磁盘以便 ffmpeg 处理，处理完成后会自动删除。
-4. **模型切换**: 目前需要停止服务、修改环境变量、重新启动。不支持运行时热切换。
+4. **动态换模内存**: 热换模型时遵循 release-before-load 顺序（先释放旧模型内存，再加载新模型），确保不出现双倍内存峰值。换模期间请求等待，预计耗时 10–60s 不等。
 5. **端口历史**: 官方端口为 `50070`。早期使用 WhisperKit 默认的 `50060`，迁移时 +10 以区分。

@@ -191,7 +191,7 @@ class TestRequestTracking:
             # 创建测试文件
             files = {"file": ("test.wav", BytesIO(b"fake audio"), "audio/wav")}
             data = {
-                "model": "test",
+                "model": None,
                 "language": "auto",
                 "response_format": "json",
                 "clean_tags": "true"
@@ -215,7 +215,7 @@ class TestEndToEndSecurityFlow:
             # 创建测试文件（合法大小、合法类型）
             files = {"file": ("test.wav", BytesIO(b"fake audio"), "audio/wav")}
             data = {
-                "model": "test",
+                "model": None,
                 "language": "auto",
                 "response_format": "json",
                 "clean_tags": "true"
@@ -251,7 +251,7 @@ class TestEndToEndSecurityFlow:
             large_content = b"a" * (2 * 1024 * 1024)
             files = {"file": ("large.wav", BytesIO(large_content), "audio/wav")}
             data = {
-                "model": "test",
+                "model": None,
                 "language": "auto",
                 "response_format": "json",
                 "clean_tags": "true"
@@ -272,7 +272,7 @@ class TestEndToEndSecurityFlow:
         # 创建非音频文件
         files = {"file": ("test.png", BytesIO(b"fake image"), "image/png")}
         data = {
-            "model": "test",
+            "model": None,
             "language": "auto",
             "response_format": "json",
             "clean_tags": "true"

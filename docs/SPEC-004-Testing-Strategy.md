@@ -20,12 +20,15 @@ relatedSpecs: [SPEC-101, SPEC-102, SPEC-103]
     *   `tests/unit/test_mlx_engine.py`: MLX 引擎逻辑 (Mocked)。
     *   `tests/unit/test_config_factory.py`: 配置加载与工厂模式。
     *   `tests/unit/test_service.py`: 队列调度与文件清理。
+    *   `tests/unit/test_model_registry.py`: 模型注册表查找、alias 解析、engine_type 推断。*(SPEC-108)*
+    *   `tests/unit/test_dynamic_switching.py`: 换模编排逻辑（release → load 顺序、幂等性、失败恢复）。*(SPEC-108)*
 
 ### 2.2 集成测试 (Integration Tests)
 *   **范围**: API 接口层，验证组件间的协作。
 *   **工具**: `fastapi.testclient.TestClient`
 *   **覆盖目标**:
     *   `tests/integration/test_api.py`: 验证参数解析、Service 调用链路、Mock Engine 的返回值处理。
+    *   `tests/integration/test_model_api.py`: `GET /v1/models` 列表、`POST` 带 `model` 字段、未知模型 400、能力预校验。*(SPEC-108)*
 
 ### 2.3 E2E 测试 (End-to-End)
 *   **范围**: 真实模型加载与推理。

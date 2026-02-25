@@ -40,7 +40,7 @@ class TestFileSizeLimit:
         result = await create_transcription(
             request=request,
             file=file,
-            model="test",
+            model=None,
             language="auto",
             output_format="json",
             with_timestamp=False
@@ -72,7 +72,7 @@ class TestFileSizeLimit:
                 await create_transcription(
                     request=request,
                     file=file,
-                    model="test",
+                    model=None,
                     language="auto",
                     output_format="json",
                     with_timestamp=False
@@ -113,7 +113,7 @@ class TestMIMETypeValidation:
             result = await create_transcription(
                 request=request,
                 file=file,
-                model="test",
+                model=None,
                 language="auto",
                 output_format="json",
                 with_timestamp=False
@@ -153,7 +153,7 @@ class TestMIMETypeValidation:
                 await create_transcription(
                     request=request,
                     file=file,
-                    model="test",
+                    model=None,
                     language="auto",
                     output_format="json",
                     with_timestamp=False
@@ -194,7 +194,7 @@ class TestErrorMessageSanitization:
             await create_transcription(
                 request=request,
                 file=file,
-                model="test",
+                model=None,
                 language="auto",
                 output_format="json",
                 with_timestamp=False
@@ -233,7 +233,7 @@ class TestErrorMessageSanitization:
             await create_transcription(
                 request=request,
                 file=file,
-                model="test",
+                model=None,
                 language="auto",
                 output_format="json",
                 with_timestamp=False
@@ -271,7 +271,7 @@ class TestErrorMessageSanitization:
             await create_transcription(
                 request=request,
                 file=file,
-                model="test",
+                model=None,
                 language="auto",
                 output_format="json",
                 with_timestamp=False
@@ -316,7 +316,7 @@ class TestRequestIDGeneration:
         await create_transcription(
             request=request,
             file=file,
-            model="test",
+            model=None,
             language="auto",
             output_format="json",
             with_timestamp=False

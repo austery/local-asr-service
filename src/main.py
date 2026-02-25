@@ -23,6 +23,7 @@ from src.config import (
     get_model_id,
 )
 from src.core.factory import create_engine
+from src.core.model_registry import lookup
 from src.services.transcription import TranscriptionService
 
 # === 基础日志配置 ===
@@ -47,19 +48,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 1. 使用工厂创建引擎
     engine = create_engine()
-    engine.load()
+    try:
+        engine.load()
+    except Exception as e:
+        logger.critical(
+            f"FATAL: Failed to load startup engine "
+            f"(engine_type={ENGINE_TYPE}, model_id={get_model_id()}): {e}",
+            exc_info=True,
+        )
+        raise RuntimeError(
+            f"Cannot start service: engine load failed. "
+            f"Check model availability and disk space."
+        ) from e
 
-    # 2. 初始化并启动服务
-    service = TranscriptionService(engine=engine, max_queue_size=MAX_QUEUE_SIZE)
+    # 2. 解析启动模型的 ModelSpec（用于 dynamic switching 的基准）
+    startup_model_id = get_model_id()
+    try:
+        initial_spec = lookup(startup_model_id)
+    except ValueError:
+        initial_spec = None
+        logger.warning(f"⚠️  Startup model '{startup_model_id}' not in registry; model tracking disabled.")
 
-    # 3. 启动后台消费者
+    # 3. 初始化服务
+    service = TranscriptionService(
+        engine=engine,
+        max_queue_size=MAX_QUEUE_SIZE,
+        initial_model_spec=initial_spec,
+    )
+
+    # 4. 启动后台消费者
     await service.start_worker()
 
-    # 4. 依赖注入
+    # 5. 依赖注入（engine/model_id 保留供 health check 和降级路径使用）
     app.state.service = service
     app.state.engine = engine
     app.state.engine_type = ENGINE_TYPE
-    app.state.model_id = get_model_id()
+    app.state.model_id = startup_model_id
 
     logger.info("✅ System ready! Listening for requests...")
 

@@ -4,25 +4,27 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
-# 引入抽象接口
 from src.core.base_engine import ASREngine
+from src.core.factory import create_engine_for_spec
+from src.core.model_registry import ModelSpec
 
 
-# 定义一个简单的任务对象，用于在队列中传递
 @dataclass
 class TranscriptionJob:
     uid: str
-    temp_dir: str  # 任务专属临时目录
-    temp_file_path: str  # 原始文件路径
+    temp_dir: str
+    temp_file_path: str
     params: dict[str, Any]
-    future: asyncio.Future
+    future: asyncio.Future  # type: ignore[type-arg]
     received_at: float
+    # None = use whatever model is currently loaded (no switch needed)
+    requested_model_spec: ModelSpec | None = field(default=None)
 
 
 class TranscriptionService:
@@ -31,17 +33,28 @@ class TranscriptionService:
     职责：
     1. 管理异步队列 (Async Queue)
     2. 协调 Engine 进行串行推理
-    3. 管理临时文件的生命周期
+    3. 在两次推理之间按需热换模型
+    4. 管理临时文件的生命周期
     """
 
-    def __init__(self, engine: ASREngine, max_queue_size: int = 50):
+    def __init__(
+        self,
+        engine: ASREngine,
+        max_queue_size: int = 50,
+        initial_model_spec: ModelSpec | None = None,
+    ):
         self.engine = engine
+        self._current_model_spec = initial_model_spec
+        self._engine_degraded = False
         self.logger = logging.getLogger(__name__)
-        # 核心设计：使用 asyncio.Queue 实现背压 (Backpressure)
-        # 如果队列满 50 个，前端会直接收到 503 错误，保护系统不崩溃
         self.queue: asyncio.Queue[TranscriptionJob | None] = asyncio.Queue(maxsize=max_queue_size)
         self.is_running = False
         self.logger.info(f"🚦 Service initialized. Queue size: {max_queue_size}")
+
+    @property
+    def current_model_spec(self) -> ModelSpec | None:
+        """The ModelSpec of the currently loaded engine (None if not tracked)."""
+        return self._current_model_spec
 
     async def start_worker(self) -> None:
         """启动后台消费者循环 (在 main.py 的 lifespan 中调用)"""
@@ -50,54 +63,47 @@ class TranscriptionService:
         self.logger.info("👷 Background worker started.")
 
     async def submit(
-        self, file: UploadFile, params: dict[str, Any], request_id: str = "unknown"
+        self,
+        file: UploadFile,
+        params: dict[str, Any],
+        request_id: str = "unknown",
+        model_spec: ModelSpec | None = None,
     ) -> str | dict[str, Any]:
         """
         提交任务接口 (供 API 层调用)。
-        这个方法是非阻塞的：它只是把任务扔进队列，然后等待结果。
+        model_spec=None 表示使用当前已加载的模型（不换模）。
         """
-        # 1. 检查队列是否已满 (快速失败)
         if self.queue.full():
             self.logger.warning(f"[{request_id}] Queue full, rejecting request")
             raise RuntimeError("Service busy: Queue is full.")
 
-        # 2. "临时文件之舞" (The Temp File Dance)
-        # 为每个请求创建一个独立的临时目录，方便统一清理
         temp_dir = tempfile.mkdtemp(prefix="asr_task_")
 
         try:
             file_ext = os.path.splitext(file.filename or "upload.wav")[1] or ".wav"
-            # 文件名使用 original 以便区分，但实际上只要在目录下就行
-            temp_filename = f"original{file_ext}"
-            temp_path = os.path.join(temp_dir, temp_filename)
+            temp_path = os.path.join(temp_dir, f"original{file_ext}")
 
-            # 将上传的文件流写入磁盘
             with open(temp_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
 
-            # 3. 创建任务对象
             loop = asyncio.get_running_loop()
-            future = loop.create_future()
+            future: asyncio.Future[str | dict[str, Any]] = loop.create_future()
 
             job = TranscriptionJob(
-                uid=request_id,  # 使用传入的 request_id
+                uid=request_id,
                 temp_dir=temp_dir,
                 temp_file_path=temp_path,
                 params=params,
                 future=future,
                 received_at=time.time(),
+                requested_model_spec=model_spec,
             )
 
-            # 4. 入队
             await self.queue.put(job)
-
-            # 5. 等待处理结果 (Await the future)
-            # 这里的 await 会挂起当前请求，直到后台 worker 完成处理
             result: str | dict[str, Any] = await future
             return result
 
         except Exception as e:
-            # 如果在入队前就失败了，确保清理临时目录
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
             raise e
@@ -105,19 +111,87 @@ class TranscriptionService:
     async def stop_worker(self) -> None:
         """优雅停止消费者循环"""
         self.is_running = False
-        # 放入 None 哨兵唤醒阻塞在 queue.get() 的消费者
         await self.queue.put(None)  # type: ignore[arg-type]
+
+    async def _switch_model(self, new_spec: ModelSpec, job_uid: str) -> None:
+        """
+        热换模型：release 旧引擎 → load 新引擎 → 原子替换。
+
+        Per SPEC-108 §5: release 发生在 load 之前，确保 M-series 上不会双倍内存峰值。
+        如果 load 失败，尝试恢复原引擎；恢复失败时记录降级状态并继续。
+        """
+        old_engine = self.engine
+        old_spec = self._current_model_spec
+        old_alias = old_spec.alias if old_spec else "unknown"
+        new_alias = new_spec.alias
+
+        self.logger.info(f"[{job_uid}] 🔄 Switching model: {old_alias} → {new_alias}")
+        switch_start = time.time()
+
+        # Step 1: Release old engine (blocking → thread pool).
+        # Per SPEC-108 §5: release MUST succeed before load to avoid double memory peak on M-series.
+        # If release fails, abort the switch immediately — do NOT proceed to load.
+        try:
+            await run_in_threadpool(old_engine.release)
+        except Exception as e:
+            self.logger.error(
+                f"[{job_uid}] ❌ Old engine release failed: {e}. "
+                f"Aborting switch to protect memory budget — engine remains {old_alias}.",
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"Model switch aborted: failed to release '{old_alias}' ({e}). "
+                f"The current engine is still loaded and usable."
+            ) from e
+
+        # Step 2: Create & load new engine (blocking → thread pool)
+        new_engine = create_engine_for_spec(new_spec)
+        try:
+            await run_in_threadpool(new_engine.load)
+        except Exception as load_err:
+            self.logger.error(
+                f"[{job_uid}] ❌ New engine load failed: {load_err}. "
+                f"Attempting to restore previous engine ({old_alias}).",
+                exc_info=True,
+            )
+            try:
+                await run_in_threadpool(old_engine.load)
+                self.engine = old_engine
+                self._current_model_spec = old_spec
+                self.logger.info(f"[{job_uid}] ✅ Restored previous engine: {old_alias}")
+            except Exception as restore_err:
+                # Both load and restore failed: engine is now in an undefined state.
+                # Mark degraded so subsequent jobs fail fast with a clear message
+                # instead of silently crashing against an unloaded engine.
+                self._engine_degraded = True
+                self.logger.error(
+                    f"[{job_uid}] ❌ FATAL: Both model switch and recovery failed. "
+                    f"load_err={load_err!r}, restore_err={restore_err!r}. "
+                    f"Service is degraded — manual restart required.",
+                    exc_info=True,
+                )
+                raise RuntimeError(
+                    f"Engine unrecoverable: switch to '{new_alias}' failed ({load_err}), "
+                    f"restore of '{old_alias}' also failed ({restore_err}). "
+                    f"Service must be restarted."
+                ) from restore_err
+            raise load_err  # Fail this job; engine restored, next job can proceed
+
+        # Step 3: Atomic swap (single-threaded consumer — no lock needed)
+        self.engine = new_engine
+        self._current_model_spec = new_spec
+
+        elapsed = time.time() - switch_start
+        self.logger.info(f"[{job_uid}] ✅ Model switch complete: {new_alias} ({elapsed:.2f}s)")
 
     async def _consume_loop(self) -> None:
         """
-        消费者循环 (Strict Serial Execution)。
-        这是保护 M4 Pro 显存的关键。
+        消费者循环 (Strict Serial Execution).
+        This is the single thread of control for all inference — no concurrency here.
         """
         while self.is_running:
-            # 从队列获取任务
             job: TranscriptionJob | None = await self.queue.get()
 
-            # None 哨兵表示该退出了
             if job is None:
                 break
 
@@ -126,13 +200,22 @@ class TranscriptionService:
 
             inference_start = time.time()
             try:
-                # === 核心推理逻辑 ===
-                # 提取输出格式参数
+                # === Degraded engine guard ===
+                if self._engine_degraded:
+                    raise RuntimeError(
+                        "Service is in a degraded state (engine unrecoverable). "
+                        "Manual restart required."
+                    )
+
+                # === Model switch check (before inference) ===
+                requested = job.requested_model_spec
+                if requested is not None and requested != self._current_model_spec:
+                    await self._switch_model(requested, job.uid)
+
+                # === Core inference ===
                 output_format = job.params.get("output_format", "txt")
                 with_timestamp = job.params.get("with_timestamp", False)
 
-                # run_in_threadpool 是为了把同步的 Engine 代码放到线程池里跑
-                # 防止阻塞 asyncio 的事件循环
                 result_data = await run_in_threadpool(
                     self.engine.transcribe_file,
                     file_path=job.temp_file_path,
@@ -142,32 +225,24 @@ class TranscriptionService:
                     use_itn=True,
                 )
 
-                # 计算推理耗时
                 inference_time = time.time() - inference_start
                 total_time = time.time() - job.received_at
 
-                # 处理返回值
-                # Engine 现在根据 output_format 返回不同格式:
-                # - txt/srt: 返回 str
-                # - json: 返回 dict {"text": ..., "segments": [...]}
                 if isinstance(result_data, dict):
-                    # JSON 格式，添加 duration
-                    result = {
+                    result: str | dict[str, Any] = {
                         "text": result_data.get("text", ""),
                         "duration": total_time,
                         "segments": result_data.get("segments"),
                     }
                 else:
-                    # txt/srt 格式，直接透传字符串
-                    result = result_data  # type: ignore[assignment]
+                    result = result_data
 
-                # 记录完成日志
                 self.logger.info(
                     f"[{job.uid}] Transcription completed: "
-                    f"format={output_format}, queue_time={queue_time:.2f}s, inference_time={inference_time:.2f}s"
+                    f"format={output_format}, queue_time={queue_time:.2f}s, "
+                    f"inference_time={inference_time:.2f}s"
                 )
 
-                # 唤醒等待的 API 请求
                 if not job.future.done():
                     job.future.set_result(result)
 
@@ -177,11 +252,6 @@ class TranscriptionService:
                     job.future.set_exception(e)
 
             finally:
-                # === 打扫战场 ===
-                # 无论成功失败，必须删除临时目录
-                # 这会连带删除原始文件、归一化文件、切片文件等所有中间产物
                 if os.path.exists(job.temp_dir):
                     shutil.rmtree(job.temp_dir, ignore_errors=True)
-
-                # 标记队列任务完成
                 self.queue.task_done()

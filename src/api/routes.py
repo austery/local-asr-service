@@ -11,6 +11,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from src.config import MAX_UPLOAD_SIZE_MB
+from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,9 @@ class Segment(BaseModel):
     """Segment with timestamp and optional speaker info"""
 
     id: int
-    speaker: str | None = None  # Speaker ID (e.g., "Speaker 0")
-    start: float = 0.0  # 毫秒
-    end: float = 0.0  # 毫秒
+    speaker: str | None = None
+    start: float = 0.0
+    end: float = 0.0
     text: str
 
 
@@ -70,16 +71,53 @@ class TranscriptionResponse(BaseModel):
     segments: list[Segment] | None = Field(None, description="详细分段信息（带说话人识别）")
 
 
+class ModelInfo(BaseModel):
+    """Single model entry for GET /v1/models"""
+
+    alias: str
+    model_id: str
+    engine_type: str
+    description: str
+    capabilities: dict[str, bool]
+
+
+class ModelsResponse(BaseModel):
+    """Response for GET /v1/models"""
+
+    models: list[ModelInfo]
+    current: str | None
+
+
 # Router
 router = APIRouter()
+
+
+def _resolve_model(model: str | None) -> ModelSpec | None:
+    """
+    Resolve the `model` form field to a ModelSpec, or None if no switch is needed.
+
+    Returns None for passthrough values (None / "whisper-1") — signals "use current engine".
+    Raises HTTPException 400 for unrecognisable model strings.
+    """
+    if is_passthrough(model):
+        return None
+    try:
+        return lookup(model)  # type: ignore[arg-type]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.post("/v1/audio/transcriptions", response_model=None)
 async def create_transcription(
     request: Request,
     file: UploadFile = File(..., description="Audio file (wav, mp3, m4a, etc.)"),
-    model: str = Form(
-        "paraformer", description="Model ID (informational — actual model set by server config)"
+    model: str | None = Form(
+        None,
+        description=(
+            "Model alias or full model path. "
+            "Pass None/'whisper-1' to use the server's current model. "
+            "Examples: 'paraformer', 'qwen3-asr-mini', 'mlx-community/Qwen3-ASR-1.7B-4bit'"
+        ),
     ),
     language: str = Form("auto", description="Language code (auto, zh, en)"),
     response_format: str | None = Form(
@@ -91,32 +129,29 @@ async def create_transcription(
     ),
 ) -> TranscriptionResponse | PlainTextResponse:
     """
-    Transcribe audio file with speaker diarization.
+    Transcribe audio file. Optionally specify a model to use for this request.
+
+    Model switching:
+    - Pass `model=paraformer` for multi-speaker content (enables diarization).
+    - Pass `model=qwen3-asr-mini` for single-speaker content (low memory, fast).
+    - Omit `model` or pass `model=whisper-1` to use the server's currently loaded model.
 
     Output Formats:
-    - **json** (default): Full structured data with segments and timestamps (OpenAI verbose_json compatible)
+    - **json** (default): Full structured data with segments and timestamps
     - **txt**: Clean text with speaker labels, suitable for RAG/LLM
     - **srt**: Standard SRT subtitle format
-
-    OpenAI Compatibility:
-    - `response_format=verbose_json` maps to `json` with segments
-    - `response_format=text` maps to `txt`
-    - `response_format=vtt` maps to `srt`
-    - `model` parameter is accepted but informational (server uses configured model)
     """
     request_id = getattr(request.state, "request_id", "unknown")
 
-    # 1. 文件类型校验
-    # 优先检查 MIME 类型，如果是 application/octet-stream 则 fallback 到扩展名判断
+    # 1. 文件类型校验（先做，确保文件错误优先于模型错误）
     is_valid_type = file.content_type in ALLOWED_AUDIO_TYPES
-
     if not is_valid_type and file.content_type == "application/octet-stream":
-        # Fallback: 通过文件扩展名判断（curl 经常不设置正确的 Content-Type）
         file_ext = os.path.splitext(file.filename or "")[1].lower()
         is_valid_type = file_ext in ALLOWED_AUDIO_EXTENSIONS
         if is_valid_type:
             logger.info(
-                f"[{request_id}] Accepted file by extension fallback: {file.filename} (ext={file_ext})"
+                f"[{request_id}] Accepted file by extension fallback: "
+                f"{file.filename} (ext={file_ext})"
             )
 
     if not is_valid_type:
@@ -125,41 +160,56 @@ async def create_transcription(
         )
         raise HTTPException(
             status_code=415,
-            detail=f"Unsupported file type. Expected audio file, got: {file.content_type}"
+            detail=f"Unsupported file type. Expected audio file, got: {file.content_type}",
         )
 
-    # 2. 文件大小校验（通过底层文件对象的 seek/tell 避免读取全部内容到内存）
-    file.file.seek(0, 2)  # seek to end
+    # 2. 文件大小校验
+    file.file.seek(0, 2)
     file_size_bytes = file.file.tell()
     file_size_mb = file_size_bytes / (1024 * 1024)
-    max_size_mb = MAX_UPLOAD_SIZE_MB
 
-    if file_size_mb > max_size_mb:
+    if file_size_mb > MAX_UPLOAD_SIZE_MB:
         logger.warning(
-            f"[{request_id}] File too large: {file_size_mb:.2f}MB (max: {max_size_mb}MB)"
+            f"[{request_id}] File too large: {file_size_mb:.2f}MB (max: {MAX_UPLOAD_SIZE_MB}MB)"
         )
         raise HTTPException(
-            status_code=413, detail=f"File size exceeds maximum allowed ({max_size_mb} MB)"
+            status_code=413,
+            detail=f"File size exceeds maximum allowed ({MAX_UPLOAD_SIZE_MB} MB)",
         )
 
-    file.file.seek(0)  # reset for downstream reading
+    file.file.seek(0)
 
-    # 3. Resolve effective output format (response_format takes precedence)
+    # 3. Resolve model → ModelSpec (or None = keep current engine)
+    resolved_spec = _resolve_model(model)
+
+    # 4. Resolve effective output format
     effective_format = response_format if response_format is not None else output_format
     effective_format = _RESPONSE_FORMAT_MAP.get(effective_format, effective_format)
 
-    # 4. Capability validation — fail fast with clear 400 errors
-    engine = request.app.state.engine
-    caps = engine.capabilities
+    # 5. Capability pre-validation (fail fast before queuing)
+    #    If the request specifies a model, validate against ITS declared capabilities
+    #    so the client gets an early 400 without waiting for the switch.
+    #    Fall back to the current engine only for passthrough requests (model=None).
+    if resolved_spec is not None:
+        caps = resolved_spec.capabilities
+    else:
+        # Use the live service engine (not app.state.engine which is a stale startup snapshot).
+        caps = request.app.state.service.engine.capabilities
+
+    model_label: str = (
+        resolved_spec.alias
+        if isinstance(resolved_spec, ModelSpec)
+        else str(getattr(request.app.state, "model_id", "unknown"))
+    )
+    service = request.app.state.service
 
     if effective_format == "srt" and not caps.timestamp:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"SRT format requires timestamp support, but the current model "
-                f"({request.app.state.model_id}) does not produce timestamps. "
-                f"Use output_format=json or output_format=txt instead, "
-                f"or switch to a Paraformer model."
+                f"SRT format requires timestamp support, but '{model_label}' "
+                f"does not produce timestamps. "
+                f"Use output_format=json or output_format=txt instead."
             ),
         )
 
@@ -167,46 +217,53 @@ async def create_transcription(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"with_timestamp=true requires timestamp support, but the current model "
-                f"({request.app.state.model_id}) does not produce timestamps. "
-                f"Set with_timestamp=false, or switch to a Paraformer model."
+                f"with_timestamp=true requires timestamp support, but '{model_label}' "
+                f"does not produce timestamps."
             ),
         )
 
     logger.info(
-        f"[{request_id}] Processing file: {file.filename} ({file_size_mb:.2f}MB, format={effective_format})"
+        f"[{request_id}] Processing file: {file.filename} "
+        f"({file_size_mb:.2f}MB, format={effective_format}, model={model_label})"
     )
 
-    # 5. 获取 Service
-    service = request.app.state.service
-
     try:
-        # 6. 构造参数
         params = {
             "language": language,
             "output_format": effective_format,
             "with_timestamp": with_timestamp,
         }
 
-        # 7. 提交任务
-        result = await service.submit(file, params, request_id=request_id)
+        # Determine response model alias BEFORE awaiting:
+        #   - Explicit switch: use resolved_spec (always correct regardless of queue ordering).
+        #   - Passthrough: capture current spec now; reading it after await is racy because
+        #     another concurrent request may trigger a switch while this job is queued.
+        spec_for_response: ModelSpec | None = resolved_spec if resolved_spec is not None else service.current_model_spec
 
-        # 8. 根据格式返回不同响应
-        # SRT 格式返回纯文本（字幕文件格式）
+        result = await service.submit(
+            file,
+            params,
+            request_id=request_id,
+            model_spec=resolved_spec,
+        )
+
+        response_model: str = (
+            spec_for_response.alias
+            if isinstance(spec_for_response, ModelSpec)
+            else str(getattr(request.app.state, "model_id", "unknown"))
+        )
+
         if effective_format == "srt":
             return PlainTextResponse(
                 content=result if isinstance(result, str) else result.get("text", ""),
                 media_type="text/plain; charset=utf-8",
             )
 
-        # JSON 和 TXT 格式都返回 JSON 响应（OpenAI API 兼容）
-        # TXT 格式只返回 text 字段，不含 segments
         if isinstance(result, dict):
             text = result.get("text", "")
             segments_data = result.get("segments", [])
             duration = result.get("duration", 0.0)
 
-            # 格式化 segments（仅 json 格式包含）
             segments: list[Segment] | None = None
             if effective_format == "json" and segments_data:
                 segments = [
@@ -224,16 +281,14 @@ async def create_transcription(
                 text=text,
                 duration=duration,
                 language=language if language != "auto" else "zh",
-                model=request.app.state.model_id
-                if hasattr(request.app.state, "model_id")
-                else "paraformer",
+                model=response_model,
                 segments=segments,
             )
         else:
             return TranscriptionResponse(
                 text=str(result),
                 language=language if language != "auto" else "zh",
-                model="paraformer",
+                model=response_model,
                 segments=None,
             )
 
@@ -244,14 +299,43 @@ async def create_transcription(
             ) from None
         logger.error(f"[{request_id}] Runtime error: {e}", exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Internal server error occurred. (Request ID: {request_id})"
+            status_code=500,
+            detail=f"Internal server error occurred. (Request ID: {request_id})",
         ) from None
 
     except Exception as e:
         logger.error(f"[{request_id}] Unexpected error: {e}", exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Internal server error occurred. (Request ID: {request_id})"
+            status_code=500,
+            detail=f"Internal server error occurred. (Request ID: {request_id})",
         ) from None
+
+
+@router.get("/v1/models")
+async def list_models(request: Request) -> ModelsResponse:
+    """
+    List all supported models and the currently loaded model.
+    Use the returned `alias` values in the `model` field of POST /v1/audio/transcriptions.
+    """
+    service = request.app.state.service
+    current_spec = service.current_model_spec
+    current_alias = current_spec.alias if current_spec else None
+
+    return ModelsResponse(
+        models=[
+            ModelInfo(
+                alias=spec.alias,
+                model_id=spec.model_id,
+                engine_type=spec.engine_type,
+                description=spec.description,
+                capabilities={
+                    k: v for k, v in asdict(spec.capabilities).items()
+                },
+            )
+            for spec in list_all()
+        ],
+        current=current_alias,
+    )
 
 
 @router.get("/v1/models/current")
@@ -260,13 +344,16 @@ async def get_current_model(request: Request) -> dict[str, object]:
     Return the currently loaded model and its capabilities.
     Useful for clients to discover what formats/features are available.
     """
-    engine = request.app.state.engine
     service = request.app.state.service
+    current_spec = service.current_model_spec
 
     return {
-        "engine_type": request.app.state.engine_type,
-        "model_id": request.app.state.model_id,
-        "capabilities": asdict(engine.capabilities),
+        "engine_type": current_spec.engine_type if current_spec else request.app.state.engine_type,
+        "model_id": current_spec.model_id if current_spec else request.app.state.model_id,
+        "model_alias": current_spec.alias if current_spec else None,
+        # Use current_spec.capabilities for consistency — avoids a transient mismatch
+        # between current_spec and service.engine during a model switch.
+        "capabilities": asdict(current_spec.capabilities) if current_spec else asdict(service.engine.capabilities),
         "queue_size": service.queue.qsize(),
         "max_queue_size": service.queue.maxsize,
     }
