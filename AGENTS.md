@@ -100,7 +100,7 @@ The codebase is organized into layers:
 ### FunASR distribute_spk NoneType Bug (Fixed 2026-02-21)
 FunASR's `campplus/utils.py:distribute_spk` crashes with `TypeError: '>' not supported between instances of 'float' and 'NoneType'` when `sv_output` contains entries with `None` timestamps (happens on short or ambiguous audio segments).
 
-**Fix**: A module-level monkey-patch is applied in `src/core/funasr_engine.py` at import time. It replaces `funasr.models.campplus.utils.distribute_spk` with a version that filters out `None` timing entries before processing.
+**Fix**: A module-level monkey-patch is applied in `src/core/funasr_engine.py` at import time. It patches **both** `funasr.models.campplus.utils.distribute_spk` (the source module) **and** `funasr.auto.auto_model.distribute_spk` (the actual call site). The second patch is critical: `auto_model.py` uses `from ... import distribute_spk`, creating a direct reference that bypasses the source module attribute. Patching only the source module silently fails. A `hasattr` guard ensures the patch fails loudly (via `logging.warning`) if FunASR is restructured and the attribute no longer exists. Note: `auto_model.py`'s campplus import is wrapped in `try/except: pass`, so the second patch is only effective when campplus is installed and that import succeeds.
 
 **Do not remove this patch** — the underlying FunASR library bug has not been fixed upstream.
 

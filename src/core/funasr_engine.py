@@ -1,4 +1,5 @@
 import gc
+import logging
 import time
 from typing import Any
 
@@ -7,11 +8,21 @@ from funasr import AutoModel
 
 from src.core.base_engine import EngineCapabilities
 
+_log = logging.getLogger(__name__)
+
 # Monkey-patch for FunASR bug: distribute_spk crashes when sv_output contains
 # entries with spk_st=None or spk_ed=None (happens on short/ambiguous segments).
 # See: funasr/models/campplus/utils.py:203
 def _patched_distribute_spk(sentence_list: list, sd_time_list: list) -> list:
     valid = [(st, ed, spk) for st, ed, spk in sd_time_list if st is not None and ed is not None]
+    discarded = len(sd_time_list) - len(valid)
+    if discarded > 0:
+        _log.warning(
+            "distribute_spk patch: filtered %d/%d speaker segments with None timestamps; "
+            "speaker attribution for affected sentences may be inaccurate.",
+            discarded,
+            len(sd_time_list),
+        )
     sd_time_ms = [(st * 1000, ed * 1000, spk) for st, ed, spk in valid]
     for d in sentence_list:
         sentence_start = d["start"]
@@ -23,14 +34,30 @@ def _patched_distribute_spk(sentence_list: list, sd_time_list: list) -> list:
             if overlap > max_overlap:
                 max_overlap = overlap
                 sentence_spk = spk
-            if overlap > 0 and sentence_spk == spk:
-                max_overlap += overlap
         d["spk"] = int(sentence_spk)
     return sentence_list
 
 
 import funasr.models.campplus.utils as _campplus_utils
+import funasr.auto.auto_model as _auto_model
+
+# Patch the source module attribute (guards against direct attribute-access call sites).
 _campplus_utils.distribute_spk = _patched_distribute_spk
+
+# Patch the auto_model namespace directly — this is the actual call site.
+# auto_model.py uses `from funasr.models.campplus.utils import distribute_spk`,
+# so it holds a direct reference to the old function that must be replaced here.
+# Guard against FunASR refactors where this attribute may no longer exist — a
+# silent set on a missing attribute would make the patch appear to work while
+# the original bug remains active.
+if not hasattr(_auto_model, "distribute_spk"):
+    _log.warning(
+        "funasr.auto.auto_model has no 'distribute_spk' attribute; "
+        "the None-timestamp bug fix patch was NOT applied to the call site. "
+        "FunASR may have been updated — verify the patch is still needed."
+    )
+else:
+    _auto_model.distribute_spk = _patched_distribute_spk
 
 # 推荐使用的 Paraformer 模型 ID (支持时间戳，必须用于说话人分离)
 # SEACO-Paraformer 是目前阿里最成熟的串联模型，中文识别 SOTA
