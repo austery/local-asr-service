@@ -48,6 +48,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 50070 --workers 1
 | `HOST` | `0.0.0.0` | Server host |
 | `PORT` | `50070` | Server port |
 | `MAX_QUEUE_SIZE` | `50` | Max concurrent requests in queue |
+| `MODEL_IDLE_TIMEOUT_SEC` | `60` | Idle timeout before auto-offloading model (0 = disabled) |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
 ## Supported Models
@@ -125,6 +126,7 @@ The TypeScript reference implementation (silence-based chunking) lives at
 - **Temporary files** for uploads are written to disk (not held in memory) — see `src/services/transcription.py`. Always cleaned in `finally` blocks.
 - **Dynamic model switching** (SPEC-108): Per-request `model` field triggers hot-swap inside `_consume_loop`. `release()` always precedes `load()` (memory safety). Passthrough values (`None`, `""`, `"whisper-1"`) skip switching. See `src/core/model_registry.py` for the alias table.
 - **Model registry** (`src/core/model_registry.py`) is the single source of truth for supported model aliases. Add new models there first before referencing them anywhere else.
+- **Idle model offload** (SPEC-009): When `MODEL_IDLE_TIMEOUT_SEC > 0`, the service automatically releases the ASR model from memory after the configured idle period. The next incoming request triggers a reload (~10-30s for FunASR, ~3-5s for MLX). This prevents long-running idle services from consuming 12-23 GB of memory. Set to `0` to disable.
 
 ## Testing Notes
 - Run `uv run python -m pytest` for all tests. E2E tests (`tests/e2e/`) require the real model to be downloaded and are slow.

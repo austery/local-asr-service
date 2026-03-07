@@ -79,5 +79,11 @@ AUDIO_BITRATE = os.getenv("AUDIO_BITRATE", "64k")
 # 重叠切片配置（fallback 策略）
 CHUNK_OVERLAP_SECONDS = int(os.getenv("CHUNK_OVERLAP_SECONDS", "15"))
 
+# === 模型空闲卸载配置 ===
+# 模型空闲超时时间（秒）。超过此时间无请求，自动释放模型内存。
+# 下次请求进来时会自动重新加载（首请求有 ~10-30s 加载延迟）。
+# 设置为 0 表示禁用空闲卸载（模型永久驻留内存）。
+MODEL_IDLE_TIMEOUT_SEC = int(os.getenv("MODEL_IDLE_TIMEOUT_SEC", "60"))
+
 # Tokenizers 并行警告抑制
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")

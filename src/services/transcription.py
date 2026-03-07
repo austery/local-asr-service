@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from src.config import MODEL_IDLE_TIMEOUT_SEC
 from src.core.base_engine import ASREngine
 from src.core.factory import create_engine_for_spec
 from src.core.model_registry import ModelSpec
@@ -35,6 +36,7 @@ class TranscriptionService:
     2. 协调 Engine 进行串行推理
     3. 在两次推理之间按需热换模型
     4. 管理临时文件的生命周期
+    5. 空闲超时自动卸载模型 (SPEC-009)
     """
 
     def __init__(
@@ -42,19 +44,31 @@ class TranscriptionService:
         engine: ASREngine,
         max_queue_size: int = 50,
         initial_model_spec: ModelSpec | None = None,
+        idle_timeout: int = MODEL_IDLE_TIMEOUT_SEC,
     ):
         self.engine = engine
         self._current_model_spec = initial_model_spec
         self._engine_degraded = False
+        self._model_loaded = True  # Engine is loaded at startup by main.py
+        self._idle_timeout = idle_timeout
         self.logger = logging.getLogger(__name__)
         self.queue: asyncio.Queue[TranscriptionJob | None] = asyncio.Queue(maxsize=max_queue_size)
         self.is_running = False
         self.logger.info(f"🚦 Service initialized. Queue size: {max_queue_size}")
+        if idle_timeout > 0:
+            self.logger.info(f"💤 Idle offload enabled: model will be released after {idle_timeout}s of inactivity")
+        else:
+            self.logger.info("💤 Idle offload disabled (MODEL_IDLE_TIMEOUT_SEC=0)")
 
     @property
     def current_model_spec(self) -> ModelSpec | None:
         """The ModelSpec of the currently loaded engine (None if not tracked)."""
         return self._current_model_spec
+
+    @property
+    def model_loaded(self) -> bool:
+        """Whether the engine model is currently loaded in memory."""
+        return self._model_loaded
 
     async def start_worker(self) -> None:
         """启动后台消费者循环 (在 main.py 的 lifespan 中调用)"""
@@ -180,6 +194,7 @@ class TranscriptionService:
         # Step 3: Atomic swap (single-threaded consumer — no lock needed)
         self.engine = new_engine
         self._current_model_spec = new_spec
+        self._model_loaded = True  # New engine is freshly loaded
 
         elapsed = time.time() - switch_start
         self.logger.info(f"[{job_uid}] ✅ Model switch complete: {new_alias} ({elapsed:.2f}s)")
@@ -188,9 +203,45 @@ class TranscriptionService:
         """
         消费者循环 (Strict Serial Execution).
         This is the single thread of control for all inference — no concurrency here.
+
+        SPEC-009: When idle_timeout > 0, the loop uses asyncio.wait_for() to
+        detect idle periods. After idle_timeout seconds with no incoming jobs,
+        the model is released from memory. The next incoming job triggers a
+        reload before inference.
         """
         while self.is_running:
-            job: TranscriptionJob | None = await self.queue.get()
+            # === Wait for next job (with optional idle timeout) ===
+            try:
+                if self._idle_timeout > 0:
+                    job = await asyncio.wait_for(
+                        self.queue.get(), timeout=self._idle_timeout
+                    )
+                else:
+                    job = await self.queue.get()
+            except asyncio.TimeoutError:
+                # Idle timeout reached — offload model to free memory (SPEC-009)
+                if self._model_loaded:
+                    model_alias = (
+                        self._current_model_spec.alias
+                        if self._current_model_spec
+                        else "unknown"
+                    )
+                    self.logger.info(
+                        f"💤 Idle timeout ({self._idle_timeout}s) reached. "
+                        f"Offloading model '{model_alias}' to free memory..."
+                    )
+                    try:
+                        await run_in_threadpool(self.engine.release)
+                        self._model_loaded = False
+                        self.logger.info(
+                            f"✅ Model '{model_alias}' offloaded. "
+                            f"Will reload on next request."
+                        )
+                    except Exception as e:
+                        self.logger.error(
+                            f"❌ Failed to offload model: {e}", exc_info=True
+                        )
+                continue  # Back to waiting for next job
 
             if job is None:
                 break
@@ -210,7 +261,28 @@ class TranscriptionService:
                 # === Model switch check (before inference) ===
                 requested = job.requested_model_spec
                 if requested is not None and requested != self._current_model_spec:
+                    # _switch_model handles its own release/load cycle and sets
+                    # _model_loaded = True. If the model was already offloaded,
+                    # release() is a no-op (guarded by `if self.model:` in engines).
                     await self._switch_model(requested, job.uid)
+                elif not self._model_loaded:
+                    # Model was offloaded due to idle timeout — reload it (SPEC-009)
+                    model_alias = (
+                        self._current_model_spec.alias
+                        if self._current_model_spec
+                        else "unknown"
+                    )
+                    self.logger.info(
+                        f"[{job.uid}] 🔄 Reloading model '{model_alias}' "
+                        f"(was offloaded due to idle timeout)..."
+                    )
+                    reload_start = time.time()
+                    await run_in_threadpool(self.engine.load)
+                    self._model_loaded = True
+                    reload_time = time.time() - reload_start
+                    self.logger.info(
+                        f"[{job.uid}] ✅ Model '{model_alias}' reloaded in {reload_time:.2f}s"
+                    )
 
                 # === Core inference ===
                 output_format = job.params.get("output_format", "txt")
