@@ -46,10 +46,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info(f"📋 Engine type: {ENGINE_TYPE}")
     logger.info(f"📋 Model ID: {get_model_id()}")
     logger.warning("⚠️  Running with workers=1 (REQUIRED for Mac Silicon to prevent OOM)")
-    if MODEL_IDLE_TIMEOUT_SEC > 0:
-        logger.info(f"💤 Idle offload: model will release after {MODEL_IDLE_TIMEOUT_SEC}s of inactivity")
-    else:
-        logger.info("💤 Idle offload: DISABLED (MODEL_IDLE_TIMEOUT_SEC=0)")
 
     # 1. 使用工厂创建引擎
     engine = create_engine()
@@ -79,6 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine=engine,
         max_queue_size=MAX_QUEUE_SIZE,
         initial_model_spec=initial_spec,
+        idle_timeout=MODEL_IDLE_TIMEOUT_SEC,
     )
 
     # 4. 启动后台消费者

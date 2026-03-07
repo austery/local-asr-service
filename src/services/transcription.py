@@ -10,7 +10,6 @@ from typing import Any
 from fastapi import UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from src.config import MODEL_IDLE_TIMEOUT_SEC
 from src.core.base_engine import ASREngine
 from src.core.factory import create_engine_for_spec
 from src.core.model_registry import ModelSpec
@@ -44,7 +43,7 @@ class TranscriptionService:
         engine: ASREngine,
         max_queue_size: int = 50,
         initial_model_spec: ModelSpec | None = None,
-        idle_timeout: int = MODEL_IDLE_TIMEOUT_SEC,
+        idle_timeout: int = 60,
     ):
         self.engine = engine
         self._current_model_spec = initial_model_spec
@@ -239,8 +238,15 @@ class TranscriptionService:
                         )
                     except Exception as e:
                         self.logger.error(
-                            f"❌ Failed to offload model: {e}", exc_info=True
+                            f"❌ Failed to offload model '{model_alias}': {e}. "
+                            f"Engine state is unknown — marking as unloaded to force reload on next request.",
+                            exc_info=True,
                         )
+                        # Force the reload path on the next incoming job. If the engine is
+                        # still intact, load() is typically a no-op; if it's broken, the
+                        # next job fails with a clear "reload failed" message instead of a
+                        # cryptic transcribe crash.
+                        self._model_loaded = False
                 continue  # Back to waiting for next job
 
             if job is None:
@@ -277,7 +283,17 @@ class TranscriptionService:
                         f"(was offloaded due to idle timeout)..."
                     )
                     reload_start = time.time()
-                    await run_in_threadpool(self.engine.load)
+                    try:
+                        await run_in_threadpool(self.engine.load)
+                    except Exception as load_err:
+                        self.logger.error(
+                            f"[{job.uid}] ❌ Failed to reload model '{model_alias}' "
+                            f"after idle offload: {load_err}",
+                            exc_info=True,
+                        )
+                        raise RuntimeError(
+                            f"Model reload failed for '{model_alias}' after idle offload: {load_err}"
+                        ) from load_err
                     self._model_loaded = True
                     reload_time = time.time() - reload_start
                     self.logger.info(
