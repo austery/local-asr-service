@@ -111,6 +111,7 @@ MAX_QUEUE_SIZE=50
 MAX_UPLOAD_SIZE_MB=200
 ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
 LOG_LEVEL=INFO
+MODEL_IDLE_TIMEOUT_SEC=60     # Worker auto-terminates after idle period (0 = disabled, worker stays resident)
 
 # Audio processing (MLX engine only)
 MAX_AUDIO_DURATION_MINUTES=50   # Auto-chunk audio longer than this
@@ -143,6 +144,32 @@ uv run python benchmarks/run.py                      # default fixture
 uv run python benchmarks/run.py --file path/to.wav   # specific file
 uv run python benchmarks/run.py --all --save --compare  # compare all models, save JSON
 ```
+
+---
+
+## Memory Management
+
+This service is designed for Apple Silicon M-series chips with unified memory. Model memory consumption is **17–23 GB** during transcription.
+
+### Idle Model Offloading (SPEC-009 v2)
+
+By default (`MODEL_IDLE_TIMEOUT_SEC=60`), the ASR model runs in an isolated child subprocess. When idle for 60+ seconds with no pending requests, the subprocess self-terminates, allowing the OS to reclaim all memory (including the PyTorch MPS Metal heap).
+
+**Memory profile:**
+- **Startup** (before first request): ~150 MB
+- **Transcribing** (model active): ~20–23 GB
+- **Idle** (after 60s timeout): < 500 MB
+
+**When the next request arrives**, a new subprocess is spawned and the model reloaded:
+- FunASR: ~10–30s reload (warm cache)
+- MLX: ~3–5s reload
+
+To disable idle termination (keep model resident):
+```bash
+MODEL_IDLE_TIMEOUT_SEC=0 uv run python -m src.main
+```
+
+**Design rationale**: In-process `release()` calls (SPEC-009 v1) could only drop memory from 23 GB to 15–18 GB because PyTorch's MPS allocator retains its Metal heap. Process termination ensures complete memory reclamation.
 
 ---
 
