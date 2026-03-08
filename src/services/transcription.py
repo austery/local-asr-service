@@ -109,7 +109,7 @@ class TranscriptionService:
                     await self._spawn_worker()
 
             assert self._job_queue is not None
-            self._job_queue.put(WorkerJob(
+            self._job_queue.put_nowait(WorkerJob(
                 uid=request_id,
                 temp_file_path=temp_path,
                 params=params,
@@ -123,16 +123,20 @@ class TranscriptionService:
             raise
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
-        self._job_queue: multiprocessing.Queue[WorkerJob | None] = multiprocessing.Queue()
-        self._result_queue: multiprocessing.Queue[tuple[Any, ...]] = multiprocessing.Queue()
+        self._job_queue = multiprocessing.Queue()
+        self._result_queue = multiprocessing.Queue()
+
+        effective_spec = model_spec or self._current_model_spec
+        engine_type = effective_spec.engine_type if effective_spec else self._engine_type
+        model_id = effective_spec.model_id if effective_spec else self._model_id
 
         self._worker = multiprocessing.Process(
             target=run_worker,
             args=(
                 self._job_queue,
                 self._result_queue,
-                self._engine_type,
-                self._model_id,
+                engine_type,
+                model_id,
                 self._idle_timeout,
             ),
             daemon=True,
@@ -175,6 +179,14 @@ class TranscriptionService:
         await self._spawn_worker(new_spec)
 
     async def _shutdown_worker(self) -> None:
+        for uid, fut in list(self._pending.items()):
+            if not fut.done():
+                fut.set_exception(RuntimeError("Worker terminated (model switch or shutdown)"))
+        self._pending.clear()
+        for temp_dir in self._temp_dirs.values():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        self._temp_dirs.clear()
+
         if self._worker is None:
             return
 
@@ -218,7 +230,9 @@ class TranscriptionService:
             elif msg_type == "IDLE_EXIT":
                 self.logger.info("💤 Worker exited due to idle timeout — memory reclaimed by OS")
                 if self._worker:
-                    self._worker.join(timeout=1)
+                    worker = self._worker
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, lambda: worker.join(timeout=1))
                 self._worker = None
 
     def _resolve_future(self, uid: str, result: Any = None, error: Exception | None = None) -> None:
