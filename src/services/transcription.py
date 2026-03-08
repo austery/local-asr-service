@@ -153,7 +153,12 @@ class TranscriptionService:
         if msg[0] == "LOAD_ERROR":
             self._worker.terminate()
             self._worker = None
-            raise RuntimeError(f"Worker model load failed: {msg[1]}")
+            raise RuntimeError(f"Worker failed to load model: {msg[1]}")
+
+        if msg[0] != "READY":
+            self._worker.terminate()
+            self._worker = None
+            raise RuntimeError(f"Worker sent unexpected startup message: {msg!r}")
 
         if model_spec is not None:
             self._current_model_spec = model_spec
