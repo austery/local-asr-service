@@ -1,25 +1,20 @@
 """
-Unit tests for idle model offload in TranscriptionService (SPEC-009, cases IO-1..IO-8).
-
-Uses mock engines — the observable behavior under test is the job result and
-the sequence of release/load calls triggered by idle timeouts.
+Unit tests for TranscriptionService subprocess management (SPEC-009 v2).
 """
-
 import asyncio
-from collections.abc import Callable
+import queue as _stdlib_queue
 from io import BytesIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import UploadFile
 
-from src.core.model_registry import ModelSpec, lookup
+from src.core.model_registry import lookup
 from src.services.transcription import TranscriptionService
 
 
-@pytest.fixture
-def mlx_spec():
-    return lookup("qwen3-asr")
+def _make_upload() -> UploadFile:
+    return UploadFile(file=BytesIO(b"audio"), filename="test.wav")
 
 
 @pytest.fixture
@@ -27,300 +22,187 @@ def funasr_spec():
     return lookup("paraformer")
 
 
-def _make_engine(return_value: object = None) -> MagicMock:
-    engine = MagicMock()
-    engine.transcribe_file.return_value = return_value or {"text": "hello", "segments": None}
-    engine.release.return_value = None
-    engine.load.return_value = None
-    return engine
-
-
-def _make_upload_file() -> UploadFile:
-    return UploadFile(file=BytesIO(b"fake audio"), filename="test.wav")
-
-
-async def _wait_until(condition: "Callable[[], bool]", timeout: float = 5.0, interval: float = 0.05) -> None:
-    """Poll until condition() is True or timeout is exceeded."""
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        if condition():
-            return
-        await asyncio.sleep(interval)
-    pytest.fail(f"Condition not met within {timeout}s")
-
-
-async def _run_job(
-    service: TranscriptionService,
-    model_spec: ModelSpec | None = None,
-    upload: UploadFile | None = None,
-) -> str | dict[str, object]:
-    """Helper: start worker, submit one job, stop worker, return result."""
-    service.is_running = True
-    worker = asyncio.create_task(service._consume_loop())
-    try:
-        return await service.submit(
-            upload or _make_upload_file(),
-            params={"language": "auto", "output_format": "json"},
-            request_id="test",
-            model_spec=model_spec,
-        )
-    finally:
-        await service.stop_worker()
-        await asyncio.wait_for(worker, timeout=5.0)
-
-
 @pytest.mark.asyncio
-class TestIdleOffload:
-    # IO-1: Model is released after idle timeout expires
-    async def test_should_release_model_after_idle_timeout(self, mlx_spec) -> None:
-        engine = _make_engine()
+class TestTranscriptionServiceSubprocess:
+
+    async def test_model_loaded_false_when_no_worker(self, funasr_spec):
+        """model_loaded is False when no worker process exists."""
         service = TranscriptionService(
-            engine=engine,
-            max_queue_size=5,
-            initial_model_spec=mlx_spec,
-            idle_timeout=1,  # 1 second for fast test
+            engine_type="funasr",
+            model_id=funasr_spec.model_id,
+            initial_model_spec=funasr_spec,
         )
-        assert service.model_loaded is True
-
-        service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
-
-        # Poll until offload completes instead of sleeping a fixed duration
-        await _wait_until(lambda: not service.model_loaded)
-
-        engine.release.assert_called_once()
         assert service.model_loaded is False
 
-        # Clean up
-        await service.stop_worker()
-        await asyncio.wait_for(worker, timeout=5.0)
-
-    # IO-2: Model is re-loaded on next request after offload
-    async def test_should_reload_model_on_next_request_after_offload(
-        self, mlx_spec
-    ) -> None:
-        engine = _make_engine()
+    async def test_model_loaded_true_when_worker_alive(self, funasr_spec):
+        """model_loaded is True when worker process is running."""
         service = TranscriptionService(
-            engine=engine,
-            max_queue_size=5,
-            initial_model_spec=mlx_spec,
-            idle_timeout=1,
+            engine_type="funasr",
+            model_id=funasr_spec.model_id,
+            initial_model_spec=funasr_spec,
         )
-
-        service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
-
-        # Poll until offload completes
-        await _wait_until(lambda: not service.model_loaded)
-        engine.release.assert_called_once()
-
-        # Now submit a job — should reload model first, then transcribe
-        result = await service.submit(
-            _make_upload_file(),
-            params={"language": "auto", "output_format": "json"},
-            request_id="reload-test",
-        )
-
-        # Model should be reloaded
-        engine.load.assert_called_once()
+        mock_proc = MagicMock()
+        mock_proc.is_alive.return_value = True
+        service._worker = mock_proc
         assert service.model_loaded is True
 
-        # Job should succeed
-        assert isinstance(result, dict)
-        assert result["text"] == "hello"
+    async def test_capabilities_from_model_spec(self, funasr_spec):
+        """capabilities returns current_model_spec.capabilities without an engine."""
+        service = TranscriptionService(
+            engine_type="funasr",
+            model_id=funasr_spec.model_id,
+            initial_model_spec=funasr_spec,
+        )
+        assert service.capabilities == funasr_spec.capabilities
+
+    async def test_submit_resolves_future_via_result_queue(self, funasr_spec):
+        """submit() resolves when RESULT arrives on result_queue."""
+        service = TranscriptionService(
+            engine_type="funasr",
+            model_id=funasr_spec.model_id,
+            initial_model_spec=funasr_spec,
+            idle_timeout=0,
+        )
+        service.is_running = True
+
+        # Inject mock worker infrastructure
+        mock_proc = MagicMock()
+        mock_proc.is_alive.return_value = True
+        service._worker = mock_proc
+
+        import multiprocessing
+        service._job_queue = multiprocessing.Queue()
+        service._result_queue = multiprocessing.Queue()
+
+        # Mock _spawn_worker so submit() doesn't actually spawn a process
+        async def _fake_spawn(model_spec=None):
+            pass
+
+        expected_result = {"text": "hello", "segments": None, "duration": 1.0}
+
+        async def _deliver_result():
+            await asyncio.sleep(0.05)
+            service._result_queue.put(("RESULT", "req-1", expected_result))
+
+        service._result_reader_task = asyncio.create_task(service._result_reader_loop())
+        asyncio.create_task(_deliver_result())
+
+        with patch.object(service, "_spawn_worker", side_effect=_fake_spawn):
+            result = await service.submit(_make_upload(), {"language": "auto", "output_format": "json"}, request_id="req-1")
+
+        assert result == expected_result
+        await service.stop_worker()
+
+    async def test_submit_raises_on_worker_error(self, funasr_spec):
+        """submit() raises RuntimeError when ERROR arrives on result_queue."""
+        service = TranscriptionService(
+            engine_type="funasr",
+            model_id=funasr_spec.model_id,
+            initial_model_spec=funasr_spec,
+            idle_timeout=0,
+        )
+        service.is_running = True
+
+        mock_proc = MagicMock()
+        mock_proc.is_alive.return_value = True
+        service._worker = mock_proc
+
+        import multiprocessing
+        service._job_queue = multiprocessing.Queue()
+        service._result_queue = multiprocessing.Queue()
+
+        async def _fake_spawn(model_spec=None):
+            pass
+
+        async def _deliver_error():
+            await asyncio.sleep(0.05)
+            service._result_queue.put(("ERROR", "req-err", "GPU exploded"))
+
+        service._result_reader_task = asyncio.create_task(service._result_reader_loop())
+        asyncio.create_task(_deliver_error())
+
+        with patch.object(service, "_spawn_worker", side_effect=_fake_spawn):
+            with pytest.raises(RuntimeError, match="GPU exploded"):
+                await service.submit(_make_upload(), {"language": "auto"}, request_id="req-err")
 
         await service.stop_worker()
-        await asyncio.wait_for(worker, timeout=5.0)
 
-    # IO-3: Idle offload disabled when timeout = 0
-    async def test_should_not_offload_when_timeout_is_zero(self, mlx_spec) -> None:
-        engine = _make_engine()
+    async def test_idle_exit_clears_worker_reference(self, funasr_spec):
+        """IDLE_EXIT message causes worker reference to be cleared."""
         service = TranscriptionService(
-            engine=engine,
-            max_queue_size=5,
-            initial_model_spec=mlx_spec,
-            idle_timeout=0,  # Disabled
+            engine_type="funasr",
+            model_id=funasr_spec.model_id,
+            initial_model_spec=funasr_spec,
         )
-
+        mock_proc = MagicMock()
+        mock_proc.is_alive.return_value = False
+        service._worker = mock_proc
         service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
 
-        # Wait a bit — model should NOT be released
-        await asyncio.sleep(0.5)
+        import multiprocessing
+        result_q = multiprocessing.Queue()
+        result_q.put(("IDLE_EXIT", None))
+        service._result_queue = result_q
 
-        engine.release.assert_not_called()
-        assert service.model_loaded is True
-
-        await service.stop_worker()
-        await asyncio.wait_for(worker, timeout=5.0)
-
-    # IO-4: Idle timer resets after each successful transcription
-    async def test_should_reset_idle_timer_after_transcription(self, mlx_spec) -> None:
-        engine = _make_engine()
-        service = TranscriptionService(
-            engine=engine,
-            max_queue_size=5,
-            initial_model_spec=mlx_spec,
-            idle_timeout=2,  # 2 seconds
-        )
-
-        service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
-
+        task = asyncio.create_task(service._result_reader_loop())
+        await asyncio.sleep(0.15)
+        task.cancel()
         try:
-            # Submit a job at t=0 — resets the idle timer
-            await service.submit(
-                _make_upload_file(),
-                params={"language": "auto", "output_format": "json"},
-                request_id="timer-reset-1",
-            )
+            await task
+        except asyncio.CancelledError:
+            pass
 
-            # Wait 1s (less than 2s timeout) — submit another job
-            await asyncio.sleep(1.0)
-            await service.submit(
-                _make_upload_file(),
-                params={"language": "auto", "output_format": "json"},
-                request_id="timer-reset-2",
-            )
+        assert service._worker is None
 
-            # Wait 1s more (total 2s since last job, but timer was reset)
-            await asyncio.sleep(1.0)
-
-            # Model should still be loaded (timer reset after each job)
-            assert service.model_loaded is True
-            engine.release.assert_not_called()
-
-        finally:
-            await service.stop_worker()
-            await asyncio.wait_for(worker, timeout=5.0)
-
-    # IO-5: Model switch after offload works correctly
-    async def test_should_handle_model_switch_after_offload(
-        self, mlx_spec, funasr_spec
-    ) -> None:
-        engine = _make_engine()
+    async def test_switch_worker_called_for_different_model(self, funasr_spec):
+        """submit() calls _switch_worker when model_spec differs from current."""
+        mlx_spec = lookup("qwen3-asr")
         service = TranscriptionService(
-            engine=engine,
-            max_queue_size=5,
-            initial_model_spec=mlx_spec,
-            idle_timeout=1,
+            engine_type="funasr",
+            model_id=funasr_spec.model_id,
+            initial_model_spec=funasr_spec,
+            idle_timeout=0,
         )
-
         service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
 
-        # Wait for idle timeout to offload
-        await _wait_until(lambda: not service.model_loaded)
-        assert service.model_loaded is False
+        mock_proc = MagicMock()
+        mock_proc.is_alive.return_value = True
+        service._worker = mock_proc
 
-        # Now submit a job with a DIFFERENT model — triggers _switch_model
-        new_engine = _make_engine({"text": "switched after offload", "segments": None})
+        import multiprocessing
+        service._job_queue = multiprocessing.Queue()
+        service._result_queue = multiprocessing.Queue()
 
-        with patch(
-            "src.services.transcription.create_engine_for_spec",
-            return_value=new_engine,
-        ):
-            result = await service.submit(
-                _make_upload_file(),
-                params={"language": "auto", "output_format": "json"},
-                request_id="switch-after-offload",
-                model_spec=funasr_spec,
-            )
+        async def _fake_switch(spec):
+            service._current_model_spec = spec
 
-        # Switch should have happened, model is loaded
-        assert service.model_loaded is True
-        assert service.current_model_spec == funasr_spec
-        assert isinstance(result, dict)
-        assert result["text"] == "switched after offload"
-        # release() was called twice: once by idle offload, once by _switch_model (no-op on
-        # already-offloaded engine, but the call is still made per SPEC-108 §5 invariant).
-        assert engine.release.call_count == 2
+        async def _deliver_result():
+            await asyncio.sleep(0.05)
+            service._result_queue.put(("RESULT", "req-switch", {"text": "ok", "segments": None, "duration": 1.0}))
+
+        service._result_reader_task = asyncio.create_task(service._result_reader_loop())
+        asyncio.create_task(_deliver_result())
+
+        with patch.object(service, "_switch_worker", side_effect=_fake_switch) as mock_switch:
+            await service.submit(_make_upload(), {"language": "auto", "output_format": "json"}, request_id="req-switch", model_spec=mlx_spec)
+            mock_switch.assert_called_once_with(mlx_spec)
 
         await service.stop_worker()
-        await asyncio.wait_for(worker, timeout=5.0)
 
-    # IO-6: release() failure marks model as unloaded (forces reload on next job)
-    async def test_should_mark_model_unloaded_when_release_fails(self, mlx_spec) -> None:
-        engine = _make_engine()
-        engine.release.side_effect = RuntimeError("GPU flush failed")
+    async def test_queue_full_raises(self, funasr_spec):
+        """submit() raises when pending queue is at max capacity."""
         service = TranscriptionService(
-            engine=engine,
-            max_queue_size=5,
-            initial_model_spec=mlx_spec,
-            idle_timeout=1,
+            engine_type="funasr",
+            model_id=funasr_spec.model_id,
+            initial_model_spec=funasr_spec,
+            max_queue_size=2,
         )
+        # Fill pending manually
+        loop = asyncio.get_running_loop()
+        service._pending["a"] = loop.create_future()
+        service._pending["b"] = loop.create_future()
 
-        service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
+        with pytest.raises(RuntimeError, match="Queue is full"):
+            await service.submit(_make_upload(), {}, request_id="c")
 
-        # Wait for timeout + release attempt (which will fail)
-        await _wait_until(lambda: engine.release.called)
 
-        # Despite release() failing, model_loaded must be False so the next
-        # job goes through the reload path rather than calling transcribe on
-        # a potentially broken engine.
-        assert service.model_loaded is False
-
-        await service.stop_worker()
-        await asyncio.wait_for(worker, timeout=5.0)
-
-    # IO-7: load() failure during reload raises to caller, model stays unloaded
-    async def test_should_raise_and_keep_model_unloaded_when_reload_fails(
-        self, mlx_spec
-    ) -> None:
-        engine = _make_engine()
-        service = TranscriptionService(
-            engine=engine,
-            max_queue_size=5,
-            initial_model_spec=mlx_spec,
-            idle_timeout=1,
-        )
-
-        service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
-
-        # Wait for idle offload to complete first
-        await _wait_until(lambda: not service.model_loaded)
-
-        # Now make load fail for the reload attempt
-        engine.load.side_effect = RuntimeError("OOM on reload")
-
-        # Submit a job — reload will fail, job should raise RuntimeError
-        with pytest.raises(RuntimeError, match="Model reload failed"):
-            await service.submit(
-                _make_upload_file(),
-                params={"language": "auto", "output_format": "json"},
-                request_id="reload-fail",
-            )
-
-        # State: still unloaded so next job can retry reload
-        assert service.model_loaded is False
-
-        await service.stop_worker()
-        await asyncio.wait_for(worker, timeout=5.0)
-
-    # IO-8: Consecutive idle timeouts do NOT double-release (_model_loaded guard)
-    async def test_should_not_double_release_on_consecutive_timeouts(
-        self, mlx_spec
-    ) -> None:
-        engine = _make_engine()
-        service = TranscriptionService(
-            engine=engine,
-            max_queue_size=5,
-            initial_model_spec=mlx_spec,
-            idle_timeout=1,
-        )
-
-        service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
-
-        # Wait for first offload, then wait for a second timeout cycle to pass
-        await _wait_until(lambda: not service.model_loaded)
-        await asyncio.sleep(1.5)  # Let a second timeout fire
-
-        # release() must have been called exactly once despite two timeout cycles
-        assert engine.release.call_count == 1
-        assert service.model_loaded is False
-
-        await service.stop_worker()
-        await asyncio.wait_for(worker, timeout=5.0)
