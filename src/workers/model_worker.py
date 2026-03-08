@@ -74,6 +74,12 @@ def run_worker(
         idle_timeout: Seconds to wait for a job before triggering IDLE_EXIT.
                       0 means block indefinitely (no idle timeout).
     """
+    logging.basicConfig(
+        level="INFO",
+        format="[worker] %(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     engine = create_engine(engine_type, model_id)
 
     try:
@@ -95,7 +101,12 @@ def run_worker(
             sys.exit(0)
 
         if job is None:
-            break
+            logger.info("Received shutdown sentinel — releasing model and exiting")
+            try:
+                engine.release()
+            except Exception:
+                pass
+            sys.exit(0)
 
         try:
             result = engine.transcribe_file(
