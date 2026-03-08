@@ -108,21 +108,30 @@ class TranscriptionService:
                 elif not self.model_loaded:
                     await self._spawn_worker()
 
-            assert self._job_queue is not None
-            self._job_queue.put_nowait(WorkerJob(
-                uid=request_id,
-                temp_file_path=temp_path,
-                params=params,
-            ))
+                if self._job_queue is None:
+                    raise RuntimeError("Job queue is None after successful spawn — this is a bug")
+                self._job_queue.put_nowait(WorkerJob(
+                    uid=request_id,
+                    temp_file_path=temp_path,
+                    params=params,
+                ))
 
             return await future
 
-        except Exception:
+        except BaseException:
             self._pending.pop(request_id, None)
             self._cleanup_temp(request_id)
             raise
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
+        for old_q in (self._job_queue, self._result_queue):
+            if old_q is not None:
+                try:
+                    old_q.close()
+                    old_q.join_thread()
+                except Exception:
+                    pass
+
         self._job_queue = multiprocessing.Queue()
         self._result_queue = multiprocessing.Queue()
 
@@ -212,6 +221,7 @@ class TranscriptionService:
 
     async def _result_reader_loop(self) -> None:
         """Polls result_queue (non-blocking) every 50ms, resolves pending Futures."""
+        _liveness_ticks = 0
         while self.is_running:
             if self._result_queue is None:
                 await asyncio.sleep(0.05)
@@ -219,21 +229,48 @@ class TranscriptionService:
             try:
                 msg = self._result_queue.get_nowait()
             except _stdlib_queue.Empty:
+                _liveness_ticks += 1
+                if _liveness_ticks >= 20:  # check liveness ~every 1s
+                    _liveness_ticks = 0
+                    if self._worker is not None and not self._worker.is_alive() and self._pending:
+                        exit_code = self._worker.exitcode
+                        self.logger.error(
+                            "Worker process died unexpectedly (exit code %s) with %d pending job(s) — failing all",
+                            exit_code,
+                            len(self._pending),
+                        )
+                        self._fail_all_pending(
+                            RuntimeError(f"Worker process died unexpectedly (exit code {exit_code})")
+                        )
+                        self._worker = None
                 await asyncio.sleep(0.05)
                 continue
 
-            msg_type: str = msg[0]
-            if msg_type == "RESULT":
-                self._resolve_future(msg[1], result=msg[2])
-            elif msg_type == "ERROR":
-                self._resolve_future(msg[1], error=RuntimeError(msg[2]))
-            elif msg_type == "IDLE_EXIT":
-                self.logger.info("💤 Worker exited due to idle timeout — memory reclaimed by OS")
-                if self._worker:
-                    worker = self._worker
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, lambda: worker.join(timeout=1))
-                self._worker = None
+            try:
+                msg_type: str = msg[0]
+                if msg_type == "RESULT":
+                    self._resolve_future(msg[1], result=msg[2])
+                elif msg_type == "ERROR":
+                    self._resolve_future(msg[1], error=RuntimeError(msg[2]))
+                elif msg_type == "IDLE_EXIT":
+                    self.logger.info("💤 Worker exited due to idle timeout — memory reclaimed by OS")
+                    if self._worker:
+                        worker = self._worker
+                        loop = asyncio.get_running_loop()
+                        await loop.run_in_executor(None, lambda: worker.join(timeout=1))
+                    self._worker = None
+            except Exception:
+                self.logger.exception("Unexpected error processing IPC message: %r", msg)
+
+    def _fail_all_pending(self, error: Exception) -> None:
+        """Fail all in-flight futures with the given error (e.g., after worker crash)."""
+        for uid, fut in list(self._pending.items()):
+            if not fut.done():
+                fut.set_exception(error)
+        self._pending.clear()
+        for temp_dir in self._temp_dirs.values():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        self._temp_dirs.clear()
 
     def _resolve_future(self, uid: str, result: Any = None, error: Exception | None = None) -> None:
         future = self._pending.pop(uid, None)

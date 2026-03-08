@@ -17,7 +17,10 @@ import sys
 from dataclasses import dataclass, field
 from multiprocessing import Queue
 from multiprocessing.reduction import ForkingPickler
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.core.base_engine import ASREngine
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,7 @@ class WorkerJob:
     requested_model_spec_alias: str | None = field(default=None)
 
 
-def create_engine(engine_type: str, model_id: str) -> Any:
+def create_engine(engine_type: str, model_id: str) -> "ASREngine":
     """Thin wrapper around the factory; imported lazily to keep this module
     importable in the main process without triggering heavy ML framework loads."""
     from src.core.factory import _create_by_type  # noqa: PLC0415
@@ -58,8 +61,8 @@ def _sync_put(q: Queue, item: Any) -> None:
 
 
 def run_worker(
-    job_queue: Any,
-    result_queue: Any,
+    job_queue: "Queue[WorkerJob | None]",
+    result_queue: "Queue[tuple[str, Any]]",
     engine_type: str,
     model_id: str,
     idle_timeout: float,
@@ -80,9 +83,8 @@ def run_worker(
         datefmt="%H:%M:%S",
     )
 
-    engine = create_engine(engine_type, model_id)
-
     try:
+        engine = create_engine(engine_type, model_id)
         engine.load()
     except Exception as exc:
         _sync_put(result_queue, ("LOAD_ERROR", str(exc)))
@@ -96,7 +98,10 @@ def run_worker(
         try:
             job: WorkerJob | None = job_queue.get(timeout=get_timeout)
         except queue.Empty:
-            engine.release()
+            try:
+                engine.release()
+            except Exception:
+                logger.warning("engine.release() failed during idle timeout — proceeding with IDLE_EXIT", exc_info=True)
             _sync_put(result_queue, ("IDLE_EXIT", None))
             sys.exit(0)
 
@@ -105,7 +110,7 @@ def run_worker(
             try:
                 engine.release()
             except Exception:
-                pass
+                logger.warning("engine.release() failed during shutdown", exc_info=True)
             sys.exit(0)
 
         try:
@@ -114,7 +119,7 @@ def run_worker(
                 language=job.params.get("language", "auto"),
                 output_format=job.params.get("output_format", "txt"),
                 with_timestamp=job.params.get("with_timestamp", False),
-                use_itn=True,
+                use_itn=job.params.get("use_itn", True),
             )
             _sync_put(result_queue, ("RESULT", job.uid, result))
         except Exception as exc:
