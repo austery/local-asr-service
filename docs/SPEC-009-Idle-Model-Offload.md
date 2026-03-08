@@ -1,10 +1,10 @@
 ---
 specId: SPEC-009
 title: Idle Model Offload (Memory Pressure Relief)
-status: 📝 草案 (Draft)
+status: ✅ 已完成 v2 (Completed — Subprocess Isolation)
 priority: P1 - Core Feature
 creationDate: 2026-03-06
-lastUpdateDate: 2026-03-06
+lastUpdateDate: 2026-03-08
 owner: User (AI-Assisted)
 relatedSpecs:
   - SPEC-002
@@ -187,8 +187,31 @@ Case 4: Model loaded → same model request (normal path)
 | Date | Status | Note |
 |------|--------|------|
 | 2026-03-06 | 📝 草案 (Draft) | Initial draft based on memory audit findings |
+| 2026-03-08 | ✅ 已完成 v2 | Subprocess isolation implemented; SPEC-009 v2 closes the MPS memory reclamation gap |
 
-## 10. Related
+## 10. v2 Revision (2026-03-08)
+
+### Problem with v1
+
+SPEC-009 v1 implemented idle model offload via `release()` + `torch.mps.empty_cache()` + `gc.collect()`.
+
+After implementation, Activity Monitor showed memory dropped from ~23 GB to only ~15–18 GB when idle — far above the < 1 GB target.
+
+**Root cause**: PyTorch's MPS allocator maintains its own Metal heap pool. Even after deleting all model references and calling `empty_cache()`, macOS does not reclaim the MPS heap from within the running process.
+
+### v2 Solution: Subprocess Isolation
+
+The ASR model is moved into a child subprocess (`src/workers/model_worker.py`). `TranscriptionService` manages the subprocess lifecycle. When the worker exits (idle timeout), the OS forcibly reclaims all memory including the MPS Metal heap.
+
+**Target memory profile:**
+- Startup (before first request): ~150 MB
+- During transcription: ~20–23 GB
+- After idle timeout: < 500 MB
+
+**Design doc**: `docs/plans/2026-03-08-subprocess-model-isolation-design.md`
+**Implementation plan**: `docs/plans/2026-03-08-subprocess-model-isolation.md`
+
+## 11. Related
 
 - **Code**: `src/services/transcription.py` (primary change site)
 - **Code**: `src/core/funasr_engine.py` (`release()` implementation)
