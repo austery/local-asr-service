@@ -193,8 +193,7 @@ async def create_transcription(
     if resolved_spec is not None:
         caps = resolved_spec.capabilities
     else:
-        # Use the live service engine (not app.state.engine which is a stale startup snapshot).
-        caps = request.app.state.service.engine.capabilities
+        caps = request.app.state.service.capabilities
 
     model_label: str = (
         resolved_spec.alias
@@ -353,7 +352,7 @@ async def get_current_model(request: Request) -> dict[str, object]:
         "model_alias": current_spec.alias if current_spec else None,
         # Use current_spec.capabilities for consistency — avoids a transient mismatch
         # between current_spec and service.engine during a model switch.
-        "capabilities": asdict(current_spec.capabilities) if current_spec else asdict(service.engine.capabilities),
+        "capabilities": asdict(current_spec.capabilities) if current_spec else asdict(service.capabilities),
         "queue_size": service.queue.qsize(),
         "max_queue_size": service.queue.maxsize,
     }
