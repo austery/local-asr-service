@@ -63,6 +63,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         idle_timeout=MODEL_IDLE_TIMEOUT_SEC,
     )
 
+    await service.start_worker()
+    logger.info(f"💤 Idle timeout: {MODEL_IDLE_TIMEOUT_SEC}s (0 = disabled)")
+
     # 3. 依赖注入（engine_type/model_id 保留供 health check 和降级路径使用）
     app.state.service = service
     app.state.engine_type = ENGINE_TYPE
