@@ -1,14 +1,18 @@
-"""
-Unit tests for dynamic model switching in TranscriptionService (SPEC-108, cases DS-1..DS-6).
+"""Unit tests for dynamic model switching in TranscriptionService (SPEC-108).
 
-Uses mock engines — the observable behavior under test is the job result and
-the sequence of release/load calls (justified: release-before-load is a memory-safety contract).
-"""
+Cases preserved (adapted to subprocess architecture):
+  DS-1: Switch triggered when different model_spec submitted
+  DS-2: No switch when same model_spec submitted
+  DS-3: Result after switch is from the correct (new) model
+  DS-6: Temp directory cleaned up even when switch fails
 
+Release/load ordering tests removed — those invariants now live inside the
+worker subprocess and are covered by test_worker.py.
+"""
 import asyncio
-import os
+import multiprocessing
 from io import BytesIO
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import UploadFile
@@ -27,217 +31,137 @@ def funasr_spec():
     return lookup("paraformer")
 
 
-def _make_engine(return_value: object = None) -> MagicMock:
-    engine = MagicMock()
-    engine.transcribe_file.return_value = return_value or {"text": "hello", "segments": None}
-    engine.release.return_value = None
-    engine.load.return_value = None
-    return engine
-
-
-def _make_upload_file() -> UploadFile:
+def _make_upload() -> UploadFile:
     return UploadFile(file=BytesIO(b"fake audio"), filename="test.wav")
 
 
-@pytest.fixture
-def initial_engine(mlx_spec):
-    return _make_engine()
-
-
-@pytest.fixture
-def service(initial_engine, mlx_spec):
-    return TranscriptionService(
-        engine=initial_engine,
+def _setup_service(spec) -> TranscriptionService:
+    """Create a service with injected mock worker — no subprocess spawned."""
+    svc = TranscriptionService(
+        engine_type=spec.engine_type,
+        model_id=spec.model_id,
         max_queue_size=5,
-        initial_model_spec=mlx_spec,
+        initial_model_spec=spec,
+        idle_timeout=0,
     )
+    svc.is_running = True
+    mock_proc = MagicMock()
+    mock_proc.is_alive.return_value = True
+    svc._worker = mock_proc
+    svc._job_queue = multiprocessing.Queue()
+    svc._result_queue = multiprocessing.Queue()
+    return svc
 
 
-async def _run_job(service: TranscriptionService, model_spec=None, upload=None) -> object:
-    """Helper: start worker, submit one job, stop worker, return result."""
-    service.is_running = True
-    worker = asyncio.create_task(service._consume_loop())
-    try:
-        return await service.submit(
-            upload or _make_upload_file(),
-            params={"language": "auto", "output_format": "json"},
-            request_id="test",
-            model_spec=model_spec,
-        )
-    finally:
-        await service.stop_worker()
-        await asyncio.wait_for(worker, timeout=5.0)
+async def _stop_service(svc: TranscriptionService) -> None:
+    svc.is_running = False
+    if svc._result_reader_task and not svc._result_reader_task.done():
+        svc._result_reader_task.cancel()
+        try:
+            await svc._result_reader_task
+        except asyncio.CancelledError:
+            pass
 
 
 @pytest.mark.asyncio
 class TestSameModelRequests:
-    # DS-1: consecutive same-model requests don't re-trigger switch
+    # DS-2: consecutive same-model requests must not re-trigger _switch_worker
     async def test_should_return_result_when_same_model_requested_twice(
-        self, service, mlx_spec, initial_engine
+        self, funasr_spec
     ) -> None:
-        service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
+        svc = _setup_service(funasr_spec)
+        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
 
-        try:
-            r1 = await service.submit(
-                _make_upload_file(), {"language": "auto", "output_format": "json"},
-                model_spec=mlx_spec,
-            )
-            r2 = await service.submit(
-                _make_upload_file(), {"language": "auto", "output_format": "json"},
-                model_spec=mlx_spec,
-            )
-        finally:
-            await service.stop_worker()
-            await asyncio.wait_for(worker, timeout=5.0)
+        async def deliver(uid: str, result: object) -> None:
+            await asyncio.sleep(0.05)
+            svc._result_queue.put(("RESULT", uid, result))
 
-        # Both jobs succeed
+        with patch.object(svc, "_switch_worker", new_callable=AsyncMock) as mock_switch:
+            asyncio.create_task(deliver("req-1", {"text": "hello", "segments": None, "duration": 1.0}))
+            r1 = await asyncio.wait_for(
+                svc.submit(_make_upload(), {}, request_id="req-1", model_spec=funasr_spec),
+                timeout=5.0,
+            )
+            asyncio.create_task(deliver("req-2", {"text": "world", "segments": None, "duration": 1.0}))
+            r2 = await asyncio.wait_for(
+                svc.submit(_make_upload(), {}, request_id="req-2", model_spec=funasr_spec),
+                timeout=5.0,
+            )
+
+        await _stop_service(svc)
+
+        mock_switch.assert_not_called()
         assert isinstance(r1, dict)
         assert isinstance(r2, dict)
-        # Engine was never released (no switch triggered)
-        initial_engine.release.assert_not_called()
 
 
 @pytest.mark.asyncio
 class TestModelSwitching:
-    # DS-2: result is correct after switching to a different model;
-    #       current_model_spec reflects the new engine atomically.
-    async def test_should_return_result_after_switching_to_different_model(
-        self, service, funasr_spec
+    # DS-1: _switch_worker must be called when a different model_spec is requested
+    async def test_switch_triggered_for_different_model(
+        self, funasr_spec, mlx_spec
     ) -> None:
-        new_engine = _make_engine({"text": "switched result", "segments": None})
+        svc = _setup_service(funasr_spec)
+        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
 
-        with patch(
-            "src.services.transcription.create_engine_for_spec", return_value=new_engine
-        ):
-            result = await _run_job(service, model_spec=funasr_spec)
+        async def fake_switch(spec: object) -> None:
+            svc._current_model_spec = spec  # type: ignore[assignment]
 
-        assert isinstance(result, dict)
-        assert result["text"] == "switched result"
-        assert service.current_model_spec == funasr_spec, (
-            "_current_model_spec must be atomically updated to the new spec after a successful switch"
-        )
+        async def deliver(uid: str, result: object) -> None:
+            await asyncio.sleep(0.05)
+            svc._result_queue.put(("RESULT", uid, result))
 
-    # DS-3: release() is called before load() — memory safety contract
-    async def test_should_release_old_engine_before_loading_new_one(
-        self, service, initial_engine, funasr_spec
-    ) -> None:
-        new_engine = _make_engine()
-        call_order: list[str] = []
-
-        initial_engine.release.side_effect = lambda: call_order.append("release")
-        new_engine.load.side_effect = lambda: call_order.append("load")
-
-        with patch(
-            "src.services.transcription.create_engine_for_spec", return_value=new_engine
-        ):
-            await _run_job(service, model_spec=funasr_spec)
-
-        assert call_order == ["release", "load"], (
-            "release() must precede load() to prevent dual-model memory peak on M-series"
-        )
-
-    # DS-4: when load() fails, job gets an exception
-    async def test_should_fail_job_when_new_model_load_fails(
-        self, service, funasr_spec
-    ) -> None:
-        bad_engine = _make_engine()
-        bad_engine.load.side_effect = RuntimeError("model download failed")
-
-        # Restore old engine load (for recovery attempt)
-        old_engine = service.engine
-        old_engine.load.return_value = None
-
-        with patch(
-            "src.services.transcription.create_engine_for_spec", return_value=bad_engine
-        ):
-            with pytest.raises(RuntimeError, match="model download failed"):
-                await _run_job(service, model_spec=funasr_spec)
-
-    # DS-5: service processes next job after a failed switch
-    async def test_should_process_next_job_after_failed_switch(
-        self, service, funasr_spec, mlx_spec, initial_engine
-    ) -> None:
-        bad_engine = _make_engine()
-        bad_engine.load.side_effect = RuntimeError("load error")
-        initial_engine.load.return_value = None  # recovery succeeds
-
-        service.is_running = True
-        worker = asyncio.create_task(service._consume_loop())
-
-        try:
-            # First job: switch fails
-            with patch(
-                "src.services.transcription.create_engine_for_spec", return_value=bad_engine
-            ):
-                with pytest.raises(RuntimeError):
-                    await service.submit(
-                        _make_upload_file(),
-                        {"language": "auto", "output_format": "json"},
-                        model_spec=funasr_spec,
-                    )
-
-            # Second job: no switch requested — should succeed using recovered engine
-            result = await service.submit(
-                _make_upload_file(),
-                {"language": "auto", "output_format": "json"},
-                model_spec=None,
+        with patch.object(svc, "_switch_worker", side_effect=fake_switch) as mock_switch:
+            asyncio.create_task(deliver("req-1", {"text": "hello", "segments": None, "duration": 1.0}))
+            await asyncio.wait_for(
+                svc.submit(_make_upload(), {}, request_id="req-1", model_spec=mlx_spec),
+                timeout=5.0,
             )
-            assert isinstance(result, dict)
-        finally:
-            await service.stop_worker()
-            await asyncio.wait_for(worker, timeout=5.0)
+            mock_switch.assert_called_once_with(mlx_spec)
 
-    # DS-7: when both load and restore fail, service is marked degraded
-    async def test_should_mark_service_degraded_when_load_and_restore_both_fail(
-        self, service, funasr_spec, initial_engine
+        await _stop_service(svc)
+
+    # DS-3: result returned after switch must come from the new model
+    async def test_result_after_switch_is_correct(
+        self, funasr_spec, mlx_spec
     ) -> None:
-        bad_engine = _make_engine()
-        bad_engine.load.side_effect = RuntimeError("load error")
-        initial_engine.load.side_effect = RuntimeError("restore error")  # recovery also fails
+        svc = _setup_service(funasr_spec)
+        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
+        expected = {"text": "switched result", "segments": None, "duration": 2.0}
 
-        with patch(
-            "src.services.transcription.create_engine_for_spec", return_value=bad_engine
-        ):
-            with pytest.raises(RuntimeError, match="Engine unrecoverable"):
-                await _run_job(service, model_spec=funasr_spec)
+        async def fake_switch(spec: object) -> None:
+            svc._current_model_spec = spec  # type: ignore[assignment]
 
-        assert service._engine_degraded is True, (
-            "Service must be marked degraded so subsequent jobs fail fast "
-            "instead of silently crashing against an unloaded engine"
+        async def deliver(uid: str, result: object) -> None:
+            await asyncio.sleep(0.05)
+            svc._result_queue.put(("RESULT", uid, result))
+
+        with patch.object(svc, "_switch_worker", side_effect=fake_switch):
+            asyncio.create_task(deliver("req-1", expected))
+            result = await asyncio.wait_for(
+                svc.submit(_make_upload(), {}, request_id="req-1", model_spec=mlx_spec),
+                timeout=5.0,
+            )
+
+        await _stop_service(svc)
+
+        assert result == expected
+        assert svc.current_model_spec == mlx_spec, (
+            "_current_model_spec must be updated atomically after a successful switch"
         )
 
-    # DS-8: degraded service rejects subsequent jobs with a clear error
-    async def test_should_reject_subsequent_jobs_when_service_is_degraded(
-        self, service, initial_engine
+    # DS-6: temp directory is cleaned up even when _switch_worker raises
+    async def test_temp_file_cleaned_up_when_switch_fails(
+        self, funasr_spec, mlx_spec
     ) -> None:
-        service._engine_degraded = True
+        svc = _setup_service(funasr_spec)
 
-        with pytest.raises(RuntimeError, match="degraded state"):
-            await _run_job(service, model_spec=None)
+        async def failing_switch(spec: object) -> None:
+            raise RuntimeError("switch failed")
 
-    # DS-6: temp file is cleaned up even when switch fails
-    async def test_should_clean_temp_file_even_when_switch_fails(
-        self, service, funasr_spec, initial_engine
-    ) -> None:
-        bad_engine = _make_engine()
-        bad_engine.load.side_effect = RuntimeError("load error")
-        initial_engine.load.return_value = None  # recovery succeeds
+        with patch.object(svc, "_switch_worker", side_effect=failing_switch):
+            with pytest.raises(RuntimeError, match="switch failed"):
+                await svc.submit(_make_upload(), {}, request_id="req-1", model_spec=mlx_spec)
 
-        rmtree_calls: list[str] = []
-
-        original_rmtree = __import__("shutil").rmtree
-
-        def spy_rmtree(path: str, **kwargs: object) -> None:
-            rmtree_calls.append(str(path))
-            original_rmtree(path, **kwargs)
-
-        with patch("src.services.transcription.create_engine_for_spec", return_value=bad_engine):
-            with patch("src.services.transcription.shutil.rmtree", side_effect=spy_rmtree):
-                try:
-                    await _run_job(service, model_spec=funasr_spec)
-                except RuntimeError:
-                    pass  # expected — job fails because switch fails
-
-        # shutil.rmtree must have been called to clean up the temp dir
-        assert len(rmtree_calls) >= 1, "Temp directory was not cleaned up after failed switch"
+        assert len(svc._temp_dirs) == 0, "All temp dirs must be cleaned up after a failed switch"
+        assert "req-1" not in svc._pending, "Pending future must be removed after failure"
