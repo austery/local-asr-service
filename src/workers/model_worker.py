@@ -50,13 +50,16 @@ def _sync_put(q: Queue, item: Any) -> None:
     """
     buf = io.BytesIO()
     ForkingPickler(buf, pickle.HIGHEST_PROTOCOL).dump(item)
+    # NOTE: Uses CPython internals (_writer) to bypass the feeder thread.
+    # This is only necessary in same-process unit tests where get_nowait()
+    # is called immediately after put(). In production (cross-process), the
+    # parent's blocking queue.get() has ample time for the feeder thread to flush.
     q._writer.send_bytes(buf.getvalue())  # type: ignore[attr-defined]
 
 
 def run_worker(
-    job_queue: Queue,
-    result_queue: Queue,
-    *,
+    job_queue: Any,
+    result_queue: Any,
     engine_type: str,
     model_id: str,
     idle_timeout: float,
