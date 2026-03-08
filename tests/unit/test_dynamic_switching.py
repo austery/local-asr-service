@@ -165,3 +165,38 @@ class TestModelSwitching:
 
         assert len(svc._temp_dirs) == 0, "All temp dirs must be cleaned up after a failed switch"
         assert "req-1" not in svc._pending, "Pending future must be removed after failure"
+
+    # DS-5: Service stays operational after a failed model switch
+    async def test_service_recovers_after_failed_switch(
+        self, funasr_spec, mlx_spec
+    ) -> None:
+        """DS-5: Service stays operational after a failed model switch."""
+        svc = _setup_service(funasr_spec)
+        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
+
+        call_count = {"n": 0}
+
+        async def sometimes_failing_switch(spec: object) -> None:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("transient switch error")
+            svc._current_model_spec = spec  # type: ignore[assignment]
+
+        async def deliver(uid: str, result: object) -> None:
+            await asyncio.sleep(0.05)
+            svc._result_queue.put(("RESULT", uid, result))
+
+        with patch.object(svc, "_switch_worker", side_effect=sometimes_failing_switch):
+            # First request with new model_spec fails
+            with pytest.raises(RuntimeError, match="transient switch error"):
+                await svc.submit(_make_upload(), {}, request_id="req-fail", model_spec=mlx_spec)
+
+            # Second request succeeds — service has not wedged
+            asyncio.create_task(deliver("req-ok", {"text": "recovered", "segments": None, "duration": 1.0}))
+            result = await asyncio.wait_for(
+                svc.submit(_make_upload(), {}, request_id="req-ok", model_spec=None),
+                timeout=5.0,
+            )
+            assert result["text"] == "recovered"  # type: ignore[index]
+
+        await _stop_service(svc)
