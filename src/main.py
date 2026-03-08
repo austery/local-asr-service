@@ -23,7 +23,6 @@ from src.config import (
     PORT,
     get_model_id,
 )
-from src.core.factory import create_engine
 from src.core.model_registry import lookup
 from src.services.transcription import TranscriptionService
 
@@ -47,22 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info(f"📋 Model ID: {get_model_id()}")
     logger.warning("⚠️  Running with workers=1 (REQUIRED for Mac Silicon to prevent OOM)")
 
-    # 1. 使用工厂创建引擎
-    engine = create_engine()
-    try:
-        engine.load()
-    except Exception as e:
-        logger.critical(
-            f"FATAL: Failed to load startup engine "
-            f"(engine_type={ENGINE_TYPE}, model_id={get_model_id()}): {e}",
-            exc_info=True,
-        )
-        raise RuntimeError(
-            f"Cannot start service: engine load failed. "
-            f"Check model availability and disk space."
-        ) from e
-
-    # 2. 解析启动模型的 ModelSpec（用于 dynamic switching 的基准）
+    # 1. 解析启动模型的 ModelSpec（用于 dynamic switching 的基准）
     startup_model_id = get_model_id()
     try:
         initial_spec = lookup(startup_model_id)
@@ -70,31 +54,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         initial_spec = None
         logger.warning(f"⚠️  Startup model '{startup_model_id}' not in registry; model tracking disabled.")
 
-    # 3. 初始化服务
+    # 2. 初始化服务（Worker subprocess spawns lazily on first request）
     service = TranscriptionService(
-        engine=engine,
+        engine_type=ENGINE_TYPE,
+        model_id=startup_model_id,
         max_queue_size=MAX_QUEUE_SIZE,
         initial_model_spec=initial_spec,
         idle_timeout=MODEL_IDLE_TIMEOUT_SEC,
     )
 
-    # 4. 启动后台消费者
-    await service.start_worker()
-
-    # 5. 依赖注入（engine/model_id 保留供 health check 和降级路径使用）
+    # 3. 依赖注入（engine_type/model_id 保留供 health check 和降级路径使用）
     app.state.service = service
-    app.state.engine = engine
     app.state.engine_type = ENGINE_TYPE
     app.state.model_id = startup_model_id
 
-    logger.info("✅ System ready! Listening for requests...")
+    logger.info("✅ System ready! Worker subprocess spawns on first transcription request.")
 
     yield  # --- 服务运行中 ---
 
     logger.info("🛑 System shutting down...")
     if hasattr(app.state, "service"):
         await app.state.service.stop_worker()
-        app.state.service.engine.release()
 
 
 # === 初始化 FastAPI ===
