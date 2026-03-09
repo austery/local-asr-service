@@ -1,61 +1,60 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 from src.core.base_engine import EngineCapabilities
 from src.main import app
 from src.services.transcription import TranscriptionService
 
-# We mock the Engine Factory so no real model is loaded during tests
-@pytest.fixture
-def mock_create_engine():
-    with patch("src.main.create_engine") as mock:
-        yield mock
+
+_PARAFORMER_RESULT = {
+    "text": "Integration Test Result",
+    "segments": [
+        {"speaker": "Speaker 0", "text": "Integration", "start": 0, "end": 1000},
+        {"speaker": "Speaker 0", "text": "Test Result", "start": 1000, "end": 2000},
+    ],
+    "duration": 2.0,
+}
+_SENSEVOICE_RESULT = {"text": "SenseVoice Result", "segments": None, "duration": 1.0}
+
+
+def _make_mock_service(
+    capabilities: EngineCapabilities,
+    submit_result: object,
+) -> MagicMock:
+    """Build a MagicMock that duck-types TranscriptionService for API-layer tests."""
+    service = MagicMock(spec=TranscriptionService)
+    type(service).capabilities = PropertyMock(return_value=capabilities)
+    service.current_model_spec = None
+    service.submit = AsyncMock(return_value=submit_result)
+    service.start_worker = AsyncMock()
+    service.stop_worker = AsyncMock()
+    type(service).queue_size = PropertyMock(return_value=0)
+    type(service).max_queue_size = PropertyMock(return_value=50)
+    return service
+
 
 @pytest.fixture
-def client(mock_create_engine):
-    """
-    Create TestClient with a mock engine that has Paraformer-like capabilities
-    (timestamp=True, diarization=True) — the default production config.
-    """
-    mock_instance = MagicMock()
-    mock_create_engine.return_value = mock_instance
-
-    # Default: Paraformer capabilities (full features)
-    type(mock_instance).capabilities = PropertyMock(
-        return_value=EngineCapabilities(timestamp=True, diarization=True, language_detect=True)
+def client():
+    """TestClient with Paraformer-like capabilities (timestamp + diarization)."""
+    mock_service = _make_mock_service(
+        EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
+        _PARAFORMER_RESULT,
     )
+    with patch("src.main.TranscriptionService", return_value=mock_service):
+        with TestClient(app) as c:
+            yield c
 
-    mock_instance.transcribe_file.return_value = {
-        "text": "Integration Test Result",
-        "segments": [
-            {"speaker": "Speaker 0", "text": "Integration", "start": 0, "end": 1000},
-            {"speaker": "Speaker 0", "text": "Test Result", "start": 1000, "end": 2000}
-        ]
-    }
-
-    with TestClient(app) as c:
-        yield c
 
 @pytest.fixture
-def sensevoice_client(mock_create_engine):
-    """
-    Create TestClient with a SenseVoice-like engine (no timestamp, no diarization).
-    Used to test capability validation (400 errors).
-    """
-    mock_instance = MagicMock()
-    mock_create_engine.return_value = mock_instance
-
-    type(mock_instance).capabilities = PropertyMock(
-        return_value=EngineCapabilities(emotion_tags=True, language_detect=True)
+def sensevoice_client():
+    """TestClient with SenseVoice-like capabilities (no timestamp, no diarization)."""
+    mock_service = _make_mock_service(
+        EngineCapabilities(emotion_tags=True, language_detect=True),
+        _SENSEVOICE_RESULT,
     )
-
-    mock_instance.transcribe_file.return_value = {
-        "text": "SenseVoice Result",
-        "segments": None,
-    }
-
-    with TestClient(app) as c:
-        yield c
+    with patch("src.main.TranscriptionService", return_value=mock_service):
+        with TestClient(app) as c:
+            yield c
 
 
 def test_health_check(client):

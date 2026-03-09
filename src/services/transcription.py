@@ -63,6 +63,16 @@ class TranscriptionService:
             return self._current_model_spec.capabilities
         return EngineCapabilities()
 
+    @property
+    def queue_size(self) -> int:
+        """Number of jobs currently in-flight (queued or processing)."""
+        return len(self._pending)
+
+    @property
+    def max_queue_size(self) -> int:
+        """Maximum allowed concurrent in-flight jobs."""
+        return self._max_queue_size
+
     async def start_worker(self) -> None:
         """Mark service as running. Worker spawns lazily on first request."""
         self.is_running = True
@@ -99,8 +109,6 @@ class TranscriptionService:
 
             loop = asyncio.get_running_loop()
             future: asyncio.Future[str | dict[str, Any]] = loop.create_future()
-            self._pending[request_id] = future
-            self._temp_dirs[request_id] = temp_dir
 
             async with self._spawn_lock:
                 if model_spec is not None and model_spec != self._current_model_spec:
@@ -110,6 +118,13 @@ class TranscriptionService:
 
                 if self._job_queue is None:
                     raise RuntimeError("Job queue is None after successful spawn — this is a bug")
+
+                # Register AFTER the worker is ready so that _shutdown_worker (called
+                # during a concurrent model switch) does not cancel this request's
+                # future or delete its temp dir before the job is even queued.
+                self._pending[request_id] = future
+                self._temp_dirs[request_id] = temp_dir
+
                 self._job_queue.put_nowait(WorkerJob(
                     uid=request_id,
                     temp_file_path=temp_path,
@@ -120,7 +135,8 @@ class TranscriptionService:
 
         except BaseException:
             self._pending.pop(request_id, None)
-            self._cleanup_temp(request_id)
+            self._temp_dirs.pop(request_id, None)
+            shutil.rmtree(temp_dir, ignore_errors=True)
             raise
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:

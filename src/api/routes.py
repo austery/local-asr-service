@@ -353,6 +353,6 @@ async def get_current_model(request: Request) -> dict[str, object]:
         # Use current_spec.capabilities for consistency — avoids a transient mismatch
         # between current_spec and service.engine during a model switch.
         "capabilities": asdict(current_spec.capabilities) if current_spec else asdict(service.capabilities),
-        "queue_size": service.queue.qsize(),
-        "max_queue_size": service.queue.maxsize,
+        "queue_size": service.queue_size,
+        "max_queue_size": service.max_queue_size,
     }

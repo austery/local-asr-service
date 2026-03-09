@@ -4,17 +4,27 @@ Tests CORS configuration, file cleanup on errors, and end-to-end security flow.
 """
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 from io import BytesIO
 from src.core.base_engine import EngineCapabilities
 
 
-@pytest.fixture
-def mock_engine():
-    """Mock ASR engine"""
-    engine = MagicMock()
-    engine.transcribe_file = MagicMock(return_value="Mocked transcription result.")
-    return engine
+def _make_mock_service(submit_result: object = None) -> MagicMock:
+    from src.services.transcription import TranscriptionService
+
+    if submit_result is None:
+        submit_result = {"text": "Test transcription", "segments": None, "duration": 1.0}
+    service = MagicMock(spec=TranscriptionService)
+    type(service).capabilities = PropertyMock(
+        return_value=EngineCapabilities(timestamp=True, diarization=True, language_detect=True)
+    )
+    service.current_model_spec = None
+    service.submit = AsyncMock(return_value=submit_result)
+    service.start_worker = AsyncMock()
+    service.stop_worker = AsyncMock()
+    type(service).queue_size = PropertyMock(return_value=0)
+    type(service).max_queue_size = PropertyMock(return_value=50)
+    return service
 
 
 def create_test_app_with_cors(allowed_origins: str):
@@ -22,32 +32,22 @@ def create_test_app_with_cors(allowed_origins: str):
     from contextlib import asynccontextmanager
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
-    from src.services.transcription import TranscriptionService
     from src.api.routes import router as api_router
     import uuid
-    import time
-    
-    engine = MagicMock()
-    engine.load = MagicMock()
-    engine.transcribe_file = MagicMock(return_value="Test transcription")
-    type(engine).capabilities = PropertyMock(
-        return_value=EngineCapabilities(timestamp=True, diarization=True, language_detect=True)
-    )
+
+    mock_service = _make_mock_service()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        service = TranscriptionService(engine=engine, max_queue_size=10)
-        await service.start_worker()
-        app.state.service = service
-        app.state.engine = engine
+        await mock_service.start_worker()
+        app.state.service = mock_service
         app.state.engine_type = "funasr"
         app.state.model_id = "test-model"
         yield
-        engine.release = MagicMock()
-        engine.release()
-    
+        await mock_service.stop_worker()
+
     app = FastAPI(lifespan=lifespan)
-    
+
     # 配置 CORS
     cors_origins = allowed_origins.split(",") if allowed_origins != "*" else ["*"]
     app.add_middleware(
@@ -57,7 +57,7 @@ def create_test_app_with_cors(allowed_origins: str):
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
+
     # 请求日志中间件
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
@@ -66,9 +66,9 @@ def create_test_app_with_cors(allowed_origins: str):
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
-    
+
     app.include_router(api_router)
-    
+
     return app
 
 
@@ -138,46 +138,45 @@ class TestCORSConfiguration:
 
 class TestFileCleanupOnError:
     """测试错误时的文件清理"""
-    
+
     @pytest.mark.asyncio
     async def test_temp_file_cleanup_on_validation_error(self):
-        """测试校验失败时临时文件被清理"""
+        """验证 submit() 在 worker spawn 失败时不留下临时目录。
+
+        With the subprocess architecture, cleanup always happens in the
+        `except BaseException` block inside submit(). We simulate a spawn
+        failure by patching _spawn_worker to raise, which triggers the
+        cleanup path without starting a real subprocess.
+        """
         import os
         import tempfile
         from src.services.transcription import TranscriptionService
         from fastapi import UploadFile
-        
-        engine = MagicMock()
-        service = TranscriptionService(engine=engine, max_queue_size=10)
-        await service.start_worker()
-        
-        # 记录初始临时目录
-        initial_temp_dirs = set(os.listdir(tempfile.gettempdir()))
-        
-        # 创建测试文件
-        content = b"fake audio"
-        file = UploadFile(
-            filename="test.wav",
-            file=BytesIO(content)
+
+        service = TranscriptionService(
+            engine_type="mlx", model_id="test-model", max_queue_size=10
         )
-        
-        # 模拟引擎抛出错误
-        engine.transcribe_file.side_effect = ValueError("Invalid audio format")
-        
-        try:
-            await service.submit(file, {"language": "auto"}, request_id="test-id")
-        except Exception:
-            pass
-        
-        # 等待清理完成
-        import asyncio
-        await asyncio.sleep(0.5)
-        
-        # 验证：没有新的临时目录残留
+        await service.start_worker()
+
+        # Record baseline temp dirs
+        initial_temp_dirs = set(os.listdir(tempfile.gettempdir()))
+
+        file = UploadFile(filename="test.wav", file=BytesIO(b"fake audio"))
+
+        # Make worker spawn fail — triggers the except BaseException cleanup path
+        with patch.object(
+            service, "_spawn_worker", side_effect=RuntimeError("simulated spawn failure")
+        ):
+            try:
+                await service.submit(file, {"language": "auto"}, request_id="test-id")
+            except Exception:
+                pass
+
+        # No asr_task_ temp dirs should remain
         final_temp_dirs = set(os.listdir(tempfile.gettempdir()))
         new_dirs = final_temp_dirs - initial_temp_dirs
         asr_temp_dirs = [d for d in new_dirs if d.startswith("asr_task_")]
-        
+
         assert len(asr_temp_dirs) == 0, f"Temp directories not cleaned: {asr_temp_dirs}"
 
 

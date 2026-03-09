@@ -1,70 +1,68 @@
 """
 Integration tests for model listing and per-request model selection (SPEC-108, cases MA-1..MA-7).
 
-Uses FastAPI TestClient with a patched engine factory — no real model loading.
-Follows the same pattern as test_api.py: patch "src.main.create_engine" so
-the real lifespan runs but uses a mock engine, giving us proper app.state setup.
+Uses FastAPI TestClient with a patched TranscriptionService — no real model loading.
+The API layer (routes.py) is tested in isolation; subprocess worker logic is covered
+by unit tests.
 """
 
 from io import BytesIO
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from src.core.base_engine import EngineCapabilities
+from src.core.model_registry import lookup as real_lookup
 from src.main import app
+from src.services.transcription import TranscriptionService
+
+
+def _make_mock_service(
+    capabilities: EngineCapabilities,
+    submit_result: object,
+    current_model_spec: object = None,
+) -> MagicMock:
+    """Build a MagicMock that duck-types TranscriptionService for API-layer tests."""
+    service = MagicMock(spec=TranscriptionService)
+    type(service).capabilities = PropertyMock(return_value=capabilities)
+    service.current_model_spec = current_model_spec
+    service.submit = AsyncMock(return_value=submit_result)
+    service.start_worker = AsyncMock()
+    service.stop_worker = AsyncMock()
+    type(service).queue_size = PropertyMock(return_value=0)
+    type(service).max_queue_size = PropertyMock(return_value=50)
+    return service
 
 
 @pytest.fixture
-def mock_create_engine():
-    """Patch the engine factory so lifespan runs without loading a real model."""
-    with patch("src.main.create_engine") as mock:
-        yield mock
-
-
-@pytest.fixture
-def client(mock_create_engine):
-    """TestClient with a mock MLX engine (Qwen3-ASR-like caps: timestamp, no diarization)."""
-    mock_engine = MagicMock()
-    mock_create_engine.return_value = mock_engine
-
-    type(mock_engine).capabilities = PropertyMock(
-        return_value=EngineCapabilities(
-            timestamp=True, diarization=False, emotion_tags=False, language_detect=True
-        )
-    )
-    mock_engine.transcribe_file.return_value = {"text": "test result", "segments": None}
-
-    # Patch lookup in main.py so startup resolves to qwen3-asr instead of paraformer
-    # (avoids dependency on the default env var ENGINE_TYPE=funasr)
-    from src.core.model_registry import lookup as real_lookup
-
+def client():
+    """TestClient with qwen3-asr as startup model (timestamp, no diarization)."""
     qwen_spec = real_lookup("qwen3-asr")
-    with patch("src.main.lookup", return_value=qwen_spec):
-        with TestClient(app) as c:
-            yield c
+    mock_service = _make_mock_service(
+        qwen_spec.capabilities,
+        {"text": "test result", "segments": None, "duration": 1.0},
+        current_model_spec=qwen_spec,
+    )
+    with patch("src.main.TranscriptionService", return_value=mock_service):
+        with patch("src.main.lookup", return_value=qwen_spec):
+            with TestClient(app) as c:
+                yield c
 
 
 @pytest.fixture
-def funasr_client(mock_create_engine):
+def funasr_client():
     """TestClient where startup resolves to paraformer (diarization capable)."""
-    mock_engine = MagicMock()
-    mock_create_engine.return_value = mock_engine
-
-    type(mock_engine).capabilities = PropertyMock(
-        return_value=EngineCapabilities(
-            timestamp=True, diarization=True, emotion_tags=False, language_detect=True
-        )
-    )
-    mock_engine.transcribe_file.return_value = {"text": "funasr result", "segments": []}
-
-    from src.core.model_registry import lookup as real_lookup
-
     paraformer_spec = real_lookup("paraformer")
-    with patch("src.main.lookup", return_value=paraformer_spec):
-        with TestClient(app) as c:
-            yield c
+    mock_service = _make_mock_service(
+        paraformer_spec.capabilities,
+        {"text": "funasr result", "segments": [], "duration": 1.0},
+        current_model_spec=paraformer_spec,
+    )
+    with patch("src.main.TranscriptionService", return_value=mock_service):
+        with patch("src.main.lookup", return_value=paraformer_spec):
+            with TestClient(app) as c:
+                yield c
 
 
 def _audio_file() -> tuple[str, BytesIO, str]:
@@ -95,21 +93,14 @@ def test_should_include_current_model_in_get_models_response(client) -> None:
 
 
 # MA-3
-def test_should_succeed_when_valid_alias_provided(client, mock_create_engine) -> None:
-    mock_new_engine = MagicMock()
-    type(mock_new_engine).capabilities = PropertyMock(
-        return_value=EngineCapabilities(timestamp=True, diarization=False)
+def test_should_succeed_when_valid_alias_provided(client) -> None:
+    # With the subprocess architecture, model switching is handled inside submit().
+    # The API layer only needs to resolve the alias and pass the spec to submit().
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "qwen3-asr", "language": "zh"},
+        files={"file": _audio_file()},
     )
-    mock_new_engine.transcribe_file.return_value = {"text": "ok", "segments": None}
-
-    with patch(
-        "src.services.transcription.create_engine_for_spec", return_value=mock_new_engine
-    ):
-        response = client.post(
-            "/v1/audio/transcriptions",
-            data={"model": "qwen3-asr", "language": "zh"},
-            files={"file": _audio_file()},
-        )
 
     assert response.status_code == 200
 

@@ -131,4 +131,37 @@ The TypeScript reference implementation (silence-based chunking) lives at
 ## Testing Notes
 - Run `uv run python -m pytest` for all tests. E2E tests (`tests/e2e/`) require the real model to be downloaded and are slow.
 - Unit tests mock the engine entirely — do not add real model calls to unit tests.
-- Test count baseline: 112 tests (as of 2026-02-25). Do not reduce this.
+- Test count baseline: 125 tests (as of 2026-03-08). Do not reduce this.
+
+### Integration Test Mock Pattern (subprocess architecture)
+Integration tests must mock `TranscriptionService` at the **class level**, not the engine factory. The old pattern (`patch("src.main.create_engine")`) is invalid — `main.py` no longer imports an engine factory directly.
+
+**Correct pattern:**
+```python
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
+def _make_mock_service(capabilities, submit_result, current_model_spec=None):
+    service = MagicMock(spec=TranscriptionService)
+    type(service).capabilities = PropertyMock(return_value=capabilities)
+    service.current_model_spec = current_model_spec
+    service.submit = AsyncMock(return_value=submit_result)   # ← AsyncMock, not MagicMock
+    service.start_worker = AsyncMock()
+    service.stop_worker = AsyncMock()
+    type(service).queue_size = PropertyMock(return_value=0)
+    type(service).max_queue_size = PropertyMock(return_value=50)
+    return service
+
+@pytest.fixture
+def client():
+    mock_service = _make_mock_service(...)
+    with patch("src.main.TranscriptionService", return_value=mock_service):
+        with TestClient(app) as c:
+            yield c
+```
+
+**Rule**: Any time the `TranscriptionService.__init__` signature changes, or a function that integration tests patch is moved/removed, run `grep -r 'patch(' tests/` to find all stale mock targets and update them.
+
+### SPEC-009 v2 Subprocess Architecture — Known Pitfall (Fixed 2026-03-08)
+**Bug**: Registering `_pending[request_id]` / `_temp_dirs[request_id]` *before* `_switch_worker()` caused `_shutdown_worker` to cancel the *current* in-flight request's future and delete its temp file during a model switch, resulting in a 500 error on the first request to a different model alias.
+
+**Fix**: Registration now happens *inside the `_spawn_lock` block, after the worker is ready* — so `_shutdown_worker` only sees requests registered against the old worker. The `except BaseException` block always calls `shutil.rmtree(temp_dir)` directly on the local variable (not via `_cleanup_temp`) since `_temp_dirs` may not be populated yet.
