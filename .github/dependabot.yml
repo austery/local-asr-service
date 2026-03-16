@@ -1,0 +1,87 @@
+version: 2
+
+# Dependabot 配置：自动检测依赖更新并创建 PR
+# 策略：版本约束 + 优先级分组，防止破坏性变更，保持安全补丁流动
+# 参考：puresubs TypeScript/Angular 策略，调整为 Python 生态
+
+updates:
+  # 监控 Python 依赖（pip/uv 生态）
+  - package-ecosystem: 'pip'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '09:00'  # 17:00 Beijing time
+
+    # 版本约束：防止破坏性变更（SPEC-010）
+    # 说明：dual-engine 设计（PyTorch + MLX），主版本升级需要完整测试
+    ignore:
+      # mlx-audio 0.3.1 是 prerelease；0.4.0+ 可能有破坏性 API 变更
+      # 策略：等待 0.4.0 稳定版发布后，经过完整 E2E 测试再升级
+      - dependency-name: 'mlx-audio'
+        versions: ['>=0.4.0']
+
+      # PyTorch：屏蔽主版本 3.0+（Apple Silicon Metal 兼容性未知）
+      # 当前：2.9.1 稳定
+      - dependency-name: 'torch'
+        update-types: ['version-update:semver-major']
+
+      # torchaudio：必须与 torch 版本配对，屏蔽 3.0+
+      - dependency-name: 'torchaudio'
+        update-types: ['version-update:semver-major']
+
+      # FunASR：屏蔽主版本 2.0+（与 torch/transformers 兼容性需验证）
+      - dependency-name: 'funasr'
+        update-types: ['version-update:semver-major']
+
+    # 依赖分组策略：按优先级组织，减少 PR 噪音
+    groups:
+      # 组 1：生产依赖的安全补丁（最高优先级）
+      security-patches:
+        patterns:
+          - '*'
+        update-types:
+          - 'patch'
+        dependency-type: 'production'
+
+      # 组 2：生产依赖的次要版本更新
+      production-updates:
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+        dependency-type: 'production'
+
+      # 组 3：开发依赖的更新（较低优先级）
+      development-updates:
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
+        dependency-type: 'development'
+
+    # 其他配置
+    open-pull-requests-limit: 5
+    labels:
+      - 'dependencies'
+      - 'automated'
+
+    # 遵循 Conventional Commits 规范
+    commit-message:
+      prefix: 'chore'
+      prefix-development: 'chore'
+      include: 'scope'
+
+  # 监控 GitHub Actions 的更新
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'monthly'
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+    labels:
+      - 'dependencies'
+      - 'github-actions'
