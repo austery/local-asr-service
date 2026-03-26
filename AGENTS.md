@@ -34,7 +34,7 @@ ENGINE_TYPE=mlx uv run python -m src.main
 ENGINE_TYPE=mlx MODEL_ID=mlx-community/whisper-large-v3-turbo uv run python -m src.main
 
 # Alternative using uvicorn directly
-uvicorn src.main:app --host 0.0.0.0 --port 50070 --workers 1
+uvicorn src.main:app --host 0.0.0.0 --port 50700 --workers 1
 ```
 
 ## Environment Variables
@@ -46,7 +46,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 50070 --workers 1
 | `FUNASR_MODEL_ID` | `iic/speech_seaco_paraformer...` | Default model for FunASR (supports diarization) |
 | `MLX_MODEL_ID` | `mlx-community/Qwen3-ASR-1.7B-8bit` | Default model for MLX engine |
 | `HOST` | `0.0.0.0` | Server host |
-| `PORT` | `50070` | Server port |
+| `PORT` | `50700` | Server port |
 | `MAX_QUEUE_SIZE` | `50` | Max concurrent requests in queue |
 | `MODEL_IDLE_TIMEOUT_SEC` | `60` | Idle timeout before auto-offloading model (0 = disabled) |
 | `LOG_LEVEL` | `INFO` | Logging level |

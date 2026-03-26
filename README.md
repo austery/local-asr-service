@@ -1,7 +1,7 @@
 # Local ASR Service (Mac Silicon)
 
 High-performance local speech transcription service optimized for Apple Silicon (M-series).
-OpenAI Whisper-compatible HTTP API on port **50070**.
+OpenAI Whisper-compatible HTTP API on port **50700**.
 
 **Dual-engine architecture:**
 - **FunASR** — Paraformer (Chinese SOTA) + CAM++ speaker diarization
@@ -43,28 +43,28 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 ### Health check
 
 ```bash
-curl http://localhost:50070/health
+curl http://localhost:50700/health
 ```
 
 ### Transcription
 
 ```bash
 # Default: JSON with speaker diarization
-curl http://localhost:50070/v1/audio/transcriptions \
+curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg"
 
 # Plain text (for RAG / LLM input)
-curl http://localhost:50070/v1/audio/transcriptions \
+curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
   -F "output_format=txt"
 
 # SRT subtitles
-curl http://localhost:50070/v1/audio/transcriptions \
+curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
   -F "output_format=srt"
 
 # Per-request model switch (hot-swap, no restart needed)
-curl http://localhost:50070/v1/audio/transcriptions \
+curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
   -F "model=qwen3-asr"
 ```
@@ -80,17 +80,25 @@ curl http://localhost:50070/v1/audio/transcriptions \
 | `language` | `auto` | `zh`, `en`, `auto` |
 | `model` | — | Alias or full model path. Omit to keep current model. |
 
+**Supported Models (`model` parameter):**
+
+| Alias | Engine | Description |
+|-------|--------|-------------|
+| `paraformer` | FunASR | Mandarin + Diarization (Best for meetings) |
+| `qwen3-asr` | MLX | English/Chinese single-speaker (Fast, low memory) |
+| `sensevoice-small` | FunASR | Speed-first, emotion/language detection |
+
 ### Query models
 
 ```bash
-curl http://localhost:50070/v1/models | jq          # all registered models
-curl http://localhost:50070/v1/models/current | jq  # currently loaded model + capabilities
+curl http://localhost:50700/v1/models | jq          # all registered models
+curl http://localhost:50700/v1/models/current | jq  # currently loaded model + capabilities
 ```
 
 ### Interactive docs
 
 ```
-http://localhost:50070/docs
+http://localhost:50700/docs
 ```
 
 ---
@@ -106,12 +114,13 @@ MLX_MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit
 
 # Service
 HOST=0.0.0.0
-PORT=50070
+PORT=50700
 MAX_QUEUE_SIZE=50
 MAX_UPLOAD_SIZE_MB=200
 ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
 LOG_LEVEL=INFO
 MODEL_IDLE_TIMEOUT_SEC=60     # Worker auto-terminates after idle period (0 = disabled, worker stays resident)
+
 
 # Audio processing (MLX engine only)
 MAX_AUDIO_DURATION_MINUTES=50   # Auto-chunk audio longer than this

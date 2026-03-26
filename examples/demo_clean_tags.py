@@ -5,7 +5,7 @@
 import requests
 
 # API 端点
-url = "http://localhost:50070/v1/audio/transcriptions"
+url = "http://localhost:50700/v1/audio/transcriptions"
 
 # 示例 1: 清理标签（默认行为）
 print("=" * 60)

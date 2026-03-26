@@ -42,7 +42,7 @@ the OS reclaims 100% of MPS memory automatically.
 │  local-asr-service main process (FastAPI, always running) │
 │  Memory: < 200 MB                                         │
 │                                                           │
-│  HTTP :50070 ──▶ TranscriptionService (refactored)        │
+│  HTTP :50700 ──▶ TranscriptionService (refactored)        │
 │                          │                                │
 │                          │  multiprocessing IPC           │
 │                          ▼                                │

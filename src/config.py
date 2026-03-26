@@ -52,7 +52,7 @@ def get_model_id() -> str:
 
 # === 服务配置 ===
 HOST = os.getenv("HOST", "0.0.0.0")
-PORT = int(os.getenv("PORT", "50070"))
+PORT = int(os.getenv("PORT", "50700"))
 MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "50"))
 
 # === 安全配置 ===

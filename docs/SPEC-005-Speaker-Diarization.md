@@ -78,7 +78,7 @@ graph TD
 
 ### 请求
 ```bash
-curl -X POST http://localhost:50070/v1/audio/transcriptions \
+curl -X POST http://localhost:50700/v1/audio/transcriptions \
   -F "file=@meeting.mp3" \
   -F "response_format=verbose_json"
 ```

@@ -18,7 +18,7 @@ Usage:
     uv run python benchmarks/run.py --file path/to/audio.wav
 
     # Benchmark against a different server
-    uv run python benchmarks/run.py --base-url http://localhost:50070
+    uv run python benchmarks/run.py --base-url http://localhost:50700
 
     # Run all files in benchmarks/samples/
     uv run python benchmarks/run.py --all
@@ -39,7 +39,7 @@ from typing import Any
 
 import requests
 
-DEFAULT_BASE_URL = "http://localhost:50070"
+DEFAULT_BASE_URL = "http://localhost:50700"
 FIXTURE_DIR = Path(__file__).parent.parent / "tests" / "fixtures"
 SAMPLES_DIR = Path(__file__).parent / "samples"
 RESULTS_DIR = Path(__file__).parent / "results"

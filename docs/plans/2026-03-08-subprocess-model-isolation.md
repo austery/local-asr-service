@@ -1056,13 +1056,13 @@ uv run pytest tests/ -m "not e2e" -v --tb=short
 
 ```bash
 # Start the service
-uv run uvicorn src.main:app --host 0.0.0.0 --port 50070
+uv run uvicorn src.main:app --host 0.0.0.0 --port 50700
 
 # In another terminal — check startup memory (should be ~150MB, not 23GB)
 ps aux | grep python
 
 # Send a transcription request
-curl -X POST http://localhost:50070/v1/audio/transcriptions \
+curl -X POST http://localhost:50700/v1/audio/transcriptions \
   -F "file=@/path/to/sample.wav" \
   -F "language=auto"
 
