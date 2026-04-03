@@ -165,3 +165,27 @@ def client():
 **Bug**: Registering `_pending[request_id]` / `_temp_dirs[request_id]` *before* `_switch_worker()` caused `_shutdown_worker` to cancel the *current* in-flight request's future and delete its temp file during a model switch, resulting in a 500 error on the first request to a different model alias.
 
 **Fix**: Registration now happens *inside the `_spawn_lock` block, after the worker is ready* — so `_shutdown_worker` only sees requests registered against the old worker. The `except BaseException` block always calls `shutil.rmtree(temp_dir)` directly on the local variable (not via `_cleanup_temp`) since `_temp_dirs` may not be populated yet.
+
+### Shutdown Hang — multiprocessing Resource Leak (Fixed 2026-04-03)
+**Bug**: Pressing Ctrl+C after the service had processed at least one transcription request would display "Application shutdown complete" but the process would hang indefinitely, requiring `kill -9`. Root cause: `_shutdown_worker()` failed to properly clean up the worker subprocess and IPC queues:
+
+1. **Missing `join()` after `terminate()`**: The worker subprocess became a zombie process that blocked parent process exit
+2. **Queue cleanup omitted**: `multiprocessing.Queue` objects were not closed, causing their background feeder threads to hang and preventing `resource_tracker` from exiting
+3. **Silent failures**: Broad `except: pass` blocks masked the actual cleanup errors
+
+**Symptoms**:
+```python
+# Before fix:
+INFO:     Application shutdown complete.
+INFO:     Finished server process [62920]
+^C^[[B  # ← Process hung, Ctrl+C non-responsive
+resource_tracker: There appear to be 9 leaked semaphore objects  # ← Warning
+```
+
+**Fix** (`src/services/transcription.py:_shutdown_worker()`, 2026-04-03):
+1. Added `worker.join(timeout=3)` after `terminate()` to reap the zombie
+2. Added fallback `worker.kill() + join()` for stubborn processes
+3. Explicitly call `queue.close()` + `queue.join_thread()` on both job and result queues
+4. Replaced `except: pass` with logged warnings for better diagnostics
+
+**Verification**: Service now exits within 2 seconds on Ctrl+C with no resource_tracker warnings or zombie processes.
