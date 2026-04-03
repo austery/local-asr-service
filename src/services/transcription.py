@@ -204,6 +204,12 @@ class TranscriptionService:
         await self._spawn_worker(new_spec)
 
     async def _shutdown_worker(self) -> None:
+        """Gracefully shutdown worker subprocess and clean up IPC resources.
+        
+        Critical: This method MUST properly reap the child process and close
+        all multiprocessing.Queue instances to avoid zombie processes and
+        resource_tracker hangs that prevent the main process from exiting.
+        """
         for uid, fut in list(self._pending.items()):
             if not fut.done():
                 fut.set_exception(RuntimeError("Worker terminated (model switch or shutdown)"))
@@ -215,25 +221,56 @@ class TranscriptionService:
         if self._worker is None:
             return
 
+        # 1. Send shutdown sentinel (allows graceful engine.release())
         if self._job_queue is not None:
             try:
-                self._job_queue.put(None)
-            except Exception:
-                pass
+                self._job_queue.put(None, timeout=1.0)
+            except Exception as exc:
+                self.logger.warning("Failed to send shutdown sentinel to worker: %s", exc)
 
+        # 2. Wait for graceful exit
         loop = asyncio.get_running_loop()
         try:
             await asyncio.wait_for(
                 loop.run_in_executor(None, lambda: self._worker.join(timeout=5)),  # type: ignore[union-attr]
                 timeout=6.0,
             )
-        except (asyncio.TimeoutError, Exception):
-            pass
+        except asyncio.TimeoutError:
+            self.logger.warning("Worker did not exit gracefully within 5s timeout")
 
+        # 3. Force-kill if still alive
         if self._worker.is_alive():
+            self.logger.warning("Sending SIGTERM to worker subprocess")
             self._worker.terminate()
+            
+            # CRITICAL: join() after terminate() to reap the zombie process.
+            # Without this, the process becomes a zombie and resource_tracker
+            # cannot exit, causing the main process to hang indefinitely.
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: self._worker.join(timeout=3)),  # type: ignore[union-attr]
+                    timeout=4.0,
+                )
+            except asyncio.TimeoutError:
+                self.logger.error("Worker did not respond to SIGTERM within 3s, using SIGKILL")
+                self._worker.kill()  # SIGKILL (last resort)
+                # Final join (no timeout wrap — must wait for kill to complete)
+                await loop.run_in_executor(None, lambda: self._worker.join(timeout=2))  # type: ignore[union-attr]
 
         self._worker = None
+
+        # 4. Clean up IPC queues to stop feeder threads
+        # multiprocessing.Queue has a background "feeder thread" that serializes
+        # and writes data to the underlying pipe. If not explicitly cleaned up,
+        # this thread may block waiting for the pipe to flush, and resource_tracker
+        # will not exit until all Queue resources are properly closed.
+        for q in (self._job_queue, self._result_queue):
+            if q is not None:
+                try:
+                    q.close()
+                    q.join_thread()  # Wait for feeder thread to finish
+                except Exception as exc:
+                    self.logger.warning("Failed to clean up queue: %s", exc)
 
     async def _result_reader_loop(self) -> None:
         """Polls result_queue (non-blocking) every 50ms, resolves pending Futures."""
