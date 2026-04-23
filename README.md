@@ -36,23 +36,28 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 | Fast single-speaker transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
 | Bulk speed-first (no diarization) | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
 
----
+## API & Web UI
 
-## API
+### Web UI (Interactive Docs) — Recommended for Quick Testing
+The easiest way to test the service without using the command line:
+1. Open **[http://localhost:50700/docs](http://localhost:50700/docs)** in your browser.
+2. Find the `POST /v1/audio/transcriptions` endpoint.
+3. Click **"Try it out"**, upload your audio file, and click **"Execute"**.
+4. You can view the result on screen or click the **"Download"** button to save it.
 
-### Health check
+### CLI (curl)
 
+#### Health check
 ```bash
 curl http://localhost:50700/health
 ```
 
-### Transcription
-
+#### Transcription
 ```bash
 # Default: JSON with speaker diarization
 curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg"
-
+```
 # Plain text (for RAG / LLM input)
 curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
