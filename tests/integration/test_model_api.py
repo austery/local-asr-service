@@ -90,14 +90,20 @@ def test_should_include_pipeline_profile_entry_on_get_models(client) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    pipeline_entry = next(model for model in body["models"] if model["alias"] == "firered-sortformer")
+    by_alias = {model["alias"]: model for model in body["models"]}
+    pipeline_entry = by_alias["firered-sortformer"]
 
     assert pipeline_entry["engine_type"] == "pipeline"
     assert pipeline_entry["model_id"] == "firered-asr+sortformer-diar"
     assert pipeline_entry["description"] == "decoupled FireRed + Sortformer profile"
+    assert pipeline_entry["requestable"] is False
     assert pipeline_entry["capabilities"]["timestamp"] is True
     assert pipeline_entry["capabilities"]["diarization"] is True
     assert pipeline_entry["capabilities"]["language_detect"] is True
+
+    assert by_alias["paraformer"]["requestable"] is True
+    assert by_alias["firered-asr"]["requestable"] is False
+    assert by_alias["sortformer-diar"]["requestable"] is False
 
 
 # MA-2
@@ -143,6 +149,28 @@ def test_should_return_400_when_pipeline_alias_is_provided(client) -> None:
 
     assert response.status_code == 400
     assert "Unknown model" in response.json()["detail"]
+
+
+def test_should_return_400_when_future_transcription_component_alias_is_provided(client) -> None:
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "firered-asr", "language": "zh"},
+        files={"file": _audio_file()},
+    )
+
+    assert response.status_code == 400
+    assert "not available for direct transcription requests" in response.json()["detail"]
+
+
+def test_should_return_400_when_future_diarization_component_alias_is_provided(client) -> None:
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "sortformer-diar", "language": "zh"},
+        files={"file": _audio_file()},
+    )
+
+    assert response.status_code == 400
+    assert "not available for direct transcription requests" in response.json()["detail"]
 
 
 # MA-5

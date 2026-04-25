@@ -26,6 +26,7 @@ class ModelSpec:
     engine_type: EngineType
     description: str
     capabilities: EngineCapabilities
+    requestable: bool = True
 
 
 # fmt: off
@@ -36,8 +37,9 @@ _REGISTRY: dict[str, ModelSpec] = {
             alias="firered-asr",
             model_id="FireRedTeam/FireRedASR2-AED",
             engine_type="firered",
-            description="FireRed ASR 2 AED. Transcription-focused model for future decoupled pipelines.",
+            description="FireRed ASR 2 AED. Adapter target for future decoupled pipelines; not directly requestable yet.",
             capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=True),
+            requestable=False,
         ),
         ModelSpec(
             alias="paraformer",
@@ -64,8 +66,9 @@ _REGISTRY: dict[str, ModelSpec] = {
             alias="sortformer-diar",
             model_id="mlx-community/diar_sortformer_4spk-v1-fp32",
             engine_type="mlx",
-            description="Sortformer diarization model for future decoupled pipelines.",
+            description="Sortformer diarization adapter target for future decoupled pipelines; not directly requestable yet.",
             capabilities=EngineCapabilities(timestamp=False, diarization=True, emotion_tags=False, language_detect=False),
+            requestable=False,
         ),
     ]
 }

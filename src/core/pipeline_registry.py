@@ -18,6 +18,7 @@ class PipelineProfile:
     diarization_alias: str
     description: str
     capabilities: EngineCapabilities
+    requestable: bool = False
 
 
 _REGISTRY: dict[str, PipelineProfile] = {

@@ -92,6 +92,16 @@ class TestCapabilities:
         assert spec.capabilities.diarization is True
         assert spec.capabilities.timestamp is False
 
+
+class TestRequestability:
+    def test_should_mark_existing_runtime_models_as_requestable(self) -> None:
+        assert lookup("paraformer").requestable is True
+        assert lookup("qwen3-asr").requestable is True
+
+    def test_should_mark_future_decoupled_component_aliases_as_not_requestable(self) -> None:
+        assert lookup("firered-asr").requestable is False
+        assert lookup("sortformer-diar").requestable is False
+
     # Performance Review (2026-02-25): parakeet (parakeet-tdt-0.6b-v2) deregistered.
     # Achieved 121.7x RTF on 60s clips but crashes with Metal OOM on audio > ~5min.
     # Root cause: MLX Metal memory budget exceeded on full-length sequences; chunking

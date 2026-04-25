@@ -80,6 +80,7 @@ class ModelInfo(BaseModel):
     engine_type: str
     description: str
     capabilities: dict[str, bool]
+    requestable: bool
 
 
 class ModelsResponse(BaseModel):
@@ -103,9 +104,20 @@ def _resolve_model(model: str | None) -> ModelSpec | None:
     if is_passthrough(model):
         return None
     try:
-        return lookup(model)  # type: ignore[arg-type]
+        spec = lookup(model)  # type: ignore[arg-type]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+
+    if not spec.requestable:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model '{spec.alias}' is registered for future pipeline composition and "
+                "is not available for direct transcription requests."
+            ),
+        )
+
+    return spec
 
 
 @router.post("/v1/audio/transcriptions", response_model=None)
@@ -315,7 +327,8 @@ async def create_transcription(
 async def list_models(request: Request) -> ModelsResponse:
     """
     List all supported models and the currently loaded model.
-    Use the returned `alias` values in the `model` field of POST /v1/audio/transcriptions.
+    Only entries with `requestable=true` can be passed to POST /v1/audio/transcriptions today.
+    Discovery-only entries are listed so future decoupled pipeline targets are visible.
     """
     service = request.app.state.service
     current_spec = service.current_model_spec
@@ -327,6 +340,7 @@ async def list_models(request: Request) -> ModelsResponse:
             engine_type=spec.engine_type,
             description=spec.description,
             capabilities=asdict(spec.capabilities),
+            requestable=spec.requestable,
         )
         for spec in list_all()
     ]
@@ -337,6 +351,7 @@ async def list_models(request: Request) -> ModelsResponse:
             engine_type="pipeline",
             description=profile.description,
             capabilities=asdict(profile.capabilities),
+            requestable=profile.requestable,
         )
         for profile in list_all_profiles()
     ]
