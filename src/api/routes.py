@@ -258,6 +258,15 @@ async def create_transcription(
             ),
         )
 
+    if isinstance(resolved_target, PipelineProfile):
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"Pipeline profile '{resolved_target.alias}' is recognized but not implemented yet. "
+                "FireRed runtime support lands in a later task."
+            ),
+        )
+
     logger.info(
         f"[{request_id}] Processing file: {file.filename} "
         f"({file_size_mb:.2f}MB, format={effective_format}, model={model_label})"

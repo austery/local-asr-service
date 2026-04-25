@@ -201,7 +201,7 @@ def test_response_format_overrides_output_format(client):
     assert result["segments"] is None
 
 
-def test_transcribe_endpoint_accepts_pipeline_profile() -> None:
+def test_transcribe_endpoint_returns_501_for_pipeline_profile_until_runtime_exists() -> None:
     pipeline_result = {
         "text": "Pipeline Test Result",
         "segments": [
@@ -222,12 +222,9 @@ def test_transcribe_endpoint_accepts_pipeline_profile() -> None:
             data={"model": "firered-sortformer", "output_format": "json"},
         )
 
-    assert response.status_code == 200
-    result = response.json()
-    assert result["text"] == "Pipeline Test Result"
-    assert result["model"] == "firered-sortformer"
-    assert result["segments"][0]["speaker"] == "Speaker 0"
-    _assert_pipeline_submit(mock_service, "firered-sortformer")
+    assert response.status_code == 501
+    assert "not implemented" in response.json()["detail"].lower()
+    mock_service.submit.assert_not_awaited()
 
 
 # === GET /v1/models/current Tests ===

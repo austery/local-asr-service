@@ -35,12 +35,6 @@ def _make_mock_service(
     return service
 
 
-def _assert_pipeline_submit(client: TestClient, alias: str) -> None:
-    submit_call = client.app.state.service.submit.await_args
-    assert submit_call.kwargs["model_spec"] is None
-    assert submit_call.kwargs["pipeline_profile"].alias == alias
-
-
 @pytest.fixture
 def client():
     """TestClient with qwen3-asr as startup model (timestamp, no diarization)."""
@@ -150,17 +144,16 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
     assert "Unknown model" in response.json()["detail"]
 
 
-def test_should_accept_pipeline_alias_when_provided(client) -> None:
+def test_should_return_501_when_pipeline_alias_is_provided(client) -> None:
     response = client.post(
         "/v1/audio/transcriptions",
         data={"model": "firered-sortformer", "language": "zh"},
         files={"file": _audio_file()},
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["model"] == "firered-sortformer"
-    _assert_pipeline_submit(client, "firered-sortformer")
+    assert response.status_code == 501
+    assert "not implemented" in response.json()["detail"].lower()
+    client.app.state.service.submit.assert_not_awaited()
 
 
 def test_should_return_400_when_future_transcription_component_alias_is_provided(client) -> None:
