@@ -29,10 +29,13 @@ def test_falls_back_to_unknown_when_no_overlap_exists() -> None:
     """
     验证当文本段与任何说话人轮次都没有时间重叠时，分配 "Unknown" 说话人。
 
-    场景：孤立段 [10.0-11.0s] 不与任何说话人轮次重叠
+    场景：孤立段 [10.0-11.0s] 存在说话人轮次，但都没有时间重叠
     """
     segments = [{"text": "orphan", "start": 10.0, "end": 11.0}]
-    turns: list[SpeakerTurn] = []
+    turns = [
+        SpeakerTurn(speaker="Speaker 1", start=0.0, end=1.0),
+        SpeakerTurn(speaker="Speaker 2", start=12.0, end=13.0),
+    ]
 
     aligned = align_speakers(segments, turns)
 

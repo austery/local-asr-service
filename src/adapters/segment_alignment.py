@@ -24,7 +24,7 @@ def align_speakers(
         start = float(segment.get("start", 0.0))
         end = float(segment.get("end", 0.0))
         best_speaker = "Unknown"
-        best_overlap = -1.0
+        best_overlap = 0.0
 
         for turn in speaker_turns:
             overlap = max(0.0, min(end, turn.end) - max(start, turn.start))
