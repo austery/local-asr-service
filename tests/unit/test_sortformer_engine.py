@@ -19,6 +19,16 @@ class TestSortformerEngine:
         runtime.load_model.assert_called_once_with("mlx-community/diar_sortformer_4spk-v1-fp32")
         assert engine._model is runtime_model
 
+    def test_load_should_raise_actionable_error_when_runtime_is_unavailable(self) -> None:
+        engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
+
+        with patch(
+            "src.core.sortformer_engine.importlib.import_module",
+            side_effect=ModuleNotFoundError("No module named 'mlx_sortformer'"),
+        ):
+            with pytest.raises(RuntimeError, match="mlx-audio version with Sortformer diarization support"):
+                engine.load()
+
     def test_release_should_clear_loaded_model_reference(self) -> None:
         engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
         engine._model = object()
@@ -45,6 +55,26 @@ class TestSortformerEngine:
         engine._diarize = diarize
 
         with pytest.raises(ValueError, match="Invalid timestamp range"):
+            engine.diarize_file("audio.wav")
+
+    def test_diarize_file_should_reject_boolean_timestamps(self) -> None:
+        engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
+        runtime_model = object()
+        diarize = MagicMock(return_value=[{"speaker": "speaker_0", "start": True, "end": 1.0}])
+        engine._model = runtime_model
+        engine._diarize = diarize
+
+        with pytest.raises(TypeError, match="Expected start to be numeric"):
+            engine.diarize_file("audio.wav")
+
+    def test_diarize_file_should_reject_non_finite_timestamps(self) -> None:
+        engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
+        runtime_model = object()
+        diarize = MagicMock(return_value=[{"speaker": "speaker_0", "start": float("nan"), "end": 1.0}])
+        engine._model = runtime_model
+        engine._diarize = diarize
+
+        with pytest.raises(ValueError, match="Expected start to be a finite number"):
             engine.diarize_file("audio.wav")
 
     def test_diarize_file_should_map_runtime_dicts_to_speaker_turns(self) -> None:

@@ -2,6 +2,7 @@
 
 import gc
 import importlib
+import math
 from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol, cast
 
@@ -28,7 +29,13 @@ class SortformerEngine(DiarizationPort):
         if self._model is not None:
             return
 
-        runtime = cast(_RuntimeModule, importlib.import_module(_RUNTIME_MODULE))
+        try:
+            runtime = cast(_RuntimeModule, importlib.import_module(_RUNTIME_MODULE))
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Sortformer diarization runtime is unavailable. Install an mlx-audio version "
+                "with Sortformer diarization support before using this adapter."
+            ) from exc
         self._model = runtime.load_model(self.model_id)
         self._diarize = runtime.diarize
 
@@ -51,10 +58,14 @@ class SortformerEngine(DiarizationPort):
 
         if not isinstance(speaker, str):
             raise TypeError(f"Expected speaker to be str, got {type(speaker).__name__}")
-        if not isinstance(start, int | float):
+        if isinstance(start, bool) or not isinstance(start, int | float):
             raise TypeError(f"Expected start to be numeric, got {type(start).__name__}")
-        if not isinstance(end, int | float):
+        if isinstance(end, bool) or not isinstance(end, int | float):
             raise TypeError(f"Expected end to be numeric, got {type(end).__name__}")
+        if not math.isfinite(float(start)):
+            raise ValueError(f"Expected start to be a finite number, got {start!r}")
+        if not math.isfinite(float(end)):
+            raise ValueError(f"Expected end to be a finite number, got {end!r}")
         if start >= end:
             raise ValueError(
                 f"Invalid timestamp range for speaker {speaker!r}: start={start} >= end={end}"
