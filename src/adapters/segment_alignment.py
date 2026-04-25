@@ -1,6 +1,17 @@
 from src.core.diarization_port import SpeakerTurn
 
 
+def _read_timestamp(segment: dict[str, object], field: str) -> float:
+    if field not in segment:
+        raise ValueError(f"segment missing required timestamp: {field}")
+
+    value = segment[field]
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"segment timestamp must be numeric: {field}") from exc
+
+
 def align_speakers(
     transcript_segments: list[dict[str, object]],
     speaker_turns: list[SpeakerTurn],
@@ -21,8 +32,8 @@ def align_speakers(
     """
     aligned: list[dict[str, object]] = []
     for segment in transcript_segments:
-        start = float(segment.get("start", 0.0))
-        end = float(segment.get("end", 0.0))
+        start = _read_timestamp(segment, "start")
+        end = _read_timestamp(segment, "end")
         best_speaker = "Unknown"
         best_overlap = 0.0
 

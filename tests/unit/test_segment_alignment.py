@@ -1,3 +1,5 @@
+import pytest
+
 from src.core.diarization_port import SpeakerTurn
 from src.adapters.segment_alignment import align_speakers
 
@@ -40,3 +42,19 @@ def test_falls_back_to_unknown_when_no_overlap_exists() -> None:
     aligned = align_speakers(segments, turns)
 
     assert aligned[0]["speaker"] == "Unknown"
+
+
+def test_falls_back_to_unknown_when_speaker_turns_are_empty() -> None:
+    segments = [{"text": "solo", "start": 0.0, "end": 1.0}]
+
+    aligned = align_speakers(segments, [])
+
+    assert aligned[0]["speaker"] == "Unknown"
+
+
+def test_raises_when_segment_is_missing_required_timestamps() -> None:
+    segments = [{"text": "broken", "start": 0.0}]
+    turns = [SpeakerTurn(speaker="Speaker 1", start=0.0, end=1.0)]
+
+    with pytest.raises(ValueError, match="missing required timestamp"):
+        align_speakers(segments, turns)
