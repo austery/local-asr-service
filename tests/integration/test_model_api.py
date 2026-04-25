@@ -35,6 +35,12 @@ def _make_mock_service(
     return service
 
 
+def _assert_pipeline_submit(client: TestClient, alias: str) -> None:
+    submit_call = client.app.state.service.submit.await_args
+    assert submit_call.kwargs["model_spec"] is None
+    assert submit_call.kwargs["pipeline_profile"].alias == alias
+
+
 @pytest.fixture
 def client():
     """TestClient with qwen3-asr as startup model (timestamp, no diarization)."""
@@ -44,10 +50,12 @@ def client():
         {"text": "test result", "segments": None, "duration": 1.0},
         current_model_spec=qwen_spec,
     )
-    with patch("src.main.TranscriptionService", return_value=mock_service):
-        with patch("src.main.lookup", return_value=qwen_spec):
-            with TestClient(app) as c:
-                yield c
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        TestClient(app) as c,
+    ):
+        yield c
 
 
 @pytest.fixture
@@ -59,10 +67,12 @@ def funasr_client():
         {"text": "funasr result", "segments": [], "duration": 1.0},
         current_model_spec=paraformer_spec,
     )
-    with patch("src.main.TranscriptionService", return_value=mock_service):
-        with patch("src.main.lookup", return_value=paraformer_spec):
-            with TestClient(app) as c:
-                yield c
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=paraformer_spec),
+        TestClient(app) as c,
+    ):
+        yield c
 
 
 def _audio_file() -> tuple[str, BytesIO, str]:
@@ -96,7 +106,7 @@ def test_should_include_pipeline_profile_entry_on_get_models(client) -> None:
     assert pipeline_entry["engine_type"] == "pipeline"
     assert pipeline_entry["model_id"] == "firered-asr+sortformer-diar"
     assert pipeline_entry["description"] == "decoupled FireRed + Sortformer profile"
-    assert pipeline_entry["requestable"] is False
+    assert pipeline_entry["requestable"] is True
     assert pipeline_entry["capabilities"]["timestamp"] is True
     assert pipeline_entry["capabilities"]["diarization"] is True
     assert pipeline_entry["capabilities"]["language_detect"] is True
@@ -140,15 +150,17 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
     assert "Unknown model" in response.json()["detail"]
 
 
-def test_should_return_400_when_pipeline_alias_is_provided(client) -> None:
+def test_should_accept_pipeline_alias_when_provided(client) -> None:
     response = client.post(
         "/v1/audio/transcriptions",
         data={"model": "firered-sortformer", "language": "zh"},
         files={"file": _audio_file()},
     )
 
-    assert response.status_code == 400
-    assert "Unknown model" in response.json()["detail"]
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == "firered-sortformer"
+    _assert_pipeline_submit(client, "firered-sortformer")
 
 
 def test_should_return_400_when_future_transcription_component_alias_is_provided(client) -> None:

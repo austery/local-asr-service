@@ -7,13 +7,16 @@ import asyncio
 import multiprocessing
 import os
 import tempfile as _tempfile
+from contextlib import suppress
 from io import BytesIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import UploadFile
 
+from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import lookup
+from src.core.pipeline_registry import lookup_profile
 from src.services.transcription import TranscriptionService
 
 
@@ -48,10 +51,8 @@ async def _stop_service(svc: TranscriptionService) -> None:
     svc.is_running = False
     if svc._result_reader_task and not svc._result_reader_task.done():
         svc._result_reader_task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await svc._result_reader_task
-        except asyncio.CancelledError:
-            pass
 
 
 @pytest.mark.asyncio
@@ -157,3 +158,91 @@ class TestTranscriptionService:
                 )
         finally:
             await _stop_service(svc)
+
+    async def test_run_decoupled_pipeline_aligns_speakers(self, funasr_spec):
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        transcript_result = {
+            "text": "hello world",
+            "segments": [
+                {"start": 0.0, "end": 1.0, "text": "hello"},
+                {"start": 1.0, "end": 2.0, "text": "world"},
+            ],
+            "duration": 2.0,
+        }
+        speaker_turns = [
+            SpeakerTurn(speaker="Speaker 1", start=0.0, end=1.2),
+            SpeakerTurn(speaker="Speaker 2", start=1.2, end=2.0),
+        ]
+
+        with (
+            patch.object(
+                svc,
+                "_transcribe_with_alias",
+                new=AsyncMock(return_value=transcript_result),
+            ) as mock_transcribe,
+            patch.object(
+                svc,
+                "_diarize_with_alias",
+                new=AsyncMock(return_value=speaker_turns),
+            ) as mock_diarize,
+        ):
+            result = await svc._run_decoupled_pipeline(
+                "/fake/audio.wav",
+                {"language": "zh", "output_format": "json"},
+                "req-pipeline",
+                profile,
+            )
+
+        assert result["text"] == "hello world"
+        assert result["segments"] == [
+            {"start": 0.0, "end": 1.0, "text": "hello", "speaker": "Speaker 1"},
+            {"start": 1.0, "end": 2.0, "text": "world", "speaker": "Speaker 2"},
+        ]
+        mock_transcribe.assert_awaited_once_with(
+            "/fake/audio.wav",
+            {"language": "zh", "output_format": "json"},
+            "req-pipeline",
+            profile.transcription_alias,
+        )
+        mock_diarize.assert_awaited_once_with(
+            "/fake/audio.wav",
+            "req-pipeline",
+            profile.diarization_alias,
+        )
+
+    async def test_run_decoupled_pipeline_returns_transcript_when_diarization_fails(
+        self,
+        funasr_spec,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        transcript_result = {
+            "text": "hello world",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            "duration": 1.0,
+        }
+
+        with (
+            patch.object(
+                svc,
+                "_transcribe_with_alias",
+                new=AsyncMock(return_value=transcript_result),
+            ),
+            patch.object(
+                svc,
+                "_diarize_with_alias",
+                new=AsyncMock(side_effect=RuntimeError("diarization boom")),
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            result = await svc._run_decoupled_pipeline(
+                "/fake/audio.wav",
+                {"language": "zh", "output_format": "json"},
+                "req-pipeline",
+                profile,
+            )
+
+        assert result == transcript_result
+        assert "diarization failed" in caplog.text.lower()

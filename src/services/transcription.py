@@ -5,13 +5,19 @@ import os
 import queue as _stdlib_queue
 import shutil
 import tempfile
-from typing import Any
+from contextlib import suppress
+from typing import Any, cast
 
 from fastapi import UploadFile
 
+from src.adapters.segment_alignment import align_speakers
 from src.core.base_engine import EngineCapabilities
+from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import ModelSpec
-from src.workers.model_worker import WorkerJob, run_worker
+from src.core.pipeline_registry import PipelineProfile
+from src.workers.model_worker import JobKind, WorkerJob, run_worker
+
+TranscriptionResult = str | dict[str, Any]
 
 
 class TranscriptionService:
@@ -84,10 +90,8 @@ class TranscriptionService:
         await self._shutdown_worker()
         if self._result_reader_task and not self._result_reader_task.done():
             self._result_reader_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._result_reader_task
-            except asyncio.CancelledError:
-                pass
 
     async def submit(
         self,
@@ -95,7 +99,11 @@ class TranscriptionService:
         params: dict[str, Any],
         request_id: str = "unknown",
         model_spec: ModelSpec | None = None,
-    ) -> str | dict[str, Any]:
+        pipeline_profile: PipelineProfile | None = None,
+    ) -> TranscriptionResult:
+        if model_spec is not None and pipeline_profile is not None:
+            raise ValueError("submit() accepts either model_spec or pipeline_profile, not both")
+
         if len(self._pending) >= self._max_queue_size:
             self.logger.warning(f"[{request_id}] Queue full, rejecting request")
             raise RuntimeError("Service busy: Queue is full.")
@@ -107,9 +115,48 @@ class TranscriptionService:
             with open(temp_path, "wb") as buf:
                 shutil.copyfileobj(file.file, buf)
 
-            loop = asyncio.get_running_loop()
-            future: asyncio.Future[str | dict[str, Any]] = loop.create_future()
+            if pipeline_profile is not None:
+                try:
+                    return await self._run_decoupled_pipeline(
+                        temp_path,
+                        params,
+                        request_id,
+                        pipeline_profile,
+                    )
+                finally:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
+            result = await self._submit_worker_job(
+                temp_file_path=temp_path,
+                params=params,
+                request_id=request_id,
+                model_spec=model_spec,
+                temp_dir=temp_dir,
+            )
+            if isinstance(result, str):
+                return result
+            return cast(dict[str, Any], result)
+
+        except BaseException:
+            self._pending.pop(request_id, None)
+            self._temp_dirs.pop(request_id, None)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+
+    async def _submit_worker_job(
+        self,
+        temp_file_path: str,
+        params: dict[str, Any],
+        request_id: str,
+        model_spec: ModelSpec | None,
+        *,
+        job_kind: JobKind = "transcribe",
+        temp_dir: str | None = None,
+    ) -> object:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[object] = loop.create_future()
+
+        try:
             async with self._spawn_lock:
                 if model_spec is not None and model_spec != self._current_model_spec:
                     await self._switch_worker(model_spec)
@@ -123,21 +170,105 @@ class TranscriptionService:
                 # during a concurrent model switch) does not cancel this request's
                 # future or delete its temp dir before the job is even queued.
                 self._pending[request_id] = future
-                self._temp_dirs[request_id] = temp_dir
+                if temp_dir is not None:
+                    self._temp_dirs[request_id] = temp_dir
 
-                self._job_queue.put_nowait(WorkerJob(
-                    uid=request_id,
-                    temp_file_path=temp_path,
-                    params=params,
-                ))
-
-            return await future
-
+                self._job_queue.put_nowait(
+                    WorkerJob(
+                        uid=request_id,
+                        temp_file_path=temp_file_path,
+                        params=params,
+                        requested_model_spec_alias=model_spec.alias if model_spec is not None else None,
+                        job_kind=job_kind,
+                    )
+                )
         except BaseException:
             self._pending.pop(request_id, None)
             self._temp_dirs.pop(request_id, None)
-            shutil.rmtree(temp_dir, ignore_errors=True)
             raise
+
+        return await future
+
+    async def _transcribe_with_alias(
+        self,
+        temp_file_path: str,
+        params: dict[str, Any],
+        request_id: str,
+        alias: str,
+    ) -> TranscriptionResult:
+        result = await self._submit_worker_job(
+            temp_file_path=temp_file_path,
+            params=params,
+            request_id=f"{request_id}:transcribe",
+            model_spec=self._lookup_model_spec(alias),
+        )
+        if isinstance(result, str):
+            return result
+        return cast(dict[str, Any], result)
+
+    async def _diarize_with_alias(
+        self,
+        temp_file_path: str,
+        request_id: str,
+        alias: str,
+    ) -> list[SpeakerTurn]:
+        result = await self._submit_worker_job(
+            temp_file_path=temp_file_path,
+            params={},
+            request_id=f"{request_id}:diarize",
+            model_spec=self._lookup_model_spec(alias),
+            job_kind="diarize",
+        )
+        return cast(list[SpeakerTurn], result)
+
+    def _lookup_model_spec(self, alias: str) -> ModelSpec:
+        from src.core.model_registry import lookup  # noqa: PLC0415
+
+        return lookup(alias)
+
+    async def _run_decoupled_pipeline(
+        self,
+        temp_file_path: str,
+        params: dict[str, Any],
+        request_id: str,
+        profile: PipelineProfile,
+    ) -> TranscriptionResult:
+        transcript_result = await self._transcribe_with_alias(
+            temp_file_path,
+            params,
+            request_id,
+            profile.transcription_alias,
+        )
+
+        if not isinstance(transcript_result, dict):
+            return transcript_result
+
+        try:
+            speaker_turns = await self._diarize_with_alias(
+                temp_file_path,
+                request_id,
+                profile.diarization_alias,
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "[%s] Decoupled pipeline diarization failed for profile %s; returning transcript-only result: %s",
+                request_id,
+                profile.alias,
+                exc,
+            )
+            return transcript_result
+
+        segments = transcript_result.get("segments")
+        if not isinstance(segments, list):
+            return transcript_result
+
+        aligned_segments = align_speakers(
+            cast(list[dict[str, object]], segments),
+            speaker_turns,
+        )
+        merged_result = dict(transcript_result)
+        merged_result["segments"] = aligned_segments
+        return merged_result
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
         for old_q in (self._job_queue, self._result_queue):
@@ -174,10 +305,10 @@ class TranscriptionService:
                 loop.run_in_executor(None, self._result_queue.get),
                 timeout=120.0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError as exc:
             self._worker.terminate()
             self._worker = None
-            raise RuntimeError("Worker failed to start within 120s timeout.")
+            raise RuntimeError("Worker failed to start within 120s timeout.") from exc
 
         if msg[0] == "LOAD_ERROR":
             self._worker.terminate()
@@ -205,12 +336,12 @@ class TranscriptionService:
 
     async def _shutdown_worker(self) -> None:
         """Gracefully shutdown worker subprocess and clean up IPC resources.
-        
+
         Critical: This method MUST properly reap the child process and close
         all multiprocessing.Queue instances to avoid zombie processes and
         resource_tracker hangs that prevent the main process from exiting.
         """
-        for uid, fut in list(self._pending.items()):
+        for _uid, fut in list(self._pending.items()):
             if not fut.done():
                 fut.set_exception(RuntimeError("Worker terminated (model switch or shutdown)"))
         self._pending.clear()
@@ -235,14 +366,14 @@ class TranscriptionService:
                 loop.run_in_executor(None, lambda: self._worker.join(timeout=5)),  # type: ignore[union-attr]
                 timeout=6.0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.logger.warning("Worker did not exit gracefully within 5s timeout")
 
         # 3. Force-kill if still alive
         if self._worker.is_alive():
             self.logger.warning("Sending SIGTERM to worker subprocess")
             self._worker.terminate()
-            
+
             # CRITICAL: join() after terminate() to reap the zombie process.
             # Without this, the process becomes a zombie and resource_tracker
             # cannot exit, causing the main process to hang indefinitely.
@@ -251,7 +382,7 @@ class TranscriptionService:
                     loop.run_in_executor(None, lambda: self._worker.join(timeout=3)),  # type: ignore[union-attr]
                     timeout=4.0,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self.logger.error("Worker did not respond to SIGTERM within 3s, using SIGKILL")
                 self._worker.kill()  # SIGKILL (last resort)
                 # Final join (no timeout wrap — must wait for kill to complete)
@@ -310,14 +441,17 @@ class TranscriptionService:
                     if self._worker:
                         worker = self._worker
                         loop = asyncio.get_running_loop()
-                        await loop.run_in_executor(None, lambda: worker.join(timeout=1))
+                        await loop.run_in_executor(
+                            None,
+                            lambda current_worker=worker: current_worker.join(timeout=1),
+                        )
                     self._worker = None
             except Exception:
                 self.logger.exception("Unexpected error processing IPC message: %r", msg)
 
     def _fail_all_pending(self, error: Exception) -> None:
         """Fail all in-flight futures with the given error (e.g., after worker crash)."""
-        for uid, fut in list(self._pending.items()):
+        for _uid, fut in list(self._pending.items()):
             if not fut.done():
                 fut.set_exception(error)
         self._pending.clear()

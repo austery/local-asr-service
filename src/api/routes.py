@@ -12,9 +12,11 @@ from pydantic import BaseModel, Field
 
 from src.config import MAX_UPLOAD_SIZE_MB
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
-from src.core.pipeline_registry import list_all_profiles
+from src.core.pipeline_registry import PipelineProfile, list_all_profiles, lookup_profile
 
 logger = logging.getLogger(__name__)
+
+ResolvedTarget = ModelSpec | PipelineProfile
 
 # 支持的音频 MIME 类型白名单
 ALLOWED_AUDIO_TYPES = {
@@ -94,7 +96,30 @@ class ModelsResponse(BaseModel):
 router = APIRouter()
 
 
-def _resolve_model(model: str | None) -> ModelSpec | None:
+def _raise_unknown_model(model: str) -> None:
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Unknown model: '{model}'. Use GET /v1/models to see built-in models, "
+            "or pass a full path prefixed with 'mlx-community/' or 'iic/'."
+        ),
+    )
+
+
+def _ensure_requestable(target: ResolvedTarget) -> None:
+    if target.requestable:
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Model '{target.alias}' is registered for future pipeline composition and "
+            "is not available for direct transcription requests."
+        ),
+    )
+
+
+def _resolve_model(model: str | None) -> ResolvedTarget | None:
     """
     Resolve the `model` form field to a ModelSpec, or None if no switch is needed.
 
@@ -103,21 +128,20 @@ def _resolve_model(model: str | None) -> ModelSpec | None:
     """
     if is_passthrough(model):
         return None
+
+    if model is None:
+        return None
+
     try:
-        spec = lookup(model)  # type: ignore[arg-type]
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from None
+        target: ResolvedTarget = lookup(model)
+    except ValueError:
+        try:
+            target = lookup_profile(model)
+        except KeyError:
+            _raise_unknown_model(model)
 
-    if not spec.requestable:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Model '{spec.alias}' is registered for future pipeline composition and "
-                "is not available for direct transcription requests."
-            ),
-        )
-
-    return spec
+    _ensure_requestable(target)
+    return target
 
 
 @router.post("/v1/audio/transcriptions", response_model=None)
@@ -193,7 +217,7 @@ async def create_transcription(
     file.file.seek(0)
 
     # 3. Resolve model → ModelSpec (or None = keep current engine)
-    resolved_spec = _resolve_model(model)
+    resolved_target = _resolve_model(model)
 
     # 4. Resolve effective output format
     effective_format = response_format if response_format is not None else output_format
@@ -203,14 +227,14 @@ async def create_transcription(
     #    If the request specifies a model, validate against ITS declared capabilities
     #    so the client gets an early 400 without waiting for the switch.
     #    Fall back to the current engine only for passthrough requests (model=None).
-    if resolved_spec is not None:
-        caps = resolved_spec.capabilities
+    if resolved_target is not None:
+        caps = resolved_target.capabilities
     else:
         caps = request.app.state.service.capabilities
 
-    model_label: str = (
-        resolved_spec.alias
-        if isinstance(resolved_spec, ModelSpec)
+    model_label = (
+        resolved_target.alias
+        if resolved_target is not None
         else str(getattr(request.app.state, "model_id", "unknown"))
     )
     service = request.app.state.service
@@ -247,21 +271,26 @@ async def create_transcription(
         }
 
         # Determine response model alias BEFORE awaiting:
-        #   - Explicit switch: use resolved_spec (always correct regardless of queue ordering).
+        #   - Explicit switch: use resolved_target (always correct regardless of queue ordering).
         #   - Passthrough: capture current spec now; reading it after await is racy because
         #     another concurrent request may trigger a switch while this job is queued.
-        spec_for_response: ModelSpec | None = resolved_spec if resolved_spec is not None else service.current_model_spec
+        response_target: object | None = (
+            resolved_target if resolved_target is not None else service.current_model_spec
+        )
 
         result = await service.submit(
             file,
             params,
             request_id=request_id,
-            model_spec=resolved_spec,
+            model_spec=resolved_target if isinstance(resolved_target, ModelSpec) else None,
+            pipeline_profile=(
+                resolved_target if isinstance(resolved_target, PipelineProfile) else None
+            ),
         )
 
-        response_model: str = (
-            spec_for_response.alias
-            if isinstance(spec_for_response, ModelSpec)
+        response_model = (
+            response_target.alias
+            if isinstance(response_target, (ModelSpec, PipelineProfile))
             else str(getattr(request.app.state, "model_id", "unknown"))
         )
 
