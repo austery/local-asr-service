@@ -27,6 +27,7 @@ temp_*
 
 # Benchmark results (generated)
 benchmarks/results/*.json
+.worktrees/
 
 .claude/settings.local.json
 *.txt
