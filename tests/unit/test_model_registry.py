@@ -38,6 +38,20 @@ class TestLookup:
         with pytest.raises(ValueError, match="Unknown model"):
             lookup("not-a-real-model")
 
+    def test_should_return_firered_spec_when_alias_is_known(self) -> None:
+        spec = lookup("firered-asr")
+
+        assert spec.engine_type == "firered"
+        assert spec.model_id == "FireRedTeam/FireRedASR2-AED"
+        assert spec.alias == "firered-asr"
+
+    def test_should_return_sortformer_spec_when_alias_is_known(self) -> None:
+        spec = lookup("sortformer-diar")
+
+        assert spec.engine_type == "mlx"
+        assert spec.model_id == "mlx-community/diar_sortformer_4spk-v1-fp32"
+        assert spec.alias == "sortformer-diar"
+
     def test_should_resolve_registered_model_id_to_same_spec_as_alias(self) -> None:
         by_alias = lookup("qwen3-asr")
         by_model_id = lookup("mlx-community/Qwen3-ASR-1.7B-8bit")
@@ -64,6 +78,19 @@ class TestCapabilities:
         spec = lookup("qwen3-asr")
 
         assert spec.capabilities.diarization is False
+
+    def test_should_declare_firered_language_detection_and_timestamps(self) -> None:
+        spec = lookup("firered-asr")
+
+        assert spec.capabilities.timestamp is True
+        assert spec.capabilities.diarization is False
+        assert spec.capabilities.language_detect is True
+
+    def test_should_declare_sortformer_diarization_without_timestamps(self) -> None:
+        spec = lookup("sortformer-diar")
+
+        assert spec.capabilities.diarization is True
+        assert spec.capabilities.timestamp is False
 
     # Performance Review (2026-02-25): parakeet (parakeet-tdt-0.6b-v2) deregistered.
     # Achieved 121.7x RTF on 60s clips but crashes with Metal OOM on audio > ~5min.
@@ -94,9 +121,11 @@ class TestListAll:
         models = list_all()
 
         aliases = {m.alias for m in models}
+        assert "firered-asr" in aliases
         assert "paraformer" in aliases
         assert "qwen3-asr" in aliases
         assert "sensevoice-small" in aliases
+        assert "sortformer-diar" in aliases
 
     def test_should_return_models_sorted_by_alias(self) -> None:
         models = list_all()
@@ -113,3 +142,8 @@ class TestAliasFor:
 
     def test_should_return_none_for_unknown_model_id(self) -> None:
         assert alias_for("unknown/model") is None
+
+    def test_should_return_alias_for_firered_model_id(self) -> None:
+        alias = alias_for("FireRedTeam/FireRedASR2-AED")
+
+        assert alias == "firered-asr"

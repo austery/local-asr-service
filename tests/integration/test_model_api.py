@@ -77,10 +77,27 @@ def test_should_return_model_list_on_get_models(client) -> None:
     body = response.json()
     assert "models" in body
     aliases = [m["alias"] for m in body["models"]]
+    assert "firered-asr" in aliases
+    assert "firered-sortformer" in aliases
     assert "paraformer" in aliases
     assert "qwen3-asr" in aliases
     assert "sensevoice-small" in aliases
-    
+    assert "sortformer-diar" in aliases
+
+
+def test_should_include_pipeline_profile_entry_on_get_models(client) -> None:
+    response = client.get("/v1/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    pipeline_entry = next(model for model in body["models"] if model["alias"] == "firered-sortformer")
+
+    assert pipeline_entry["engine_type"] == "pipeline"
+    assert pipeline_entry["model_id"] == "firered-asr+sortformer-diar"
+    assert pipeline_entry["description"] == "decoupled FireRed + Sortformer profile"
+    assert pipeline_entry["capabilities"]["timestamp"] is True
+    assert pipeline_entry["capabilities"]["diarization"] is True
+    assert pipeline_entry["capabilities"]["language_detect"] is True
 
 
 # MA-2
@@ -110,6 +127,17 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
     response = client.post(
         "/v1/audio/transcriptions",
         data={"model": "not-a-real-model", "language": "zh"},
+        files={"file": _audio_file()},
+    )
+
+    assert response.status_code == 400
+    assert "Unknown model" in response.json()["detail"]
+
+
+def test_should_return_400_when_pipeline_alias_is_provided(client) -> None:
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "firered-sortformer", "language": "zh"},
         files={"file": _audio_file()},
     )
 

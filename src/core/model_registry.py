@@ -10,7 +10,7 @@ from typing import Literal
 
 from src.core.base_engine import EngineCapabilities
 
-EngineType = Literal["funasr", "mlx"]
+EngineType = Literal["funasr", "mlx", "firered"]
 
 # OpenAI-compat placeholder values that mean "use the server's current model"
 # Empty string is also passthrough: form data serialises None as "" in some clients
@@ -33,6 +33,13 @@ _REGISTRY: dict[str, ModelSpec] = {
     spec.alias: spec
     for spec in [
         ModelSpec(
+            alias="firered-asr",
+            model_id="FireRedTeam/FireRedASR2-AED",
+            engine_type="firered",
+            description="FireRed ASR 2 AED. Transcription-focused model for future decoupled pipelines.",
+            capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=True),
+        ),
+        ModelSpec(
             alias="paraformer",
             model_id="iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
             engine_type="funasr",
@@ -52,6 +59,13 @@ _REGISTRY: dict[str, ModelSpec] = {
             engine_type="funasr",
             description="SenseVoice Small — fastest model (80-85x realtime). Best for: bulk speed-first processing, language detection, emotion tagging. NOT recommended for transcription quality: struggles with mixed-language and proper nouns.",
             capabilities=EngineCapabilities(timestamp=False, diarization=False, emotion_tags=True, language_detect=True),
+        ),
+        ModelSpec(
+            alias="sortformer-diar",
+            model_id="mlx-community/diar_sortformer_4spk-v1-fp32",
+            engine_type="mlx",
+            description="Sortformer diarization model for future decoupled pipelines.",
+            capabilities=EngineCapabilities(timestamp=False, diarization=True, emotion_tags=False, language_detect=False),
         ),
     ]
 }
