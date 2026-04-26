@@ -6,6 +6,8 @@ def _read_timestamp(segment: dict[str, object], field: str) -> float:
         raise ValueError(f"segment missing required timestamp: {field}")
 
     value = segment[field]
+    if isinstance(value, bool):
+        raise ValueError(f"segment timestamp must be numeric: {field}")
     try:
         return float(value)
     except (TypeError, ValueError) as exc:

@@ -58,3 +58,11 @@ def test_raises_when_segment_is_missing_required_timestamps() -> None:
 
     with pytest.raises(ValueError, match="missing required timestamp"):
         align_speakers(segments, turns)
+
+
+def test_raises_when_segment_timestamp_is_bool() -> None:
+    segments = [{"text": "broken", "start": True, "end": 1.0}]
+    turns = [SpeakerTurn(speaker="Speaker 1", start=0.0, end=1.0)]
+
+    with pytest.raises(ValueError, match="timestamp must be numeric"):
+        align_speakers(segments, turns)

@@ -7,6 +7,7 @@ Implements the ASREngine Protocol via structural subtyping.
 import gc
 import importlib
 import logging
+import math
 from collections.abc import Callable
 from typing import Protocol, cast
 
@@ -99,9 +100,7 @@ class FireRedEngine:
             segments: list[dict[str, object]] = []
             for chunk in chunks:
                 if isinstance(chunk, dict):
-                    ts = chunk.get("timestamp", (None, None))
-                    start = ts[0] if isinstance(ts, (list, tuple)) and len(ts) > 0 else None
-                    end = ts[1] if isinstance(ts, (list, tuple)) and len(ts) > 1 else None
+                    start, end = self._read_chunk_timestamps(chunk)
                     # Issue #3: skip chunks with any None timestamp — API Segment model
                     # requires float values; None would cause a serialization 500 error.
                     if start is None or end is None:
@@ -109,8 +108,10 @@ class FireRedEngine:
                     segments.append({"start": start, "end": end, "text": chunk.get("text", "")})
             return {"text": text, "segments": segments if segments else None}
 
-        if fmt in ("srt", "vtt"):
+        if fmt == "srt":
             return self._format_as_srt(chunks) or text
+        if fmt == "vtt":
+            return self._format_as_vtt(chunks) or text
 
         return text
 
@@ -124,6 +125,18 @@ class FireRedEngine:
         milliseconds = ms % 1000
         return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
+    def _read_chunk_timestamps(
+        self, chunk: dict[str, object]
+    ) -> tuple[float | None, float | None]:
+        ts = chunk.get("timestamp", (None, None))
+        start = self._normalize_timestamp(
+            ts[0] if isinstance(ts, (list, tuple)) and len(ts) > 0 else None
+        )
+        end = self._normalize_timestamp(
+            ts[1] if isinstance(ts, (list, tuple)) and len(ts) > 1 else None
+        )
+        return start, end
+
     def _format_as_srt(self, chunks: list[object]) -> str:
         """Build an SRT subtitle string from FireRed timestamped chunks (timestamps in seconds)."""
         lines: list[str] = []
@@ -131,9 +144,7 @@ class FireRedEngine:
         for chunk in chunks:
             if not isinstance(chunk, dict):
                 continue
-            ts = chunk.get("timestamp", (None, None))
-            start = ts[0] if isinstance(ts, (list, tuple)) and len(ts) > 0 else None
-            end = ts[1] if isinstance(ts, (list, tuple)) and len(ts) > 1 else None
+            start, end = self._read_chunk_timestamps(chunk)
             if start is None or end is None:
                 continue
             lines.append(str(idx))
@@ -142,6 +153,35 @@ class FireRedEngine:
             lines.append("")
             idx += 1
         return "\n".join(lines)
+
+    def _format_as_vtt(self, chunks: list[object]) -> str:
+        """Build a WebVTT subtitle string from FireRed timestamped chunks."""
+        lines = ["WEBVTT", ""]
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            start, end = self._read_chunk_timestamps(chunk)
+            if start is None or end is None:
+                continue
+            lines.append(
+                f"{self._sec_to_srt_time(start).replace(',', '.')} --> "
+                f"{self._sec_to_srt_time(end).replace(',', '.')}"
+            )
+            lines.append(str(chunk.get("text", "")))
+            lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _normalize_timestamp(value: object) -> float | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            timestamp = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(timestamp):
+            return None
+        return timestamp
 
     def release(self) -> None:
         self._pipeline = None

@@ -1,5 +1,6 @@
 """Unit tests for the FireRed ASR adapter (src/core/firered_engine.py)."""
 
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -156,6 +157,25 @@ class TestFireRedEngineTranscribe:
 
         assert result == "Some text"
 
+    def test_transcribe_vtt_format_returns_webvtt_string(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+        engine._pipeline = MagicMock(
+            return_value={
+                "text": "Hello world",
+                "chunks": [
+                    {"text": "Hello", "timestamp": (0.0, 0.5)},
+                    {"text": " world", "timestamp": (0.5, 1.0)},
+                ],
+            }
+        )
+
+        result = engine.transcribe_file("audio.wav", format="vtt")
+
+        assert isinstance(result, str)
+        assert result.startswith("WEBVTT\n\n")
+        assert "00:00:00.000 --> 00:00:00.500" in result
+        assert "00:00:00,000 --> 00:00:00,500" not in result
+
     # Issue #1: worker passes output_format kwarg — engine must honor it
     def test_transcribe_honors_output_format_kwarg_from_worker(self) -> None:
         """The model_worker passes output_format=, not format= or response_format=.
@@ -227,6 +247,58 @@ class TestFireRedEngineTranscribe:
         assert segments is not None
         assert len(segments) == 1
         assert segments[0] == {"start": 0.0, "end": 0.5, "text": "Hello"}
+
+    def test_transcribe_json_normalizes_numeric_timestamps_to_plain_float(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+        engine._pipeline = MagicMock(
+            return_value={
+                "text": "Hello world",
+                "chunks": [
+                    {"text": "Hello", "timestamp": (Decimal("0.0"), Decimal("0.5"))},
+                ],
+            }
+        )
+
+        result = engine.transcribe_file("audio.wav", output_format="json")
+
+        assert isinstance(result, dict)
+        segments = result["segments"]
+        assert segments is not None
+        assert segments[0] == {"start": 0.0, "end": 0.5, "text": "Hello"}
+        assert isinstance(segments[0]["start"], float)
+        assert isinstance(segments[0]["end"], float)
+
+    def test_transcribe_json_filters_bool_timestamps(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+        engine._pipeline = MagicMock(
+            return_value={
+                "text": "Hello world",
+                "chunks": [
+                    {"text": "Hello", "timestamp": (True, 0.5)},
+                ],
+            }
+        )
+
+        result = engine.transcribe_file("audio.wav", output_format="json")
+
+        assert isinstance(result, dict)
+        assert result["segments"] is None
+
+    def test_transcribe_json_filters_non_finite_timestamps(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+        engine._pipeline = MagicMock(
+            return_value={
+                "text": "Hello world",
+                "chunks": [
+                    {"text": "Hello", "timestamp": (0.0, float("inf"))},
+                ],
+            }
+        )
+
+        result = engine.transcribe_file("audio.wav", output_format="json")
+
+        assert isinstance(result, dict)
+        assert result["segments"] is None
 
 
 class TestFireRedEngineRelease:
