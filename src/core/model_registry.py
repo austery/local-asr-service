@@ -27,6 +27,7 @@ class ModelSpec:
     description: str
     capabilities: EngineCapabilities
     requestable: bool = True
+    startup_eligible: bool = True
 
 
 # fmt: off
@@ -69,6 +70,7 @@ _REGISTRY: dict[str, ModelSpec] = {
             description="Sortformer diarization adapter target for future decoupled pipelines; not directly requestable yet.",
             capabilities=EngineCapabilities(timestamp=False, diarization=True, emotion_tags=False, language_detect=False),
             requestable=False,
+            startup_eligible=False,
         ),
     ]
 }

@@ -23,7 +23,8 @@ from src.config import (
     PORT,
     get_model_id,
 )
-from src.core.model_registry import lookup
+from src.core.model_registry import ModelSpec, lookup
+from src.core.pipeline_registry import lookup_profile
 from src.services.transcription import TranscriptionService
 
 # === 基础日志配置 ===
@@ -33,6 +34,29 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("local_asr.main")
+
+
+def _resolve_startup_model_spec(startup_model_id: str) -> ModelSpec | None:
+    """Resolve the configured resident model, rejecting discoverable-but-unrunnable targets."""
+    try:
+        spec = lookup(startup_model_id)
+    except ValueError:
+        try:
+            lookup_profile(startup_model_id)
+        except KeyError:
+            return None
+        raise RuntimeError(
+            f"Startup model '{startup_model_id}' is a pipeline profile and cannot be configured "
+            "as the resident model until pipeline runtime support exists."
+        ) from None
+
+    if not spec.startup_eligible:
+        raise RuntimeError(
+            f"Startup model '{startup_model_id}' cannot be configured as the resident model — "
+            "it is a component adapter (e.g. diarization-only) that is not runnable as a standalone ASR engine."
+        )
+
+    return spec
 
 
 @asynccontextmanager
@@ -48,10 +72,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 1. 解析启动模型的 ModelSpec（用于 dynamic switching 的基准）
     startup_model_id = get_model_id()
-    try:
-        initial_spec = lookup(startup_model_id)
-    except ValueError:
-        initial_spec = None
+    initial_spec = _resolve_startup_model_spec(startup_model_id)
+    if initial_spec is None:
         logger.warning(f"⚠️  Startup model '{startup_model_id}' not in registry; model tracking disabled.")
 
     # 2. 初始化服务（Worker subprocess spawns lazily on first request）

@@ -70,7 +70,9 @@ SPEC-011 extends that existing shape instead of turning a feature delivery task 
 - [x] Introduce explicit transcription and diarization ports, instead of treating both as one mandatory engine capability.
   - `src/core/diarization_port.py` defines the `DiarizationPort` protocol.
 - [x] Register `firered-asr` and `sortformer-diar` in `src/core/model_registry.py`.
-  - Both are registered as `requestable=False` — they are adapter targets for the decoupled pipeline, not directly usable via POST today.
+  - Both are registered as `requestable=False` — they are not directly usable via POST today.
+  - `firered-asr` is `startup_eligible=True`: it is a full ASR engine and can be configured as the resident startup model via `ENGINE_TYPE=firered`.
+  - `sortformer-diar` is `startup_eligible=False`: it is a diarization-only component adapter and cannot be configured as a resident ASR model.
 - [x] Implement a `FireRedEngine` adapter for transcription (`src/core/firered_engine.py`).
 - [x] Implement a `SortformerEngine` adapter for diarization (`src/core/sortformer_engine.py`).
 - [x] Register `firered-sortformer` pipeline profile in `src/core/pipeline_registry.py`.
@@ -82,31 +84,38 @@ SPEC-011 extends that existing shape instead of turning a feature delivery task 
 
 **Acceptance**: Both new adapters can load, run independently, and release resources cleanly through the same lifecycle expectations used by existing engines. ✅
 
-### Phase 2: Pipeline orchestration — ⬜ Planned
+### Phase 2: Pipeline orchestration — 🔧 Internal plumbing landed (public gate remains)
 
-- [ ] Add a decoupled execution path in `TranscriptionService` while keeping the existing integrated path intact.
-- [ ] Ensure the service runs transcription and diarization serially, with an explicit release boundary between stages.
-- [ ] Represent combined pipeline capabilities as a pipeline/profile concern rather than a single-model concern.
-- [ ] Lift the 501 gate on `firered-sortformer` once the runtime is verified end-to-end.
+- [x] Add a decoupled execution path in `TranscriptionService` while keeping the existing integrated path intact.
+- [x] Ensure the service runs transcription and diarization serially, with an explicit release boundary between stages.
+- [x] Represent combined pipeline capabilities as a pipeline/profile concern rather than a single-model concern.
+- [ ] Lift the 501 gate on `firered-sortformer` once the runtime is verified end-to-end (pending benchmarking milestone).
 
-**Acceptance**: The service can execute a serial decoupled pipeline without changing the public API contract for existing clients.
+**Status**: The internal serial orchestration path exists in `TranscriptionService._run_decoupled_pipeline()`. The `firered-sortformer` profile dispatches through this path when reached internally. The public POST boundary still returns `501` — the gate will be lifted as a separate milestone once the pipeline is benchmarked end-to-end.
 
-### Phase 3: Alignment and degradation — ⬜ Planned
+**Acceptance**: The service can execute a serial decoupled pipeline without changing the public API contract for existing clients. ✅ (internal path verified; 501 gate for public API boundary intentionally remains)
 
-- [ ] Implement alignment that merges transcript segments and diarization speaker turns.
-  - Pure function skeleton already exists at `src/adapters/segment_alignment.py`.
-- [ ] Define transcript-only degradation as a first-class success path when diarization fails.
+### Phase 3: Alignment and degradation — 🔧 Partial: alignment adapter and diarization plumbing landed
+
+- [x] Implement alignment that merges transcript segments and diarization speaker turns.
+  - `src/adapters/segment_alignment.py` — pure function adapter, fully tested.
+- [x] Define transcript-only degradation as a first-class success path when diarization fails.
+  - `_run_decoupled_pipeline()` catches diarization errors and returns transcript-only result.
 - [ ] Define transcript-only degradation as a first-class success path when alignment fails.
-- [ ] Add focused tests for orchestration order, degradation behavior, and compatibility with current models.
+- [ ] Add focused integration tests for orchestration order, degradation behavior, and compatibility with current models.
 
-**Acceptance**: The decoupled path returns speaker-labeled output when both stages succeed, and still returns transcript-only output when diarization or alignment fails.
+**Status**: Core alignment and diarization-failure degradation path exist. Full end-to-end alignment degradation (alignment failure → transcript-only) and broader orchestration tests remain outstanding.
+
+**Acceptance**: The decoupled path returns speaker-labeled output when both stages succeed, and still returns transcript-only output when diarization or alignment fails. (Partial: diarization-failure path done; alignment-failure path pending)
 
 ## 5. Acceptance Criteria
 
 - [x] **Architecture clarity**: SPEC-011 is framed as a lightweight ports-and-adapters extension, not a strict Clean Architecture refactor.
-- [x] **Phase 1 plumbing landed**: FireRed and Sortformer adapters exist; pipeline registry maps `firered-sortformer` to both components.
-- [x] **Discovery-only gate**: `firered-sortformer` is visible in `GET /v1/models` (`requestable: false`) but POST returns `501` until runtime enablement.
-- [x] **Compatibility**: Existing `paraformer` and `qwen3-asr` behavior remains compatible at the current API surface. (186/186 tests pass)
+- [x] **Phase 1 plumbing landed**: FireRed and Sortformer adapters exist; pipeline registry maps `firered-sortformer` to both components. `firered-asr` is startup-eligible as a resident ASR engine; `sortformer-diar` is diarization-only and blocked from startup.
+- [x] **Phase 2 internal orchestration**: `TranscriptionService._run_decoupled_pipeline()` executes serial ASR → diarization flow; `firered-sortformer` dispatches through it internally.
+- [x] **Phase 3 alignment adapter and diarization-failure degradation**: `src/adapters/segment_alignment.py` is implemented and tested; diarization-failure path returns transcript-only.
+- [x] **Discovery-only gate**: `firered-sortformer` is visible in `GET /v1/models` (`requestable: false`) but POST returns `501` until runtime enablement milestone.
+- [x] **Compatibility**: Existing `paraformer` and `qwen3-asr` behavior remains compatible at the current API surface. (183+ tests pass)
 - [ ] **High-accuracy transcription**: FireRed-based transcription benchmarks better than the current default path on the project's mixed Chinese-English evaluation fixtures.
 - [ ] **Better diarization quality**: Sortformer-based diarization benchmarks better than the current CAM++ path on the project's English-heavy multi-speaker evaluation fixtures.
 - [ ] **Resource control**: The service never keeps the ASR model and diarization model resident at the same time during the decoupled path.
@@ -119,6 +128,7 @@ SPEC-011 extends that existing shape instead of turning a feature delivery task 
 | 2026-04-25 | 📝 草案 (Draft) | Initial draft based on April 2026 model research |
 | 2026-04-25 | 📝 草案 (Draft) | Refined architecture framing to lightweight ports-and-adapters and expanded implementation phases |
 | 2026-05-01 | 🚧 进行中 (In Progress) | Phase 1 landed: FireRed + Sortformer adapters, pipeline_registry, diarization_port, segment_alignment adapter. firered-sortformer discoverable but 501-gated at POST boundary. |
+| 2026-05-04 | 🚧 进行中 (In Progress) | Phase 2/3 internal plumbing landed: serial pipeline orchestration in TranscriptionService, segment_alignment pure function, diarization-failure degradation path. firered-asr marked startup_eligible=True (valid resident model via ENGINE_TYPE=firered). Public 501 gate on firered-sortformer remains until benchmarking milestone. |
 
 ## 7. Related
 

@@ -93,7 +93,7 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `paraformer` | FunASR | ✅ | Mandarin + Diarization (Best for meetings) |
 | `qwen3-asr` | MLX | ✅ | English/Chinese single-speaker (Fast, low memory) |
 | `sensevoice-small` | FunASR | ✅ | Speed-first, emotion/language detection |
-| `firered-asr` | FireRed | ❌ | Transcription adapter for future decoupled pipeline |
+| `firered-asr` | FireRed | ❌ | Bilingual ASR engine; startup-eligible via `ENGINE_TYPE=firered`; not publicly requestable yet |
 | `sortformer-diar` | MLX | ❌ | Diarization adapter for future decoupled pipeline |
 | `firered-sortformer` | Pipeline | ❌ | Decoupled profile — discoverable via `GET /v1/models`, POST returns `501` until runtime enabled |
 
@@ -121,8 +121,8 @@ http://localhost:50700/docs
 ENGINE_TYPE=funasr            # funasr | mlx | firered
 MODEL_ID=                     # Override model for any engine (highest priority)
 FUNASR_MODEL_ID=iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
-MLX_MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit
-FIRERED_MODEL_ID=FireRedTeam/FireRedASR2-AED  # FireRed engine default (plumbing only)
+MLX_MODEL_ID=mlx-community/Qwen3-ASR-1.7B-4bit
+FIRERED_MODEL_ID=FireRedTeam/FireRedASR2-AED  # FireRed engine default (startup-eligible; not publicly requestable yet)
 
 # Service
 HOST=0.0.0.0

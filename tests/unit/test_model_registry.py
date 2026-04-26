@@ -102,6 +102,22 @@ class TestRequestability:
         assert lookup("firered-asr").requestable is False
         assert lookup("sortformer-diar").requestable is False
 
+    def test_firered_should_be_startup_eligible_despite_not_being_requestable(self) -> None:
+        """FireRed is a real ASR engine: startup_eligible regardless of public requestability."""
+        spec = lookup("firered-asr")
+        assert spec.requestable is False
+        assert spec.startup_eligible is True
+
+    def test_sortformer_should_not_be_startup_eligible(self) -> None:
+        """sortformer-diar is a diarization-only component, not a startup ASR engine."""
+        spec = lookup("sortformer-diar")
+        assert spec.startup_eligible is False
+
+    def test_standard_asr_models_are_startup_eligible(self) -> None:
+        assert lookup("paraformer").startup_eligible is True
+        assert lookup("qwen3-asr").startup_eligible is True
+        assert lookup("sensevoice-small").startup_eligible is True
+
     # Performance Review (2026-02-25): parakeet (parakeet-tdt-0.6b-v2) deregistered.
     # Achieved 121.7x RTF on 60s clips but crashes with Metal OOM on audio > ~5min.
     # Root cause: MLX Metal memory budget exceeded on full-length sequences; chunking
