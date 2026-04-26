@@ -6,7 +6,7 @@ OpenAI Whisper-compatible HTTP API on port **50700**.
 **Multi-engine architecture:**
 - **FunASR** — Paraformer (Chinese SOTA) + CAM++ speaker diarization
 - **MLX Audio** — Apple-native models (Qwen3-ASR, Whisper, etc.)
-- **FireRed** — FireRedASR2-AED adapter (plumbing ready; public decoupled pipeline coming)
+- **FireRed + Sortformer** — Decoupled bilingual ASR + diarization pipeline (SPEC-011; production-hardened, 501-gated)
 
 → See [MODELS.md](./MODELS.md) for model list, benchmark results, and selection guide.
 
@@ -94,8 +94,8 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `qwen3-asr` | MLX | ✅ | English/Chinese single-speaker (8-bit registered alias for per-request switching) |
 | `sensevoice-small` | FunASR | ✅ | Speed-first, emotion/language detection |
 | `firered-asr` | FireRed | ❌ | Bilingual ASR engine; startup-eligible via `ENGINE_TYPE=firered`; not publicly requestable yet |
-| `sortformer-diar` | MLX | ❌ | Diarization adapter for future decoupled pipeline |
-| `firered-sortformer` | Pipeline | ❌ | Decoupled profile — discoverable via `GET /v1/models`, POST returns `501` until runtime enabled |
+| `sortformer-diar` | Sortformer | ❌ | Speaker diarization adapter (internal only, not requestable) |
+| `firered-sortformer` | Pipeline | ❌ | Decoupled profile — sequential ASR + diarization with result alignment; discoverable via `GET /v1/models`, POST returns `501` until public gate is lifted (SPEC-011) |
 
 > **Discovery vs requestable**: `GET /v1/models` lists all registered models and pipeline profiles (including discovery-only entries). Only aliases marked ✅ can be used in `POST /v1/audio/transcriptions`. Sending `model=firered-sortformer` returns `501 Not Implemented` until the decoupled runtime is publicly enabled.
 
@@ -196,7 +196,19 @@ MODEL_IDLE_TIMEOUT_SEC=0 uv run python -m src.main
 
 ---
 
-## Architecture
+## Decoupled Pipeline (SPEC-011)
+
+The `firered-sortformer` profile implements a **production-hardened decoupled pipeline** for ASR + diarization:
+
+- **Sequential execution**: ASR (FireRed) → Diarization (Sortformer) → Speaker alignment
+- **Independent model switching**: Models load/release in strict order (no double-peak memory)
+- **Result alignment**: Diarization speaker turns aligned to ASR segment timestamps
+- **Full lifecycle hardening**: Cancellation-safe cleanup, ownership gating, half-init prevention, comprehensive logging
+- **501-gated public endpoint**: Pipeline is discoverable (`GET /v1/models`) but POST returns `501 Not Implemented` until explicitly enabled
+  
+See [SPEC-011-Decoupled-ASR-Diarization.md](./docs/SPEC-011-Decoupled-ASR-Diarization.md) for full design + API details.
+
+---
 
 ```
 src/
