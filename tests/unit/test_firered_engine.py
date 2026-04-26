@@ -119,9 +119,42 @@ class TestFireRedEngineTranscribe:
         engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
         engine._pipeline = MagicMock(return_value={"text": "Fallback", "chunks": []})
 
-        result = engine.transcribe_file("audio.wav", format="srt")
+        result = engine.transcribe_file("audio.wav", format="xyz_unknown")
 
         assert result == "Fallback"
+
+    def test_transcribe_srt_format_returns_subtitle_string(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+        engine._pipeline = MagicMock(
+            return_value={
+                "text": "Hello world",
+                "chunks": [
+                    {"text": "Hello", "timestamp": (0.0, 0.5)},
+                    {"text": " world", "timestamp": (0.5, 1.0)},
+                ],
+            }
+        )
+
+        result = engine.transcribe_file("audio.wav", format="srt")
+
+        assert isinstance(result, str)
+        assert "00:00:00,000 --> 00:00:00,500" in result
+        assert "Hello" in result
+        assert "00:00:00,500 --> 00:00:01,000" in result
+        assert " world" in result
+
+    def test_transcribe_srt_falls_back_to_plain_text_when_no_valid_chunks(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+        engine._pipeline = MagicMock(
+            return_value={
+                "text": "Some text",
+                "chunks": [{"text": "Some text", "timestamp": (None, None)}],
+            }
+        )
+
+        result = engine.transcribe_file("audio.wav", format="srt")
+
+        assert result == "Some text"
 
     # Issue #1: worker passes output_format kwarg — engine must honor it
     def test_transcribe_honors_output_format_kwarg_from_worker(self) -> None:

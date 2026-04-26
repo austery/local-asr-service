@@ -93,8 +93,9 @@ class FireRedEngine:
         raw = self._pipeline(file_path)
         text = raw.get("text", "") if isinstance(raw, dict) else str(raw)
 
+        chunks: list[object] = raw.get("chunks", []) if isinstance(raw, dict) else []
+
         if fmt == "json":
-            chunks: list[object] = raw.get("chunks", []) if isinstance(raw, dict) else []
             segments: list[dict[str, object]] = []
             for chunk in chunks:
                 if isinstance(chunk, dict):
@@ -108,7 +109,39 @@ class FireRedEngine:
                     segments.append({"start": start, "end": end, "text": chunk.get("text", "")})
             return {"text": text, "segments": segments if segments else None}
 
+        if fmt in ("srt", "vtt"):
+            return self._format_as_srt(chunks) or text
+
         return text
+
+    @staticmethod
+    def _sec_to_srt_time(sec: float) -> str:
+        """Convert seconds to SRT time format (HH:MM:SS,mmm)."""
+        ms = max(0, int(round(sec * 1000)))
+        hours = ms // 3600000
+        minutes = (ms % 3600000) // 60000
+        seconds = (ms % 60000) // 1000
+        milliseconds = ms % 1000
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+    def _format_as_srt(self, chunks: list[object]) -> str:
+        """Build an SRT subtitle string from FireRed timestamped chunks (timestamps in seconds)."""
+        lines: list[str] = []
+        idx = 1
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            ts = chunk.get("timestamp", (None, None))
+            start = ts[0] if isinstance(ts, (list, tuple)) and len(ts) > 0 else None
+            end = ts[1] if isinstance(ts, (list, tuple)) and len(ts) > 1 else None
+            if start is None or end is None:
+                continue
+            lines.append(str(idx))
+            lines.append(f"{self._sec_to_srt_time(start)} --> {self._sec_to_srt_time(end)}")
+            lines.append(chunk.get("text", ""))
+            lines.append("")
+            idx += 1
+        return "\n".join(lines)
 
     def release(self) -> None:
         self._pipeline = None
