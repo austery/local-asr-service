@@ -5,15 +5,24 @@ API routes for speech transcription service.
 import logging
 import os
 from dataclasses import asdict
+from typing import Never
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from src.config import MAX_UPLOAD_SIZE_MB
-from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
+from src.core.model_registry import (
+    ModelSpec,
+    is_passthrough,
+    list_all,
+    lookup,
+)
+from src.core.pipeline_registry import PipelineProfile, list_all_profiles, lookup_profile
 
 logger = logging.getLogger(__name__)
+
+ResolvedTarget = ModelSpec | PipelineProfile
 
 # 支持的音频 MIME 类型白名单
 ALLOWED_AUDIO_TYPES = {
@@ -79,6 +88,7 @@ class ModelInfo(BaseModel):
     engine_type: str
     description: str
     capabilities: dict[str, bool]
+    requestable: bool
 
 
 class ModelsResponse(BaseModel):
@@ -92,7 +102,32 @@ class ModelsResponse(BaseModel):
 router = APIRouter()
 
 
-def _resolve_model(model: str | None) -> ModelSpec | None:
+def _raise_unknown_model(model: str) -> Never:
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Unknown model: '{model}'. Use GET /v1/models to see built-in models, "
+            "or pass a requestable full model ID such as 'mlx-community/...' or 'iic/...'. "
+            "The registered FireRed model ID 'FireRedTeam/FireRedASR2-AED' is startup-only "
+            "and not directly requestable via POST."
+        ),
+    )
+
+
+def _ensure_requestable(target: ModelSpec) -> None:
+    if target.requestable:
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Model '{target.alias}' is registered for future pipeline composition and "
+            "is not available for direct transcription requests."
+        ),
+    )
+
+
+def _resolve_model(model: str | None) -> ResolvedTarget | None:
     """
     Resolve the `model` form field to a ModelSpec, or None if no switch is needed.
 
@@ -101,10 +136,18 @@ def _resolve_model(model: str | None) -> ModelSpec | None:
     """
     if is_passthrough(model):
         return None
+
     try:
-        return lookup(model)  # type: ignore[arg-type]
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from None
+        target: ResolvedTarget = lookup(model)
+    except ValueError:
+        try:
+            target = lookup_profile(model)
+        except KeyError:
+            _raise_unknown_model(model)
+
+    if isinstance(target, ModelSpec):
+        _ensure_requestable(target)
+    return target
 
 
 @router.post("/v1/audio/transcriptions", response_model=None)
@@ -180,7 +223,7 @@ async def create_transcription(
     file.file.seek(0)
 
     # 3. Resolve model → ModelSpec (or None = keep current engine)
-    resolved_spec = _resolve_model(model)
+    resolved_target = _resolve_model(model)
 
     # 4. Resolve effective output format
     effective_format = response_format if response_format is not None else output_format
@@ -190,14 +233,14 @@ async def create_transcription(
     #    If the request specifies a model, validate against ITS declared capabilities
     #    so the client gets an early 400 without waiting for the switch.
     #    Fall back to the current engine only for passthrough requests (model=None).
-    if resolved_spec is not None:
-        caps = resolved_spec.capabilities
+    if resolved_target is not None:
+        caps = resolved_target.capabilities
     else:
         caps = request.app.state.service.capabilities
 
-    model_label: str = (
-        resolved_spec.alias
-        if isinstance(resolved_spec, ModelSpec)
+    model_label = (
+        resolved_target.alias
+        if resolved_target is not None
         else str(getattr(request.app.state, "model_id", "unknown"))
     )
     service = request.app.state.service
@@ -221,6 +264,15 @@ async def create_transcription(
             ),
         )
 
+    if isinstance(resolved_target, PipelineProfile):
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"Pipeline profile '{resolved_target.alias}' is recognized but not implemented at the "
+                "public POST boundary yet."
+            ),
+        )
+
     logger.info(
         f"[{request_id}] Processing file: {file.filename} "
         f"({file_size_mb:.2f}MB, format={effective_format}, model={model_label})"
@@ -234,21 +286,26 @@ async def create_transcription(
         }
 
         # Determine response model alias BEFORE awaiting:
-        #   - Explicit switch: use resolved_spec (always correct regardless of queue ordering).
+        #   - Explicit switch: use resolved_target (always correct regardless of queue ordering).
         #   - Passthrough: capture current spec now; reading it after await is racy because
         #     another concurrent request may trigger a switch while this job is queued.
-        spec_for_response: ModelSpec | None = resolved_spec if resolved_spec is not None else service.current_model_spec
+        response_target: object | None = (
+            resolved_target if resolved_target is not None else service.current_model_spec
+        )
 
         result = await service.submit(
             file,
             params,
             request_id=request_id,
-            model_spec=resolved_spec,
+            model_spec=resolved_target if isinstance(resolved_target, ModelSpec) else None,
+            pipeline_profile=(
+                resolved_target if isinstance(resolved_target, PipelineProfile) else None
+            ),
         )
 
-        response_model: str = (
-            spec_for_response.alias
-            if isinstance(spec_for_response, ModelSpec)
+        response_model = (
+            response_target.alias
+            if isinstance(response_target, (ModelSpec, PipelineProfile))
             else str(getattr(request.app.state, "model_id", "unknown"))
         )
 
@@ -314,25 +371,38 @@ async def create_transcription(
 async def list_models(request: Request) -> ModelsResponse:
     """
     List all supported models and the currently loaded model.
-    Use the returned `alias` values in the `model` field of POST /v1/audio/transcriptions.
+    `requestable=true` means the entry is directly executable today.
+    Discovery-only entries remain listed so future decoupled pipeline targets are visible.
     """
     service = request.app.state.service
     current_spec = service.current_model_spec
     current_alias = current_spec.alias if current_spec else None
+    model_entries = [
+        ModelInfo(
+            alias=spec.alias,
+            model_id=spec.model_id,
+            engine_type=spec.engine_type,
+            description=spec.description,
+            capabilities=asdict(spec.capabilities),
+            requestable=spec.requestable,
+        )
+        for spec in list_all()
+    ]
+    pipeline_entries = [
+        ModelInfo(
+            alias=profile.alias,
+            model_id=f"{profile.transcription_alias}+{profile.diarization_alias}",
+            engine_type="pipeline",
+            description=profile.description,
+            capabilities=asdict(profile.capabilities),
+            requestable=profile.requestable,
+        )
+        for profile in list_all_profiles()
+    ]
+    models = sorted([*model_entries, *pipeline_entries], key=lambda entry: entry.alias)
 
     return ModelsResponse(
-        models=[
-            ModelInfo(
-                alias=spec.alias,
-                model_id=spec.model_id,
-                engine_type=spec.engine_type,
-                description=spec.description,
-                capabilities={
-                    k: v for k, v in asdict(spec.capabilities).items()
-                },
-            )
-            for spec in list_all()
-        ],
+        models=models,
         current=current_alias,
     )
 

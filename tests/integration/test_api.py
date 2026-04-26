@@ -1,10 +1,11 @@
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+
 from src.core.base_engine import EngineCapabilities
 from src.main import app
 from src.services.transcription import TranscriptionService
-
 
 _PARAFORMER_RESULT = {
     "text": "Integration Test Result",
@@ -33,6 +34,12 @@ def _make_mock_service(
     return service
 
 
+def _assert_pipeline_submit(mock_service: MagicMock, alias: str) -> None:
+    submit_call = mock_service.submit.await_args
+    assert submit_call.kwargs["model_spec"] is None
+    assert submit_call.kwargs["pipeline_profile"].alias == alias
+
+
 @pytest.fixture
 def client():
     """TestClient with Paraformer-like capabilities (timestamp + diarization)."""
@@ -40,9 +47,8 @@ def client():
         EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
         _PARAFORMER_RESULT,
     )
-    with patch("src.main.TranscriptionService", return_value=mock_service):
-        with TestClient(app) as c:
-            yield c
+    with patch("src.main.TranscriptionService", return_value=mock_service), TestClient(app) as c:
+        yield c
 
 
 @pytest.fixture
@@ -52,9 +58,8 @@ def sensevoice_client():
         EngineCapabilities(emotion_tags=True, language_detect=True),
         _SENSEVOICE_RESULT,
     )
-    with patch("src.main.TranscriptionService", return_value=mock_service):
-        with TestClient(app) as c:
-            yield c
+    with patch("src.main.TranscriptionService", return_value=mock_service), TestClient(app) as c:
+        yield c
 
 
 def test_health_check(client):
@@ -194,6 +199,26 @@ def test_response_format_overrides_output_format(client):
     result = response.json()
     # response_format wins → txt → no segments
     assert result["segments"] is None
+
+
+def test_transcribe_endpoint_returns_501_for_pipeline_profile_until_runtime_exists() -> None:
+    mock_service = _make_mock_service(
+        EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
+        None,
+    )
+
+    with patch("src.main.TranscriptionService", return_value=mock_service), TestClient(app) as client:
+        response = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", b"fake audio bytes", "audio/wav")},
+            data={"model": "firered-sortformer", "output_format": "json"},
+        )
+
+    assert response.status_code == 501
+    detail = response.json()["detail"].lower()
+    assert "not implemented" in detail
+    assert "public post boundary" in detail
+    mock_service.submit.assert_not_awaited()
 
 
 # === GET /v1/models/current Tests ===
