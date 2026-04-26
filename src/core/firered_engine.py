@@ -65,11 +65,16 @@ class FireRedEngine:
 
         runtime = _load_transformers_runtime()
         logger.info(f"🚀 Loading FireRed model '{self.model_id}'...")
-        self._pipeline = runtime.pipeline(
-            "automatic-speech-recognition",
-            model=self.model_id,
-            return_timestamps=True,
-        )
+        try:
+            self._pipeline = runtime.pipeline(
+                "automatic-speech-recognition",
+                model=self.model_id,
+                return_timestamps=True,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load FireRed model '{self.model_id}': {exc}"
+            ) from exc
         logger.info(f"✅ FireRed model loaded: {self.model_id}")
 
     def transcribe_file(
@@ -95,23 +100,19 @@ class FireRedEngine:
         text = raw.get("text", "") if isinstance(raw, dict) else str(raw)
 
         chunks: list[object] = raw.get("chunks", []) if isinstance(raw, dict) else []
+        timestamped_chunks = self._collect_timestamped_chunks(chunks)
 
         if fmt == "json":
-            segments: list[dict[str, object]] = []
-            for chunk in chunks:
-                if isinstance(chunk, dict):
-                    start, end = self._read_chunk_timestamps(chunk)
-                    # Issue #3: skip chunks with any None timestamp — API Segment model
-                    # requires float values; None would cause a serialization 500 error.
-                    if start is None or end is None:
-                        continue
-                    segments.append({"start": start, "end": end, "text": chunk.get("text", "")})
+            segments = [
+                {"start": start, "end": end, "text": chunk_text}
+                for start, end, chunk_text in timestamped_chunks
+            ]
             return {"text": text, "segments": segments if segments else None}
 
         if fmt == "srt":
-            return self._format_as_srt(chunks) or text
+            return self._format_as_srt(timestamped_chunks) or text
         if fmt == "vtt":
-            return self._format_as_vtt(chunks) or text
+            return self._format_as_vtt(timestamped_chunks) or text
 
         return text
 
@@ -137,37 +138,49 @@ class FireRedEngine:
         )
         return start, end
 
-    def _format_as_srt(self, chunks: list[object]) -> str:
-        """Build an SRT subtitle string from FireRed timestamped chunks (timestamps in seconds)."""
-        lines: list[str] = []
-        idx = 1
+    def _collect_timestamped_chunks(
+        self, chunks: list[object]
+    ) -> list[tuple[float, float, str]]:
+        timestamped_chunks: list[tuple[float, float, str]] = []
+        dropped_chunk_count = 0
         for chunk in chunks:
             if not isinstance(chunk, dict):
                 continue
             start, end = self._read_chunk_timestamps(chunk)
             if start is None or end is None:
+                dropped_chunk_count += 1
                 continue
+            timestamped_chunks.append((start, end, str(chunk.get("text", ""))))
+
+        if dropped_chunk_count:
+            logger.warning(
+                "FireRed model '%s' dropped %d chunk(s) with missing or invalid timestamps",
+                self.model_id,
+                dropped_chunk_count,
+            )
+        return timestamped_chunks
+
+    def _format_as_srt(self, chunks: list[tuple[float, float, str]]) -> str:
+        """Build an SRT subtitle string from FireRed timestamped chunks (timestamps in seconds)."""
+        lines: list[str] = []
+        idx = 1
+        for start, end, chunk_text in chunks:
             lines.append(str(idx))
             lines.append(f"{self._sec_to_srt_time(start)} --> {self._sec_to_srt_time(end)}")
-            lines.append(chunk.get("text", ""))
+            lines.append(chunk_text)
             lines.append("")
             idx += 1
         return "\n".join(lines)
 
-    def _format_as_vtt(self, chunks: list[object]) -> str:
+    def _format_as_vtt(self, chunks: list[tuple[float, float, str]]) -> str:
         """Build a WebVTT subtitle string from FireRed timestamped chunks."""
         lines = ["WEBVTT", ""]
-        for chunk in chunks:
-            if not isinstance(chunk, dict):
-                continue
-            start, end = self._read_chunk_timestamps(chunk)
-            if start is None or end is None:
-                continue
+        for start, end, chunk_text in chunks:
             lines.append(
                 f"{self._sec_to_srt_time(start).replace(',', '.')} --> "
                 f"{self._sec_to_srt_time(end).replace(',', '.')}"
             )
-            lines.append(str(chunk.get("text", "")))
+            lines.append(chunk_text)
             lines.append("")
         return "\n".join(lines)
 
@@ -184,5 +197,6 @@ class FireRedEngine:
         return timestamp
 
     def release(self) -> None:
+        logger.info("🧹 Releasing FireRed model '%s'", self.model_id)
         self._pipeline = None
         gc.collect()

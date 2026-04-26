@@ -441,6 +441,68 @@ class TestTranscriptionService:
         assert svc.current_model_spec == funasr_spec
         mock_switch.assert_awaited_once_with(funasr_spec)
 
+    async def test_run_decoupled_pipeline_should_finish_restore_before_repeated_cancellation(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        firered_spec = lookup(profile.transcription_alias)
+        sortformer_spec = lookup(profile.diarization_alias)
+        transcript_result = {
+            "text": "hello world",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            "duration": 1.0,
+        }
+        speaker_turns = [SpeakerTurn(speaker="Speaker 1", start=0.0, end=1.0)]
+        restore_entered = asyncio.Event()
+        original_restore = svc._restore_resident_model
+
+        async def fake_transcribe(*_args: object) -> dict[str, object]:
+            svc._current_model_spec = firered_spec
+            return transcript_result
+
+        async def fake_diarize(*_args: object) -> list[SpeakerTurn]:
+            svc._current_model_spec = sortformer_spec
+            return speaker_turns
+
+        async def wrapped_restore(previous_spec) -> None:
+            restore_entered.set()
+            await original_restore(previous_spec)
+
+        async def fake_switch(spec) -> None:
+            svc._current_model_spec = spec
+
+        with (
+            patch.object(svc, "_transcribe_with_alias", new=AsyncMock(side_effect=fake_transcribe)),
+            patch.object(svc, "_diarize_with_alias", new=AsyncMock(side_effect=fake_diarize)),
+            patch.object(svc, "_restore_resident_model", new=AsyncMock(side_effect=wrapped_restore)),
+            patch.object(svc, "_switch_worker", new=AsyncMock(side_effect=fake_switch)),
+            patch.object(svc, "_spawn_lock", new=asyncio.Lock()),
+        ):
+            await svc._spawn_lock.acquire()
+            task = asyncio.create_task(
+                svc._run_decoupled_pipeline(
+                    "/fake/audio.wav",
+                    {"language": "zh", "output_format": "json"},
+                    "req-pipeline",
+                    profile,
+                )
+            )
+            await restore_entered.wait()
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0)
+
+            assert task.done() is False
+
+            svc._spawn_lock.release()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1.0)
+
+        assert svc.current_model_spec == funasr_spec
+
     async def test_submit_should_not_be_cancelled_by_pipeline_restore(
         self,
         funasr_spec,

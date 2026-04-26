@@ -59,6 +59,14 @@ class TestFireRedEngineLoad:
             with pytest.raises(RuntimeError, match="transformers"):
                 engine.load()
 
+    def test_load_should_include_model_id_when_pipeline_creation_fails(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+        runtime = SimpleNamespace(pipeline=MagicMock(side_effect=RuntimeError("boom")))
+
+        with patch("src.core.firered_engine.importlib.import_module", return_value=runtime):
+            with pytest.raises(RuntimeError, match="FireRedTeam/FireRedASR2-AED"):
+                engine.load()
+
 
 class TestFireRedEngineTranscribe:
     def test_transcribe_raises_before_load(self) -> None:
@@ -300,6 +308,25 @@ class TestFireRedEngineTranscribe:
         assert isinstance(result, dict)
         assert result["segments"] is None
 
+    def test_transcribe_json_logs_when_chunks_are_dropped_due_to_missing_timestamps(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+        engine._pipeline = MagicMock(
+            return_value={
+                "text": "Hello world",
+                "chunks": [
+                    {"text": "Hello", "timestamp": (0.0, 0.5)},
+                    {"text": " world", "timestamp": (0.5, None)},
+                ],
+            }
+        )
+
+        with patch("src.core.firered_engine.logger.warning") as mock_warning:
+            result = engine.transcribe_file("audio.wav", output_format="json")
+
+        assert isinstance(result, dict)
+        mock_warning.assert_called_once()
+        assert "timestamp" in mock_warning.call_args.args[0].lower()
+
 
 class TestFireRedEngineRelease:
     def test_release_clears_pipeline_reference(self) -> None:
@@ -318,3 +345,12 @@ class TestFireRedEngineRelease:
             engine.release()
 
         mock_gc.assert_called_once()
+
+    def test_release_logs_model_release(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+        engine._pipeline = MagicMock()
+
+        with patch("src.core.firered_engine.logger.info") as mock_info:
+            engine.release()
+
+        mock_info.assert_called_once()

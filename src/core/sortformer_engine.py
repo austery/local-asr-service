@@ -2,6 +2,7 @@
 
 import gc
 import importlib
+import logging
 import math
 from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol, cast
@@ -9,6 +10,7 @@ from typing import Protocol, cast
 from src.core.diarization_port import DiarizationPort, SpeakerTurn
 
 _RUNTIME_MODULE = "mlx_sortformer"
+logger = logging.getLogger(__name__)
 
 
 class _RuntimeModule(Protocol):
@@ -54,6 +56,7 @@ class SortformerEngine(DiarizationPort):
         return [self._to_speaker_turn(turn) for turn in self._diarize(self._model, file_path)]
 
     def release(self) -> None:
+        logger.info("🧹 Releasing Sortformer model '%s'", self.model_id)
         self._model = None
         self._diarize = None
         gc.collect()

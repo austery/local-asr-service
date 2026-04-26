@@ -298,7 +298,9 @@ class TranscriptionService:
                 return transcript_result
             return {**transcript_result, "segments": aligned_segments}
         finally:
-            await self._restore_resident_model(previous_spec)
+            await self._await_cancellation_safe_cleanup(
+                self._restore_resident_model(previous_spec)
+            )
 
     async def _restore_resident_model(self, previous_spec: ModelSpec | None) -> None:
         async with self._spawn_lock:
@@ -353,7 +355,11 @@ class TranscriptionService:
             self._submission_gate.notify_all()
 
     async def _release_submission_gate(self, releaser: Awaitable[None]) -> None:
-        release_task = asyncio.create_task(releaser)
+        await self._await_cancellation_safe_cleanup(releaser)
+
+    @staticmethod
+    async def _await_cancellation_safe_cleanup(cleanup: Awaitable[None]) -> None:
+        release_task = asyncio.create_task(cleanup)
         cancelled = False
 
         while not release_task.done():

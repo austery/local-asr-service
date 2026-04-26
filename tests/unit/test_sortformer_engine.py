@@ -80,6 +80,16 @@ class TestSortformerEngine:
         assert engine._diarize is None
         collect.assert_called_once()
 
+    def test_release_logs_model_release(self) -> None:
+        engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
+        engine._model = object()
+        engine._diarize = MagicMock()
+
+        with patch("src.core.sortformer_engine.logger.info") as mock_info:
+            engine.release()
+
+        mock_info.assert_called_once()
+
     def test_diarize_file_should_raise_when_model_not_loaded(self) -> None:
         engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
 
