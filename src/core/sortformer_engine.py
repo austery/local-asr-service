@@ -52,9 +52,15 @@ class SortformerEngine(DiarizationPort):
 
     @staticmethod
     def _to_speaker_turn(turn: Mapping[str, object]) -> SpeakerTurn:
-        speaker = turn["speaker"]
-        start = turn["start"]
-        end = turn["end"]
+        try:
+            speaker = turn["speaker"]
+            start = turn["start"]
+            end = turn["end"]
+        except KeyError as exc:
+            missing_field = exc.args[0]
+            raise ValueError(
+                f"Sortformer diarization result is missing required field: {missing_field}"
+            ) from exc
 
         if not isinstance(speaker, str):
             raise TypeError(f"Expected speaker to be str, got {type(speaker).__name__}")

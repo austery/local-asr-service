@@ -202,17 +202,9 @@ def test_response_format_overrides_output_format(client):
 
 
 def test_transcribe_endpoint_returns_501_for_pipeline_profile_until_runtime_exists() -> None:
-    pipeline_result = {
-        "text": "Pipeline Test Result",
-        "segments": [
-            {"speaker": "Speaker 0", "text": "Pipeline", "start": 0.0, "end": 1.0},
-            {"speaker": "Speaker 1", "text": "Result", "start": 1.0, "end": 2.0},
-        ],
-        "duration": 2.0,
-    }
     mock_service = _make_mock_service(
         EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
-        pipeline_result,
+        None,
     )
 
     with patch("src.main.TranscriptionService", return_value=mock_service), TestClient(app) as client:
@@ -223,7 +215,9 @@ def test_transcribe_endpoint_returns_501_for_pipeline_profile_until_runtime_exis
         )
 
     assert response.status_code == 501
-    assert "not implemented" in response.json()["detail"].lower()
+    detail = response.json()["detail"].lower()
+    assert "not implemented" in detail
+    assert "public post boundary" in detail
     mock_service.submit.assert_not_awaited()
 
 

@@ -262,13 +262,20 @@ class TranscriptionService:
         if not isinstance(segments, list):
             return transcript_result
 
-        aligned_segments = align_speakers(
-            cast(list[dict[str, object]], segments),
-            speaker_turns,
-        )
-        merged_result = dict(transcript_result)
-        merged_result["segments"] = aligned_segments
-        return merged_result
+        try:
+            aligned_segments = align_speakers(
+                cast(list[dict[str, object]], segments),
+                speaker_turns,
+            )
+        except (TypeError, ValueError) as exc:
+            self.logger.warning(
+                "[%s] Decoupled pipeline alignment failed for profile %s; returning transcript-only result: %s",
+                request_id,
+                profile.alias,
+                exc,
+            )
+            return transcript_result
+        return {**transcript_result, "segments": aligned_segments}
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
         for old_q in (self._job_queue, self._result_queue):

@@ -260,8 +260,8 @@ async def create_transcription(
         raise HTTPException(
             status_code=501,
             detail=(
-                f"Pipeline profile '{resolved_target.alias}' is recognized but not implemented yet. "
-                "FireRed runtime support lands in a later task."
+                f"Pipeline profile '{resolved_target.alias}' is recognized but not implemented at the "
+                "public POST boundary yet."
             ),
         )
 

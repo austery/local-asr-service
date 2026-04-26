@@ -246,3 +246,40 @@ class TestTranscriptionService:
 
         assert result == transcript_result
         assert "diarization failed" in caplog.text.lower()
+
+    async def test_run_decoupled_pipeline_returns_transcript_when_alignment_fails(
+        self,
+        funasr_spec,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        transcript_result = {
+            "text": "hello world",
+            "segments": [{"start": True, "end": 1.0, "text": "hello"}],
+            "duration": 1.0,
+        }
+        speaker_turns = [SpeakerTurn(speaker="Speaker 1", start=0.0, end=1.0)]
+
+        with (
+            patch.object(
+                svc,
+                "_transcribe_with_alias",
+                new=AsyncMock(return_value=transcript_result),
+            ),
+            patch.object(
+                svc,
+                "_diarize_with_alias",
+                new=AsyncMock(return_value=speaker_turns),
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            result = await svc._run_decoupled_pipeline(
+                "/fake/audio.wav",
+                {"language": "zh", "output_format": "json"},
+                "req-pipeline",
+                profile,
+            )
+
+        assert result == transcript_result
+        assert "alignment failed" in caplog.text.lower()

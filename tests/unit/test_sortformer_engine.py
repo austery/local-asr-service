@@ -57,6 +57,16 @@ class TestSortformerEngine:
         with pytest.raises(ValueError, match="Invalid timestamp range"):
             engine.diarize_file("audio.wav")
 
+    def test_diarize_file_should_raise_actionable_error_when_required_key_is_missing(self) -> None:
+        engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
+        runtime_model = object()
+        diarize = MagicMock(return_value=[{"speaker": "speaker_0", "start": 0.0}])
+        engine._model = runtime_model
+        engine._diarize = diarize
+
+        with pytest.raises(ValueError, match="missing required field: end"):
+            engine.diarize_file("audio.wav")
+
     def test_diarize_file_should_reject_boolean_timestamps(self) -> None:
         engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
         runtime_model = object()
