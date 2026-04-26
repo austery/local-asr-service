@@ -59,6 +59,24 @@ def _resolve_startup_model_spec(startup_model_id: str) -> ModelSpec | None:
     return spec
 
 
+def _effective_startup_metadata(
+    initial_spec: ModelSpec | None,
+    configured_engine_type: str,
+    startup_model_id: str,
+) -> tuple[str, str]:
+    """Return (effective_engine_type, effective_model_id) for startup metadata.
+
+    When the startup model resolves to a known spec, use the spec's canonical values
+    so that cross-engine-family overrides (e.g. ENGINE_TYPE=funasr but
+    MODEL_ID=FireRedTeam/FireRedASR2-AED) surface the correct engine family in
+    health checks and app.state.  When the model is unregistered, fall back to the
+    raw configured values.
+    """
+    if initial_spec is not None:
+        return initial_spec.engine_type, initial_spec.model_id
+    return configured_engine_type, startup_model_id
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
@@ -66,8 +84,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     FastAPI 启动前执行 yield 前的代码，关闭后执行 yield 后的代码。
     """
     logger.info("🌱 System starting up...")
-    logger.info(f"📋 Engine type: {ENGINE_TYPE}")
-    logger.info(f"📋 Model ID: {get_model_id()}")
     logger.warning("⚠️  Running with workers=1 (REQUIRED for Mac Silicon to prevent OOM)")
 
     # 1. 解析启动模型的 ModelSpec（用于 dynamic switching 的基准）
@@ -76,10 +92,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if initial_spec is None:
         logger.warning(f"⚠️  Startup model '{startup_model_id}' not in registry; model tracking disabled.")
 
+    effective_engine_type, effective_model_id = _effective_startup_metadata(
+        initial_spec, ENGINE_TYPE, startup_model_id
+    )
+
+    logger.info(f"📋 Engine type: {effective_engine_type}")
+    logger.info(f"📋 Model ID: {effective_model_id}")
+
     # 2. 初始化服务（Worker subprocess spawns lazily on first request）
     service = TranscriptionService(
-        engine_type=ENGINE_TYPE,
-        model_id=startup_model_id,
+        engine_type=effective_engine_type,
+        model_id=effective_model_id,
         max_queue_size=MAX_QUEUE_SIZE,
         initial_model_spec=initial_spec,
         idle_timeout=MODEL_IDLE_TIMEOUT_SEC,
@@ -90,8 +113,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 3. 依赖注入（engine_type/model_id 保留供 health check 和降级路径使用）
     app.state.service = service
-    app.state.engine_type = ENGINE_TYPE
-    app.state.model_id = startup_model_id
+    app.state.engine_type = effective_engine_type
+    app.state.model_id = effective_model_id
 
     logger.info("✅ System ready! Worker subprocess spawns on first transcription request.")
 

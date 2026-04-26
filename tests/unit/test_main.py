@@ -46,3 +46,48 @@ def test_resolve_startup_model_spec_rejects_pipeline_profile_alias() -> None:
 
 def test_resolve_startup_model_spec_returns_none_for_unknown_model() -> None:
     assert _resolver()("unknown-model-id") is None
+
+
+# ---------------------------------------------------------------------------
+# _effective_startup_metadata tests
+# ---------------------------------------------------------------------------
+
+
+def _metadata_helper():
+    helper = getattr(main_module, "_effective_startup_metadata", None)
+    assert helper is not None, "_effective_startup_metadata not found in src.main"
+    return helper
+
+
+def test_effective_startup_metadata_uses_spec_when_resolved() -> None:
+    """When a spec is resolved, engine_type and model_id must come from the spec.
+
+    This covers the cross-engine-family override case: e.g. ENGINE_TYPE=funasr
+    but MODEL_ID=FireRedTeam/FireRedASR2-AED → effective engine must be 'firered'.
+    """
+    spec = _resolver()("firered-asr")
+    assert spec is not None
+
+    eff_engine, eff_model = _metadata_helper()(spec, "funasr", "FireRedTeam/FireRedASR2-AED")
+
+    assert eff_engine == "firered"
+    assert eff_model == spec.model_id
+
+
+def test_effective_startup_metadata_spec_model_id_overrides_raw() -> None:
+    """The canonical model_id from the spec must be used, not the raw alias."""
+    spec = _resolver()("paraformer")
+    assert spec is not None
+
+    eff_engine, eff_model = _metadata_helper()(spec, "funasr", "paraformer")
+
+    assert eff_engine == spec.engine_type
+    assert eff_model == spec.model_id  # canonical, not alias
+
+
+def test_effective_startup_metadata_fallback_when_spec_is_none() -> None:
+    """When spec is None (unregistered model), fall back to configured values."""
+    eff_engine, eff_model = _metadata_helper()(None, "funasr", "my-custom-model")
+
+    assert eff_engine == "funasr"
+    assert eff_model == "my-custom-model"
