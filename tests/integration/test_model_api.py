@@ -100,7 +100,7 @@ def test_should_include_pipeline_profile_entry_on_get_models(client) -> None:
     assert pipeline_entry["engine_type"] == "pipeline"
     assert pipeline_entry["model_id"] == "firered-asr+sortformer-diar"
     assert pipeline_entry["description"] == "decoupled FireRed + Sortformer profile"
-    assert pipeline_entry["requestable"] is True
+    assert pipeline_entry["requestable"] is False
     assert pipeline_entry["capabilities"]["timestamp"] is True
     assert pipeline_entry["capabilities"]["diarization"] is True
     assert pipeline_entry["capabilities"]["language_detect"] is True

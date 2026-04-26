@@ -106,7 +106,7 @@ def _raise_unknown_model(model: str) -> None:
     )
 
 
-def _ensure_requestable(target: ResolvedTarget) -> None:
+def _ensure_requestable(target: ModelSpec) -> None:
     if target.requestable:
         return
 
@@ -129,9 +129,6 @@ def _resolve_model(model: str | None) -> ResolvedTarget | None:
     if is_passthrough(model):
         return None
 
-    if model is None:
-        return None
-
     try:
         target: ResolvedTarget = lookup(model)
     except ValueError:
@@ -140,7 +137,8 @@ def _resolve_model(model: str | None) -> ResolvedTarget | None:
         except KeyError:
             _raise_unknown_model(model)
 
-    _ensure_requestable(target)
+    if isinstance(target, ModelSpec):
+        _ensure_requestable(target)
     return target
 
 
@@ -365,8 +363,8 @@ async def create_transcription(
 async def list_models(request: Request) -> ModelsResponse:
     """
     List all supported models and the currently loaded model.
-    Only entries with `requestable=true` can be passed to POST /v1/audio/transcriptions today.
-    Discovery-only entries are listed so future decoupled pipeline targets are visible.
+    `requestable=true` means the entry is directly executable today.
+    Discovery-only entries remain listed so future decoupled pipeline targets are visible.
     """
     service = request.app.state.service
     current_spec = service.current_model_spec

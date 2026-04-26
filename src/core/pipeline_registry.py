@@ -33,7 +33,6 @@ _REGISTRY: dict[str, PipelineProfile] = {
             emotion_tags=False,
             language_detect=True,
         ),
-        requestable=True,
     )
 }
 
