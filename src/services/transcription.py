@@ -48,6 +48,9 @@ class TranscriptionService:
         self._pending: dict[str, asyncio.Future[Any]] = {}
         self._temp_dirs: dict[str, str] = {}
         self._spawn_lock: asyncio.Lock = asyncio.Lock()
+        self._submission_gate = asyncio.Condition()
+        self._active_standard_submissions = 0
+        self._pipeline_active = False
         self._result_reader_task: asyncio.Task[None] | None = None
         self.is_running = False
 
@@ -109,6 +112,8 @@ class TranscriptionService:
             raise RuntimeError("Service busy: Queue is full.")
 
         temp_dir = tempfile.mkdtemp(prefix="asr_task_")
+        standard_submission_registered = False
+        pipeline_submission_registered = False
         try:
             file_ext = os.path.splitext(file.filename or "upload.wav")[1] or ".wav"
             temp_path = os.path.join(temp_dir, f"original{file_ext}")
@@ -116,6 +121,8 @@ class TranscriptionService:
                 shutil.copyfileobj(file.file, buf)
 
             if pipeline_profile is not None:
+                await self._enter_pipeline_submission()
+                pipeline_submission_registered = True
                 try:
                     return await self._run_decoupled_pipeline(
                         temp_path,
@@ -124,8 +131,11 @@ class TranscriptionService:
                         pipeline_profile,
                     )
                 finally:
+                    await self._exit_pipeline_submission()
                     shutil.rmtree(temp_dir, ignore_errors=True)
 
+            await self._enter_standard_submission()
+            standard_submission_registered = True
             result = await self._submit_worker_job(
                 temp_file_path=temp_path,
                 params=params,
@@ -142,6 +152,11 @@ class TranscriptionService:
             self._temp_dirs.pop(request_id, None)
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise
+        finally:
+            if standard_submission_registered:
+                await self._exit_standard_submission()
+            elif pipeline_submission_registered:
+                await self._exit_pipeline_submission()
 
     async def _submit_worker_job(
         self,
@@ -233,49 +248,107 @@ class TranscriptionService:
         request_id: str,
         profile: PipelineProfile,
     ) -> TranscriptionResult:
-        transcript_result = await self._transcribe_with_alias(
-            temp_file_path,
-            params,
-            request_id,
-            profile.transcription_alias,
+        previous_spec = self._current_model_spec
+        try:
+            transcript_result = await self._transcribe_with_alias(
+                temp_file_path,
+                params,
+                request_id,
+                profile.transcription_alias,
+            )
+
+            if not isinstance(transcript_result, dict):
+                return transcript_result
+
+            try:
+                speaker_turns = await self._diarize_with_alias(
+                    temp_file_path,
+                    request_id,
+                    profile.diarization_alias,
+                )
+            except Exception as exc:
+                if self._is_worker_lifecycle_error(exc):
+                    raise
+                self.logger.warning(
+                    "[%s] Decoupled pipeline diarization failed for profile %s; returning transcript-only result: %s",
+                    request_id,
+                    profile.alias,
+                    exc,
+                )
+                return transcript_result
+
+            segments = transcript_result.get("segments")
+            if not isinstance(segments, list):
+                return transcript_result
+
+            try:
+                aligned_segments = align_speakers(
+                    cast(list[dict[str, object]], segments),
+                    speaker_turns,
+                )
+            except (TypeError, ValueError) as exc:
+                self.logger.warning(
+                    "[%s] Decoupled pipeline alignment failed for profile %s; returning transcript-only result: %s",
+                    request_id,
+                    profile.alias,
+                    exc,
+                )
+                return transcript_result
+            return {**transcript_result, "segments": aligned_segments}
+        finally:
+            await self._restore_resident_model(previous_spec)
+
+    async def _restore_resident_model(self, previous_spec: ModelSpec | None) -> None:
+        async with self._spawn_lock:
+            current_spec = self._current_model_spec
+            if current_spec == previous_spec:
+                return
+
+            if previous_spec is None:
+                await self._shutdown_worker()
+                self._current_model_spec = None
+                return
+
+            await self._switch_worker(previous_spec)
+
+    @staticmethod
+    def _is_worker_lifecycle_error(exc: Exception) -> bool:
+        return isinstance(exc, RuntimeError) and str(exc).startswith(
+            (
+                "Worker terminated",
+                "Worker process died unexpectedly",
+                "Worker failed to start",
+                "Worker failed to load model",
+                "Worker sent unexpected startup message",
+            )
         )
 
-        if not isinstance(transcript_result, dict):
-            return transcript_result
+    async def _enter_standard_submission(self) -> None:
+        async with self._submission_gate:
+            while self._pipeline_active:
+                await self._submission_gate.wait()
+            self._active_standard_submissions += 1
 
-        try:
-            speaker_turns = await self._diarize_with_alias(
-                temp_file_path,
-                request_id,
-                profile.diarization_alias,
-            )
-        except Exception as exc:
-            self.logger.warning(
-                "[%s] Decoupled pipeline diarization failed for profile %s; returning transcript-only result: %s",
-                request_id,
-                profile.alias,
-                exc,
-            )
-            return transcript_result
+    async def _exit_standard_submission(self) -> None:
+        async with self._submission_gate:
+            if self._active_standard_submissions == 0:
+                return
+            self._active_standard_submissions -= 1
+            if self._active_standard_submissions == 0:
+                self._submission_gate.notify_all()
 
-        segments = transcript_result.get("segments")
-        if not isinstance(segments, list):
-            return transcript_result
+    async def _enter_pipeline_submission(self) -> None:
+        async with self._submission_gate:
+            while self._pipeline_active or self._active_standard_submissions > 0:
+                await self._submission_gate.wait()
+            self._pipeline_active = True
 
-        try:
-            aligned_segments = align_speakers(
-                cast(list[dict[str, object]], segments),
-                speaker_turns,
-            )
-        except (TypeError, ValueError) as exc:
-            self.logger.warning(
-                "[%s] Decoupled pipeline alignment failed for profile %s; returning transcript-only result: %s",
-                request_id,
-                profile.alias,
-                exc,
-            )
-            return transcript_result
-        return {**transcript_result, "segments": aligned_segments}
+    async def _exit_pipeline_submission(self) -> None:
+        async with self._submission_gate:
+            if not self._pipeline_active:
+                return
+            self._pipeline_active = False
+            self._submission_gate.notify_all()
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
         for old_q in (self._job_queue, self._result_queue):

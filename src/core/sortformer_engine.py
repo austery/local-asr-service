@@ -36,8 +36,16 @@ class SortformerEngine(DiarizationPort):
                 "Sortformer diarization runtime is unavailable. Install an mlx-audio version "
                 "with Sortformer diarization support before using this adapter."
             ) from exc
-        self._model = runtime.load_model(self.model_id)
-        self._diarize = runtime.diarize
+
+        diarize = getattr(runtime, "diarize", None)
+        if not callable(diarize):
+            raise RuntimeError(
+                "Sortformer diarization runtime is missing required 'diarize' callable."
+            )
+
+        model = runtime.load_model(self.model_id)
+        self._model = model
+        self._diarize = diarize
 
     def diarize_file(self, file_path: str) -> list[SpeakerTurn]:
         if self._model is None or self._diarize is None:

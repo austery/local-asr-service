@@ -29,6 +29,45 @@ class TestSortformerEngine:
             with pytest.raises(RuntimeError, match="mlx-audio version with Sortformer diarization support"):
                 engine.load()
 
+    def test_load_should_reset_state_when_runtime_wiring_is_incomplete(self) -> None:
+        broken_runtime = SimpleNamespace(load_model=MagicMock(return_value="broken-model"))
+        working_runtime_model = MagicMock(name="runtime-model")
+        working_runtime = SimpleNamespace(
+            load_model=MagicMock(return_value=working_runtime_model),
+            diarize=MagicMock(),
+        )
+        engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
+
+        with patch(
+            "src.core.sortformer_engine.importlib.import_module",
+            side_effect=[broken_runtime, working_runtime],
+        ):
+            with pytest.raises(RuntimeError, match="missing required 'diarize' callable"):
+                engine.load()
+
+            assert engine._model is None
+            assert engine._diarize is None
+
+            engine.load()
+
+        assert engine._model is working_runtime_model
+        assert engine._diarize is working_runtime.diarize
+
+    def test_load_should_reject_non_callable_diarize_runtime(self) -> None:
+        broken_runtime = SimpleNamespace(
+            load_model=MagicMock(return_value="broken-model"),
+            diarize=None,
+        )
+        engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
+
+        with patch("src.core.sortformer_engine.importlib.import_module", return_value=broken_runtime):
+            with pytest.raises(RuntimeError, match="missing required 'diarize' callable"):
+                engine.load()
+
+        assert engine._model is None
+        assert engine._diarize is None
+        broken_runtime.load_model.assert_not_called()
+
     def test_release_should_clear_loaded_model_reference(self) -> None:
         engine = SortformerEngine(model_id="mlx-community/diar_sortformer_4spk-v1-fp32")
         engine._model = object()

@@ -110,6 +110,25 @@ class TestTranscriptionService:
         with pytest.raises(RuntimeError, match="Queue is full"):
             await svc.submit(_make_upload(), {})
 
+    async def test_submit_should_reject_model_spec_and_pipeline_profile_together(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+
+        with pytest.raises(
+            ValueError,
+            match="submit\\(\\) accepts either model_spec or pipeline_profile, not both",
+        ):
+            await svc.submit(
+                _make_upload(),
+                {"language": "zh", "output_format": "json"},
+                request_id="req-invalid",
+                model_spec=funasr_spec,
+                pipeline_profile=profile,
+            )
+
     async def test_temp_file_lifecycle(self, funasr_spec):
         """Temp directory is created before the job and deleted after result arrives."""
         svc = _setup_service(funasr_spec)
@@ -211,6 +230,189 @@ class TestTranscriptionService:
             profile.diarization_alias,
         )
 
+    async def test_run_decoupled_pipeline_restores_previous_resident_model(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        firered_spec = lookup(profile.transcription_alias)
+        sortformer_spec = lookup(profile.diarization_alias)
+        transcript_result = {
+            "text": "hello world",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            "duration": 1.0,
+        }
+        speaker_turns = [SpeakerTurn(speaker="Speaker 1", start=0.0, end=1.0)]
+
+        async def fake_transcribe(*_args: object) -> dict[str, object]:
+            svc._current_model_spec = firered_spec
+            return transcript_result
+
+        async def fake_diarize(*_args: object) -> list[SpeakerTurn]:
+            svc._current_model_spec = sortformer_spec
+            return speaker_turns
+
+        async def fake_switch(spec) -> None:
+            svc._current_model_spec = spec
+
+        with (
+            patch.object(
+                svc,
+                "_transcribe_with_alias",
+                new=AsyncMock(side_effect=fake_transcribe),
+            ),
+            patch.object(
+                svc,
+                "_diarize_with_alias",
+                new=AsyncMock(side_effect=fake_diarize),
+            ),
+            patch.object(
+                svc,
+                "_switch_worker",
+                new=AsyncMock(side_effect=fake_switch),
+            ) as mock_switch,
+        ):
+            await svc._run_decoupled_pipeline(
+                "/fake/audio.wav",
+                {"language": "zh", "output_format": "json"},
+                "req-pipeline",
+                profile,
+            )
+
+        assert svc.current_model_spec == funasr_spec
+        mock_switch.assert_awaited_once_with(funasr_spec)
+
+    async def test_submit_should_not_be_cancelled_by_pipeline_restore(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        firered_spec = lookup(profile.transcription_alias)
+        sortformer_spec = lookup(profile.diarization_alias)
+        transcript_result = {
+            "text": "hello world",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            "duration": 1.0,
+        }
+        speaker_turns = [SpeakerTurn(speaker="Speaker 1", start=0.0, end=1.0)]
+        restore_started = asyncio.Event()
+        submit_registered = asyncio.Event()
+
+        job_queue = MagicMock()
+        job_queue.put_nowait.side_effect = lambda _job: submit_registered.set()
+        result_queue = MagicMock()
+        svc._job_queue = job_queue
+        svc._result_queue = result_queue
+
+        async def fake_transcribe(*_args: object) -> dict[str, object]:
+            svc._current_model_spec = firered_spec
+            return transcript_result
+
+        async def fake_diarize(*_args: object) -> list[SpeakerTurn]:
+            svc._current_model_spec = sortformer_spec
+            return speaker_turns
+
+        async def fake_shutdown() -> None:
+            restore_started.set()
+            with suppress(TimeoutError):
+                await asyncio.wait_for(submit_registered.wait(), timeout=0.1)
+            for uid, fut in list(svc._pending.items()):
+                if not fut.done():
+                    fut.set_exception(RuntimeError("Worker terminated (model switch or shutdown)"))
+            svc._pending.clear()
+            svc._temp_dirs.clear()
+            svc._worker = None
+
+        async def fake_spawn(model_spec=None) -> None:
+            svc._current_model_spec = model_spec
+            mock_proc = MagicMock()
+            mock_proc.is_alive.return_value = True
+            svc._worker = mock_proc
+            svc._job_queue = job_queue
+            svc._result_queue = result_queue
+
+        with (
+            patch.object(
+                svc,
+                "_transcribe_with_alias",
+                new=AsyncMock(side_effect=fake_transcribe),
+            ),
+            patch.object(
+                svc,
+                "_diarize_with_alias",
+                new=AsyncMock(side_effect=fake_diarize),
+            ),
+            patch.object(svc, "_shutdown_worker", new=AsyncMock(side_effect=fake_shutdown)),
+            patch.object(svc, "_spawn_worker", new=AsyncMock(side_effect=fake_spawn)),
+        ):
+            pipeline_task = asyncio.create_task(
+                svc.submit(
+                    _make_upload(),
+                    {"language": "zh", "output_format": "json"},
+                    "req-pipeline",
+                    pipeline_profile=profile,
+                )
+            )
+            await restore_started.wait()
+
+            submit_task = asyncio.create_task(
+                svc.submit(_make_upload(), {}, request_id="req-next")
+            )
+
+            async def deliver_after_registration() -> None:
+                for _ in range(100):
+                    await asyncio.sleep(0.01)
+                    if "req-next" in svc._pending:
+                        svc._resolve_future(
+                            "req-next",
+                            result={"text": "after restore", "segments": None, "duration": 1.0},
+                        )
+                        return
+
+            await asyncio.gather(
+                pipeline_task,
+                deliver_after_registration(),
+            )
+            submit_result = await asyncio.wait_for(submit_task, timeout=1.0)
+
+        assert submit_result == {
+            "text": "after restore",
+            "segments": None,
+            "duration": 1.0,
+        }
+        assert svc.current_model_spec == funasr_spec
+
+    async def test_run_decoupled_pipeline_propagates_transcription_failures(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+
+        with (
+            patch.object(
+                svc,
+                "_transcribe_with_alias",
+                new=AsyncMock(side_effect=RuntimeError("transcription boom")),
+            ),
+            patch.object(
+                svc,
+                "_diarize_with_alias",
+                new=AsyncMock(),
+            ) as mock_diarize,
+            pytest.raises(RuntimeError, match="transcription boom"),
+        ):
+            await svc._run_decoupled_pipeline(
+                "/fake/audio.wav",
+                {"language": "zh", "output_format": "json"},
+                "req-pipeline",
+                profile,
+            )
+
+        mock_diarize.assert_not_awaited()
+
     async def test_run_decoupled_pipeline_returns_transcript_when_diarization_fails(
         self,
         funasr_spec,
@@ -246,6 +448,95 @@ class TestTranscriptionService:
 
         assert result == transcript_result
         assert "diarization failed" in caplog.text.lower()
+
+    async def test_run_decoupled_pipeline_propagates_worker_termination_errors(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        transcript_result = {
+            "text": "hello world",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            "duration": 1.0,
+        }
+        sortformer_spec = lookup(profile.diarization_alias)
+
+        async def fake_diarize(*_args: object) -> list[SpeakerTurn]:
+            svc._current_model_spec = sortformer_spec
+            raise RuntimeError("Worker terminated (model switch or shutdown)")
+
+        async def fake_switch(spec) -> None:
+            svc._current_model_spec = spec
+
+        with (
+            patch.object(
+                svc,
+                "_transcribe_with_alias",
+                new=AsyncMock(return_value=transcript_result),
+            ),
+            patch.object(
+                svc,
+                "_diarize_with_alias",
+                new=AsyncMock(side_effect=fake_diarize),
+            ),
+            patch.object(
+                svc,
+                "_switch_worker",
+                new=AsyncMock(side_effect=fake_switch),
+            ) as mock_switch,
+            pytest.raises(RuntimeError, match="Worker terminated"),
+        ):
+            await svc._run_decoupled_pipeline(
+                "/fake/audio.wav",
+                {"language": "zh", "output_format": "json"},
+                "req-pipeline",
+                profile,
+            )
+
+        assert svc.current_model_spec == funasr_spec
+        mock_switch.assert_awaited_once_with(funasr_spec)
+
+    @pytest.mark.parametrize(
+        ("error_message",),
+        [
+            ("Worker failed to start within 120s timeout.",),
+            ("Worker failed to load model: sortformer missing weights",),
+            ("Worker sent unexpected startup message: ('BOOM',)",),
+        ],
+    )
+    async def test_run_decoupled_pipeline_propagates_worker_startup_failures(
+        self,
+        funasr_spec,
+        error_message: str,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        transcript_result = {
+            "text": "hello world",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            "duration": 1.0,
+        }
+
+        with (
+            patch.object(
+                svc,
+                "_transcribe_with_alias",
+                new=AsyncMock(return_value=transcript_result),
+            ),
+            patch.object(
+                svc,
+                "_diarize_with_alias",
+                new=AsyncMock(side_effect=RuntimeError(error_message)),
+            ),
+            pytest.raises(RuntimeError, match="Worker"),
+        ):
+            await svc._run_decoupled_pipeline(
+                "/fake/audio.wav",
+                {"language": "zh", "output_format": "json"},
+                "req-pipeline",
+                profile,
+            )
 
     async def test_run_decoupled_pipeline_returns_transcript_when_alignment_fails(
         self,
@@ -283,3 +574,36 @@ class TestTranscriptionService:
 
         assert result == transcript_result
         assert "alignment failed" in caplog.text.lower()
+
+    async def test_run_decoupled_pipeline_returns_transcript_when_segments_are_missing(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        transcript_result = {
+            "text": "hello world",
+            "segments": None,
+            "duration": 1.0,
+        }
+
+        with (
+            patch.object(
+                svc,
+                "_transcribe_with_alias",
+                new=AsyncMock(return_value=transcript_result),
+            ),
+            patch.object(
+                svc,
+                "_diarize_with_alias",
+                new=AsyncMock(return_value=[SpeakerTurn(speaker="Speaker 1", start=0.0, end=1.0)]),
+            ),
+        ):
+            result = await svc._run_decoupled_pipeline(
+                "/fake/audio.wav",
+                {"language": "zh", "output_format": "json"},
+                "req-pipeline",
+                profile,
+            )
+
+        assert result == transcript_result

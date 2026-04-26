@@ -5,6 +5,7 @@ API routes for speech transcription service.
 import logging
 import os
 from dataclasses import asdict
+from typing import Never
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse
@@ -96,7 +97,7 @@ class ModelsResponse(BaseModel):
 router = APIRouter()
 
 
-def _raise_unknown_model(model: str) -> None:
+def _raise_unknown_model(model: str) -> Never:
     raise HTTPException(
         status_code=400,
         detail=(
