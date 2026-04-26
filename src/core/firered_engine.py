@@ -77,26 +77,36 @@ class FireRedEngine:
         if self._pipeline is None:
             raise RuntimeError("Model not loaded! Call engine.load() first.")
 
-        raw_format = kwargs.get("format") or kwargs.get("response_format", "txt")
-        output_format = str(raw_format) if raw_format is not None else "txt"
-        if output_format in ("json", "verbose_json"):
-            output_format = "json"
-        elif output_format not in ("txt", "srt", "vtt"):
-            output_format = "txt"
+        # Issue #1: model_worker passes output_format=; also accept format=/response_format=
+        # for callers that use the legacy kwarg names.
+        raw_format = (
+            kwargs.get("output_format")
+            or kwargs.get("format")
+            or kwargs.get("response_format", "txt")
+        )
+        fmt = str(raw_format) if raw_format is not None else "txt"
+        if fmt in ("json", "verbose_json"):
+            fmt = "json"
+        elif fmt not in ("txt", "srt", "vtt"):
+            fmt = "txt"
 
         raw = self._pipeline(file_path)
         text = raw.get("text", "") if isinstance(raw, dict) else str(raw)
 
-        if output_format == "json":
+        if fmt == "json":
             chunks: list[object] = raw.get("chunks", []) if isinstance(raw, dict) else []
             segments: list[dict[str, object]] = []
             for chunk in chunks:
                 if isinstance(chunk, dict):
                     ts = chunk.get("timestamp", (None, None))
-                    start: object = ts[0] if isinstance(ts, (list, tuple)) and len(ts) > 0 else None
-                    end: object = ts[1] if isinstance(ts, (list, tuple)) and len(ts) > 1 else None
+                    start = ts[0] if isinstance(ts, (list, tuple)) and len(ts) > 0 else None
+                    end = ts[1] if isinstance(ts, (list, tuple)) and len(ts) > 1 else None
+                    # Issue #3: skip chunks with any None timestamp — API Segment model
+                    # requires float values; None would cause a serialization 500 error.
+                    if start is None or end is None:
+                        continue
                     segments.append({"start": start, "end": end, "text": chunk.get("text", "")})
-            return {"text": text, "segments": segments}
+            return {"text": text, "segments": segments if segments else None}
 
         return text
 

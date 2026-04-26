@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, patch
 
 from src.core.funasr_engine import DEFAULT_MODEL_ID
 
+_FIRERED_DEFAULT_MODEL = "FireRedTeam/FireRedASR2-AED"
+
 
 class TestConfig:
     """测试 src/config.py 配置模块"""
@@ -25,6 +27,64 @@ class TestConfig:
         finally:
             os.environ.clear()
             os.environ.update(old_env)
+
+    # Issue #2: ENGINE_TYPE=firered must not fall through to FUNASR default
+    def test_get_model_id_returns_firered_default_when_engine_type_is_firered(self):
+        """With ENGINE_TYPE=firered and no MODEL_ID override, get_model_id() must
+        return the FireRed default, NOT the FunASR default.
+
+        Before the fix, the funasr fallback branch would be reached and the FunASR
+        model ID would be passed into FireRedEngine, causing a broken startup."""
+        old_env = os.environ.copy()
+        try:
+            os.environ["ENGINE_TYPE"] = "firered"
+            os.environ.pop("MODEL_ID", None)
+            os.environ.pop("FIRERED_MODEL_ID", None)
+
+            import src.config
+
+            with patch("src.config.load_dotenv"):
+                importlib.reload(src.config)
+
+            result = src.config.get_model_id()
+            assert result == _FIRERED_DEFAULT_MODEL, (
+                f"Expected FireRed default '{_FIRERED_DEFAULT_MODEL}', got '{result}'. "
+                "get_model_id() has no firered branch and falls through to funasr."
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_firered_model_id_env_var_is_respected(self):
+        """FIRERED_MODEL_ID env var must override the built-in default."""
+        old_env = os.environ.copy()
+        custom = "FireRedTeam/custom-model"
+        try:
+            os.environ["ENGINE_TYPE"] = "firered"
+            os.environ.pop("MODEL_ID", None)
+            os.environ["FIRERED_MODEL_ID"] = custom
+
+            import src.config
+
+            with patch("src.config.load_dotenv"):
+                importlib.reload(src.config)
+
+            result = src.config.get_model_id()
+            assert result == custom
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_engine_type_literal_includes_firered(self):
+        """EngineType must include 'firered' so type-checkers and validation accept it."""
+        import src.config
+        import typing
+
+        args = typing.get_args(src.config.EngineType)
+        assert "firered" in args, (
+            f"'firered' not in EngineType args {args}. "
+            "Add 'firered' to the Literal in src/config.py."
+        )
 
 
 class TestFactory:
