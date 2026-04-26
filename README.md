@@ -34,7 +34,7 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 | Scenario | Recommended | Command |
 |----------|-------------|---------|
 | Multi-speaker podcast / meeting | `paraformer` (default) | `uv run python -m src.main` |
-| Fast single-speaker transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
+| Fast single-speaker transcription | `mlx-community/Qwen3-ASR-1.7B-4bit` (MLX default) | `ENGINE_TYPE=mlx uv run python -m src.main` |
 | Bulk speed-first (no diarization) | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
 
 ## API & Web UI
@@ -91,13 +91,15 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | Alias | Engine | Requestable | Description |
 |-------|--------|-------------|-------------|
 | `paraformer` | FunASR | ✅ | Mandarin + Diarization (Best for meetings) |
-| `qwen3-asr` | MLX | ✅ | English/Chinese single-speaker (Fast, low memory) |
+| `qwen3-asr` | MLX | ✅ | English/Chinese single-speaker (8-bit registered alias for per-request switching) |
 | `sensevoice-small` | FunASR | ✅ | Speed-first, emotion/language detection |
 | `firered-asr` | FireRed | ❌ | Bilingual ASR engine; startup-eligible via `ENGINE_TYPE=firered`; not publicly requestable yet |
 | `sortformer-diar` | MLX | ❌ | Diarization adapter for future decoupled pipeline |
 | `firered-sortformer` | Pipeline | ❌ | Decoupled profile — discoverable via `GET /v1/models`, POST returns `501` until runtime enabled |
 
 > **Discovery vs requestable**: `GET /v1/models` lists all registered models and pipeline profiles (including discovery-only entries). Only aliases marked ✅ can be used in `POST /v1/audio/transcriptions`. Sending `model=firered-sortformer` returns `501 Not Implemented` until the decoupled runtime is publicly enabled.
+
+> **Startup defaults vs aliases**: `ENGINE_TYPE=mlx` currently boots `MLX_MODEL_ID=mlx-community/Qwen3-ASR-1.7B-4bit`. The requestable alias `qwen3-asr` points to the registered 8-bit variant for per-request switching and `/v1/models` discovery.
 
 ### Query models
 
