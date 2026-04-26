@@ -3,7 +3,7 @@
 High-performance local speech transcription service optimized for Apple Silicon (M-series).
 OpenAI Whisper-compatible HTTP API on port **50700**.
 
-**Dual-engine architecture:**
+**Multi-engine architecture:**
 - **FunASR** — Paraformer (Chinese SOTA) + CAM++ speaker diarization
 - **MLX Audio** — Apple-native models (Qwen3-ASR, Whisper, etc.)
 - **FireRed** — FireRedASR2-AED adapter (plumbing ready; public decoupled pipeline coming)
