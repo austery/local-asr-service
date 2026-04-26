@@ -90,12 +90,12 @@ curl http://localhost:50700/v1/audio/transcriptions \
 
 | Alias | Engine | Requestable | Description |
 |-------|--------|-------------|-------------|
-| `paraformer` | FunASR | ✅ | Mandarin + Diarization (Best for meetings) |
-| `qwen3-asr` | MLX | ✅ | English/Chinese single-speaker (8-bit registered alias for per-request switching) |
-| `sensevoice-small` | FunASR | ✅ | Speed-first, emotion/language detection |
-| `firered-asr` | FireRed | ❌ | Bilingual ASR engine; startup-eligible via `ENGINE_TYPE=firered`; not publicly requestable yet |
-| `sortformer-diar` | Sortformer | ❌ | Speaker diarization adapter (internal only, not requestable) |
-| `firered-sortformer` | Pipeline | ❌ | Decoupled profile — sequential ASR + diarization with result alignment; discoverable via `GET /v1/models`, POST returns `501` until public gate is lifted (SPEC-011) |
+| `paraformer` | FunASR | ✅ | Mandarin ASR + speaker diarization (best for multi-speaker, 20-60min audio) |
+| `qwen3-asr` | MLX | ✅ | Qwen3-ASR-1.7B-8bit (fast, low memory, English/Chinese single-speaker) |
+| `sensevoice-small` | FunASR | ✅ | SenseVoice (fastest; emotion/language detection, no timestamps) |
+| `firered-asr` | FireRed | ❌ | FireRedASR2-AED (bilingual; startup-eligible via `ENGINE_TYPE=firered`, not POST-requestable) |
+| `sortformer-diar` | Sortformer | ❌ | Diarization adapter (internal component of `firered-sortformer` pipeline, not requestable) |
+| `firered-sortformer` | Pipeline | ❌ | Decoupled ASR+diarization pipeline (sequential FireRed → Sortformer; discoverable, POST returns `501` until public gate lifted) |
 
 > **Discovery vs requestable**: `GET /v1/models` lists all registered models and pipeline profiles (including discovery-only entries). Only aliases marked ✅ can be used in `POST /v1/audio/transcriptions`. Sending `model=firered-sortformer` returns `501 Not Implemented` until the decoupled runtime is publicly enabled.
 
