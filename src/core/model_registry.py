@@ -80,6 +80,15 @@ _REGISTRY: dict[str, ModelSpec] = {
 _MODEL_ID_TO_ALIAS: dict[str, str] = {spec.model_id: spec.alias for spec in _REGISTRY.values()}
 
 
+def build_unknown_model_message(model: str) -> str:
+    return (
+        f"Unknown model: '{model}'. "
+        "Use GET /v1/models to see built-in models, or pass a supported full model ID "
+        "such as 'mlx-community/...', 'iic/...', or the registered FireRed model ID "
+        "'FireRedTeam/FireRedASR2-AED'."
+    )
+
+
 def lookup(model: str) -> ModelSpec:
     """
     Resolve a model string to a ModelSpec.
@@ -109,11 +118,7 @@ def lookup(model: str) -> ModelSpec:
         inferred_engine = "funasr"
 
     if inferred_engine is None:
-        raise ValueError(
-            f"Unknown model: '{model}'. "
-            f"Use GET /v1/models to see built-in models, "
-            f"or pass a full path prefixed with 'mlx-community/' or 'iic/'."
-        )
+        raise ValueError(build_unknown_model_message(model))
 
     # Return an ad-hoc spec; real capabilities will be resolved by the engine at load time.
     return ModelSpec(

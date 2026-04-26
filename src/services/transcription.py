@@ -5,6 +5,7 @@ import os
 import queue as _stdlib_queue
 import shutil
 import tempfile
+from collections.abc import Awaitable
 from contextlib import suppress
 from typing import Any, cast
 
@@ -131,7 +132,8 @@ class TranscriptionService:
                         pipeline_profile,
                     )
                 finally:
-                    await self._exit_pipeline_submission()
+                    pipeline_submission_registered = False
+                    await self._release_submission_gate(self._exit_pipeline_submission())
                     shutil.rmtree(temp_dir, ignore_errors=True)
 
             await self._enter_standard_submission()
@@ -154,9 +156,9 @@ class TranscriptionService:
             raise
         finally:
             if standard_submission_registered:
-                await self._exit_standard_submission()
+                await self._release_submission_gate(self._exit_standard_submission())
             elif pipeline_submission_registered:
-                await self._exit_pipeline_submission()
+                await self._release_submission_gate(self._exit_pipeline_submission())
 
     async def _submit_worker_job(
         self,
@@ -349,6 +351,20 @@ class TranscriptionService:
                 return
             self._pipeline_active = False
             self._submission_gate.notify_all()
+
+    async def _release_submission_gate(self, releaser: Awaitable[None]) -> None:
+        release_task = asyncio.create_task(releaser)
+        cancelled = False
+
+        while not release_task.done():
+            try:
+                await asyncio.shield(release_task)
+            except asyncio.CancelledError:
+                cancelled = True
+
+        await release_task
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
         for old_q in (self._job_queue, self._result_queue):

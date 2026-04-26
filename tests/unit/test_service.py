@@ -129,6 +129,164 @@ class TestTranscriptionService:
                 pipeline_profile=profile,
             )
 
+    async def test_submit_should_release_standard_submission_gate_when_cancelled(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        job_entered = asyncio.Event()
+        exit_started = asyncio.Event()
+        block_job = asyncio.Event()
+        original_exit = svc._exit_standard_submission
+
+        async def blocking_job(*_args: object, **_kwargs: object) -> object:
+            job_entered.set()
+            await block_job.wait()
+            return {"text": "unreachable"}
+
+        async def wrapped_exit() -> None:
+            exit_started.set()
+            await original_exit()
+
+        with (
+            patch.object(svc, "_submit_worker_job", new=AsyncMock(side_effect=blocking_job)),
+            patch.object(svc, "_exit_standard_submission", new=AsyncMock(side_effect=wrapped_exit)),
+        ):
+            task = asyncio.create_task(svc.submit(_make_upload(), {}, request_id="req-cancel-standard"))
+            await job_entered.wait()
+            assert svc._active_standard_submissions == 1
+
+            await svc._submission_gate.acquire()
+            task.cancel()
+            block_job.set()
+            await exit_started.wait()
+            task.cancel()
+            svc._submission_gate.release()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1.0)
+
+        for _ in range(50):
+            if svc._active_standard_submissions == 0:
+                break
+            await asyncio.sleep(0.01)
+
+        assert svc._active_standard_submissions == 0
+
+    async def test_submit_should_release_pipeline_submission_gate_when_cancelled(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        pipeline_entered = asyncio.Event()
+        exit_started = asyncio.Event()
+        block_pipeline = asyncio.Event()
+        original_exit = svc._exit_pipeline_submission
+
+        async def blocking_pipeline(*_args: object, **_kwargs: object) -> object:
+            pipeline_entered.set()
+            await block_pipeline.wait()
+            return {"text": "unreachable"}
+
+        async def wrapped_exit() -> None:
+            exit_started.set()
+            await original_exit()
+
+        with (
+            patch.object(svc, "_run_decoupled_pipeline", new=AsyncMock(side_effect=blocking_pipeline)),
+            patch.object(svc, "_exit_pipeline_submission", new=AsyncMock(side_effect=wrapped_exit)),
+        ):
+            task = asyncio.create_task(
+                svc.submit(
+                    _make_upload(),
+                    {"language": "zh", "output_format": "json"},
+                    request_id="req-cancel-pipeline",
+                    pipeline_profile=profile,
+                )
+            )
+            await pipeline_entered.wait()
+            assert svc._pipeline_active is True
+
+            await svc._submission_gate.acquire()
+            task.cancel()
+            block_pipeline.set()
+            await exit_started.wait()
+            task.cancel()
+            svc._submission_gate.release()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1.0)
+
+        for _ in range(50):
+            if not svc._pipeline_active:
+                break
+            await asyncio.sleep(0.01)
+
+        assert svc._pipeline_active is False
+
+    async def test_submit_should_release_pipeline_submission_gate_once(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        profile = lookup_profile("firered-sortformer")
+        expected = {"text": "pipeline result", "segments": None, "duration": 1.0}
+        original_exit = svc._exit_pipeline_submission
+
+        async def wrapped_exit() -> None:
+            await original_exit()
+
+        with (
+            patch.object(
+                svc,
+                "_run_decoupled_pipeline",
+                new=AsyncMock(return_value=expected),
+            ),
+            patch.object(
+                svc,
+                "_exit_pipeline_submission",
+                new=AsyncMock(side_effect=wrapped_exit),
+            ) as mock_exit,
+        ):
+            result = await svc.submit(
+                _make_upload(),
+                {"language": "zh", "output_format": "json"},
+                request_id="req-pipeline-release-once",
+                pipeline_profile=profile,
+            )
+
+        assert result == expected
+        mock_exit.assert_awaited_once()
+
+    async def test_release_submission_gate_should_finish_cleanup_before_second_cancellation(
+        self,
+        funasr_spec,
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+        svc._active_standard_submissions = 1
+        release_entered = asyncio.Event()
+        original_exit = svc._exit_standard_submission
+
+        async def wrapped_exit() -> None:
+            release_entered.set()
+            await original_exit()
+
+        await svc._submission_gate.acquire()
+        task = asyncio.create_task(svc._release_submission_gate(wrapped_exit()))
+        await release_entered.wait()
+
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+
+        assert task.done() is False
+
+        svc._submission_gate.release()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1.0)
+
+        assert svc._active_standard_submissions == 0
+
     async def test_temp_file_lifecycle(self, funasr_spec):
         """Temp directory is created before the job and deleted after result arrives."""
         svc = _setup_service(funasr_spec)

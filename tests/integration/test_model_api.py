@@ -142,6 +142,8 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
 
     assert response.status_code == 400
     assert "Unknown model" in response.json()["detail"]
+    assert "FireRedTeam/FireRedASR2-AED" in response.json()["detail"]
+    assert "not directly requestable via POST" in response.json()["detail"]
 
 
 def test_should_return_501_when_pipeline_alias_is_provided(client) -> None:
@@ -160,6 +162,17 @@ def test_should_return_400_when_future_transcription_component_alias_is_provided
     response = client.post(
         "/v1/audio/transcriptions",
         data={"model": "firered-asr", "language": "zh"},
+        files={"file": _audio_file()},
+    )
+
+    assert response.status_code == 400
+    assert "not available for direct transcription requests" in response.json()["detail"]
+
+
+def test_should_return_400_when_registered_firered_model_id_is_provided(client) -> None:
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "FireRedTeam/FireRedASR2-AED", "language": "zh"},
         files={"file": _audio_file()},
     )
 

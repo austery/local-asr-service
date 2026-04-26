@@ -12,7 +12,12 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from src.config import MAX_UPLOAD_SIZE_MB
-from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
+from src.core.model_registry import (
+    ModelSpec,
+    is_passthrough,
+    list_all,
+    lookup,
+)
 from src.core.pipeline_registry import PipelineProfile, list_all_profiles, lookup_profile
 
 logger = logging.getLogger(__name__)
@@ -102,7 +107,9 @@ def _raise_unknown_model(model: str) -> Never:
         status_code=400,
         detail=(
             f"Unknown model: '{model}'. Use GET /v1/models to see built-in models, "
-            "or pass a full path prefixed with 'mlx-community/' or 'iic/'."
+            "or pass a requestable full model ID such as 'mlx-community/...' or 'iic/...'. "
+            "The registered FireRed model ID 'FireRedTeam/FireRedASR2-AED' is startup-only "
+            "and not directly requestable via POST."
         ),
     )
 

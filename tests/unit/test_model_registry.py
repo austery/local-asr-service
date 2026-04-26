@@ -38,6 +38,16 @@ class TestLookup:
         with pytest.raises(ValueError, match="Unknown model"):
             lookup("not-a-real-model")
 
+    def test_should_include_registered_firered_model_id_in_unknown_model_error(self) -> None:
+        with pytest.raises(ValueError, match="FireRedTeam/FireRedASR2-AED"):
+            lookup("not-a-real-model")
+
+    def test_core_unknown_model_error_should_not_include_api_only_requestability_note(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            lookup("not-a-real-model")
+
+        assert "not directly requestable via POST" not in str(exc_info.value)
+
     def test_should_return_firered_spec_when_alias_is_known(self) -> None:
         spec = lookup("firered-asr")
 
