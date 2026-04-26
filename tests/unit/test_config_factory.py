@@ -62,3 +62,16 @@ class TestFactory:
 
         assert result is mlx_engine
         mlx_cls.assert_called_once_with(model_id="mlx-community/Qwen3-ASR-1.7B-8bit")
+
+    def test_should_route_firered_engine_type_to_firered_engine(self) -> None:
+        from src.core.factory import _create_by_type
+
+        firered_engine = MagicMock(name="firered-engine")
+
+        with patch(
+            "src.core.firered_engine.FireRedEngine", return_value=firered_engine
+        ) as firered_cls:
+            result = _create_by_type("firered", "FireRedTeam/FireRedASR2-AED")
+
+        assert result is firered_engine
+        firered_cls.assert_called_once_with(model_id="FireRedTeam/FireRedASR2-AED")

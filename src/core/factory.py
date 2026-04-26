@@ -50,4 +50,12 @@ def _create_by_type(engine_type: str, model_id: str) -> EngineInstance:
         logger.info(f"🏭 Creating MLX Audio engine with model: {model_id}")
         return MlxAudioEngine(model_id=model_id)
 
-    raise ValueError(f"Unsupported engine_type: '{engine_type}'. Must be 'funasr' or 'mlx'.")
+    if engine_type == "firered":
+        from src.core.firered_engine import FireRedEngine
+
+        logger.info(f"🏭 Creating FireRed engine with model: {model_id}")
+        return FireRedEngine(model_id=model_id)
+
+    raise ValueError(
+        f"Unsupported engine_type: '{engine_type}'. Must be 'funasr', 'mlx', or 'firered'."
+    )
