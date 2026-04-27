@@ -4,7 +4,7 @@ ASR 引擎抽象接口定义。
 """
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class ASREngine(Protocol):
 
     @property
     def capabilities(self) -> EngineCapabilities:
-        """获取当前加载模型的能力声明。"""
+        """Return the capabilities of the currently loaded model."""
         ...
 
     def load(self) -> None:
@@ -42,8 +42,8 @@ class ASREngine(Protocol):
         ...
 
     def transcribe_file(
-        self, file_path: str, language: str = "auto", **kwargs: object
-    ) -> str | dict[str, object]:
+        self, file_path: str, language: str = "auto", **kwargs: Any
+    ) -> str | dict[str, Any]:
         """
         执行推理，返回转录文本。
 
@@ -53,7 +53,7 @@ class ASREngine(Protocol):
             **kwargs: 引擎特定参数
 
         Returns:
-            转录文本或结构化转录结果
+            转录文本
         """
         ...
 

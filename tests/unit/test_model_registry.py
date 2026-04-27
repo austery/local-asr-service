@@ -38,30 +38,6 @@ class TestLookup:
         with pytest.raises(ValueError, match="Unknown model"):
             lookup("not-a-real-model")
 
-    def test_should_include_registered_firered_model_id_in_unknown_model_error(self) -> None:
-        with pytest.raises(ValueError, match="FireRedTeam/FireRedASR2-AED"):
-            lookup("not-a-real-model")
-
-    def test_core_unknown_model_error_should_not_include_api_only_requestability_note(self) -> None:
-        with pytest.raises(ValueError) as exc_info:
-            lookup("not-a-real-model")
-
-        assert "not directly requestable via POST" not in str(exc_info.value)
-
-    def test_should_return_firered_spec_when_alias_is_known(self) -> None:
-        spec = lookup("firered-asr")
-
-        assert spec.engine_type == "firered"
-        assert spec.model_id == "FireRedTeam/FireRedASR2-AED"
-        assert spec.alias == "firered-asr"
-
-    def test_should_return_sortformer_spec_when_alias_is_known(self) -> None:
-        spec = lookup("sortformer-diar")
-
-        assert spec.engine_type == "mlx"
-        assert spec.model_id == "mlx-community/diar_sortformer_4spk-v1-fp32"
-        assert spec.alias == "sortformer-diar"
-
     def test_should_resolve_registered_model_id_to_same_spec_as_alias(self) -> None:
         by_alias = lookup("qwen3-asr")
         by_model_id = lookup("mlx-community/Qwen3-ASR-1.7B-8bit")
@@ -88,45 +64,6 @@ class TestCapabilities:
         spec = lookup("qwen3-asr")
 
         assert spec.capabilities.diarization is False
-
-    def test_should_declare_firered_language_detection_and_timestamps(self) -> None:
-        spec = lookup("firered-asr")
-
-        assert spec.capabilities.timestamp is True
-        assert spec.capabilities.diarization is False
-        assert spec.capabilities.language_detect is True
-
-    def test_should_declare_sortformer_diarization_without_timestamps(self) -> None:
-        spec = lookup("sortformer-diar")
-
-        assert spec.capabilities.diarization is True
-        assert spec.capabilities.timestamp is False
-
-
-class TestRequestability:
-    def test_should_mark_existing_runtime_models_as_requestable(self) -> None:
-        assert lookup("paraformer").requestable is True
-        assert lookup("qwen3-asr").requestable is True
-
-    def test_should_mark_future_decoupled_component_aliases_as_not_requestable(self) -> None:
-        assert lookup("firered-asr").requestable is False
-        assert lookup("sortformer-diar").requestable is False
-
-    def test_firered_should_be_startup_eligible_despite_not_being_requestable(self) -> None:
-        """FireRed is a real ASR engine: startup_eligible regardless of public requestability."""
-        spec = lookup("firered-asr")
-        assert spec.requestable is False
-        assert spec.startup_eligible is True
-
-    def test_sortformer_should_not_be_startup_eligible(self) -> None:
-        """sortformer-diar is a diarization-only component, not a startup ASR engine."""
-        spec = lookup("sortformer-diar")
-        assert spec.startup_eligible is False
-
-    def test_standard_asr_models_are_startup_eligible(self) -> None:
-        assert lookup("paraformer").startup_eligible is True
-        assert lookup("qwen3-asr").startup_eligible is True
-        assert lookup("sensevoice-small").startup_eligible is True
 
     # Performance Review (2026-02-25): parakeet (parakeet-tdt-0.6b-v2) deregistered.
     # Achieved 121.7x RTF on 60s clips but crashes with Metal OOM on audio > ~5min.
@@ -157,11 +94,9 @@ class TestListAll:
         models = list_all()
 
         aliases = {m.alias for m in models}
-        assert "firered-asr" in aliases
         assert "paraformer" in aliases
         assert "qwen3-asr" in aliases
         assert "sensevoice-small" in aliases
-        assert "sortformer-diar" in aliases
 
     def test_should_return_models_sorted_by_alias(self) -> None:
         models = list_all()
@@ -178,8 +113,3 @@ class TestAliasFor:
 
     def test_should_return_none_for_unknown_model_id(self) -> None:
         assert alias_for("unknown/model") is None
-
-    def test_should_return_alias_for_firered_model_id(self) -> None:
-        alias = alias_for("FireRedTeam/FireRedASR2-AED")
-
-        assert alias == "firered-asr"

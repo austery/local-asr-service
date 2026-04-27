@@ -10,7 +10,7 @@ from typing import Literal
 
 from src.core.base_engine import EngineCapabilities
 
-EngineType = Literal["funasr", "mlx", "firered"]
+EngineType = Literal["funasr", "mlx"]
 
 # OpenAI-compat placeholder values that mean "use the server's current model"
 # Empty string is also passthrough: form data serialises None as "" in some clients
@@ -26,22 +26,12 @@ class ModelSpec:
     engine_type: EngineType
     description: str
     capabilities: EngineCapabilities
-    requestable: bool = True
-    startup_eligible: bool = True
 
 
 # fmt: off
 _REGISTRY: dict[str, ModelSpec] = {
     spec.alias: spec
     for spec in [
-        ModelSpec(
-            alias="firered-asr",
-            model_id="FireRedTeam/FireRedASR2-AED",
-            engine_type="firered",
-            description="FireRed ASR 2 AED. Adapter target for future decoupled pipelines; not directly requestable yet.",
-            capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=True),
-            requestable=False,
-        ),
         ModelSpec(
             alias="paraformer",
             model_id="iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
@@ -63,30 +53,12 @@ _REGISTRY: dict[str, ModelSpec] = {
             description="SenseVoice Small — fastest model (80-85x realtime). Best for: bulk speed-first processing, language detection, emotion tagging. NOT recommended for transcription quality: struggles with mixed-language and proper nouns.",
             capabilities=EngineCapabilities(timestamp=False, diarization=False, emotion_tags=True, language_detect=True),
         ),
-        ModelSpec(
-            alias="sortformer-diar",
-            model_id="mlx-community/diar_sortformer_4spk-v1-fp32",
-            engine_type="mlx",
-            description="Sortformer diarization adapter target for future decoupled pipelines; not directly requestable yet.",
-            capabilities=EngineCapabilities(timestamp=False, diarization=True, emotion_tags=False, language_detect=False),
-            requestable=False,
-            startup_eligible=False,
-        ),
     ]
 }
 # fmt: on
 
 # Reverse index: model_id → alias (for resolving full paths back to human aliases)
 _MODEL_ID_TO_ALIAS: dict[str, str] = {spec.model_id: spec.alias for spec in _REGISTRY.values()}
-
-
-def build_unknown_model_message(model: str) -> str:
-    return (
-        f"Unknown model: '{model}'. "
-        "Use GET /v1/models to see built-in models, or pass a supported full model ID "
-        "such as 'mlx-community/...', 'iic/...', or the registered FireRed model ID "
-        "'FireRedTeam/FireRedASR2-AED'."
-    )
 
 
 def lookup(model: str) -> ModelSpec:
@@ -118,7 +90,11 @@ def lookup(model: str) -> ModelSpec:
         inferred_engine = "funasr"
 
     if inferred_engine is None:
-        raise ValueError(build_unknown_model_message(model))
+        raise ValueError(
+            f"Unknown model: '{model}'. "
+            f"Use GET /v1/models to see built-in models, "
+            f"or pass a full path prefixed with 'mlx-community/' or 'iic/'."
+        )
 
     # Return an ad-hoc spec; real capabilities will be resolved by the engine at load time.
     return ModelSpec(

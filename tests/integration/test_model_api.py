@@ -44,12 +44,10 @@ def client():
         {"text": "test result", "segments": None, "duration": 1.0},
         current_model_spec=qwen_spec,
     )
-    with (
-        patch("src.main.TranscriptionService", return_value=mock_service),
-        patch("src.main.lookup", return_value=qwen_spec),
-        TestClient(app) as c,
-    ):
-        yield c
+    with patch("src.main.TranscriptionService", return_value=mock_service):
+        with patch("src.main.lookup", return_value=qwen_spec):
+            with TestClient(app) as c:
+                yield c
 
 
 @pytest.fixture
@@ -61,12 +59,10 @@ def funasr_client():
         {"text": "funasr result", "segments": [], "duration": 1.0},
         current_model_spec=paraformer_spec,
     )
-    with (
-        patch("src.main.TranscriptionService", return_value=mock_service),
-        patch("src.main.lookup", return_value=paraformer_spec),
-        TestClient(app) as c,
-    ):
-        yield c
+    with patch("src.main.TranscriptionService", return_value=mock_service):
+        with patch("src.main.lookup", return_value=paraformer_spec):
+            with TestClient(app) as c:
+                yield c
 
 
 def _audio_file() -> tuple[str, BytesIO, str]:
@@ -81,33 +77,10 @@ def test_should_return_model_list_on_get_models(client) -> None:
     body = response.json()
     assert "models" in body
     aliases = [m["alias"] for m in body["models"]]
-    assert "firered-asr" in aliases
-    assert "firered-sortformer" in aliases
     assert "paraformer" in aliases
     assert "qwen3-asr" in aliases
     assert "sensevoice-small" in aliases
-    assert "sortformer-diar" in aliases
-
-
-def test_should_include_pipeline_profile_entry_on_get_models(client) -> None:
-    response = client.get("/v1/models")
-
-    assert response.status_code == 200
-    body = response.json()
-    by_alias = {model["alias"]: model for model in body["models"]}
-    pipeline_entry = by_alias["firered-sortformer"]
-
-    assert pipeline_entry["engine_type"] == "pipeline"
-    assert pipeline_entry["model_id"] == "firered-asr+sortformer-diar"
-    assert pipeline_entry["description"] == "decoupled FireRed + Sortformer profile"
-    assert pipeline_entry["requestable"] is False
-    assert pipeline_entry["capabilities"]["timestamp"] is True
-    assert pipeline_entry["capabilities"]["diarization"] is True
-    assert pipeline_entry["capabilities"]["language_detect"] is True
-
-    assert by_alias["paraformer"]["requestable"] is True
-    assert by_alias["firered-asr"]["requestable"] is False
-    assert by_alias["sortformer-diar"]["requestable"] is False
+    
 
 
 # MA-2
@@ -142,53 +115,6 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
 
     assert response.status_code == 400
     assert "Unknown model" in response.json()["detail"]
-    assert "FireRedTeam/FireRedASR2-AED" in response.json()["detail"]
-    assert "not directly requestable via POST" in response.json()["detail"]
-
-
-def test_should_return_501_when_pipeline_alias_is_provided(client) -> None:
-    response = client.post(
-        "/v1/audio/transcriptions",
-        data={"model": "firered-sortformer", "language": "zh"},
-        files={"file": _audio_file()},
-    )
-
-    assert response.status_code == 501
-    assert "not implemented" in response.json()["detail"].lower()
-    client.app.state.service.submit.assert_not_awaited()
-
-
-def test_should_return_400_when_future_transcription_component_alias_is_provided(client) -> None:
-    response = client.post(
-        "/v1/audio/transcriptions",
-        data={"model": "firered-asr", "language": "zh"},
-        files={"file": _audio_file()},
-    )
-
-    assert response.status_code == 400
-    assert "not available for direct transcription requests" in response.json()["detail"]
-
-
-def test_should_return_400_when_registered_firered_model_id_is_provided(client) -> None:
-    response = client.post(
-        "/v1/audio/transcriptions",
-        data={"model": "FireRedTeam/FireRedASR2-AED", "language": "zh"},
-        files={"file": _audio_file()},
-    )
-
-    assert response.status_code == 400
-    assert "not available for direct transcription requests" in response.json()["detail"]
-
-
-def test_should_return_400_when_future_diarization_component_alias_is_provided(client) -> None:
-    response = client.post(
-        "/v1/audio/transcriptions",
-        data={"model": "sortformer-diar", "language": "zh"},
-        files={"file": _audio_file()},
-    )
-
-    assert response.status_code == 400
-    assert "not available for direct transcription requests" in response.json()["detail"]
 
 
 # MA-5

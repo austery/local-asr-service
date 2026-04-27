@@ -3,10 +3,9 @@
 High-performance local speech transcription service optimized for Apple Silicon (M-series).
 OpenAI Whisper-compatible HTTP API on port **50700**.
 
-**Multi-engine architecture:**
+**Dual-engine architecture:**
 - **FunASR** — Paraformer (Chinese SOTA) + CAM++ speaker diarization
 - **MLX Audio** — Apple-native models (Qwen3-ASR, Whisper, etc.)
-- **FireRed + Sortformer** — Decoupled bilingual ASR + diarization pipeline (SPEC-011; production-hardened, 501-gated)
 
 → See [MODELS.md](./MODELS.md) for model list, benchmark results, and selection guide.
 
@@ -34,7 +33,7 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 | Scenario | Recommended | Command |
 |----------|-------------|---------|
 | Multi-speaker podcast / meeting | `paraformer` (default) | `uv run python -m src.main` |
-| Fast single-speaker transcription | `mlx-community/Qwen3-ASR-1.7B-4bit` (MLX default) | `ENGINE_TYPE=mlx uv run python -m src.main` |
+| Fast single-speaker transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
 | Bulk speed-first (no diarization) | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
 
 ## API & Web UI
@@ -88,18 +87,11 @@ curl http://localhost:50700/v1/audio/transcriptions \
 
 **Supported Models (`model` parameter):**
 
-| Alias | Engine | Requestable | Description |
-|-------|--------|-------------|-------------|
-| `paraformer` | FunASR | ✅ | Mandarin ASR + speaker diarization (best for multi-speaker, 20-60min audio) |
-| `qwen3-asr` | MLX | ✅ | Qwen3-ASR-1.7B-8bit (fast, low memory, English/Chinese single-speaker) |
-| `sensevoice-small` | FunASR | ✅ | SenseVoice (fastest; emotion/language detection, no timestamps) |
-| `firered-asr` | FireRed | ❌ | FireRedASR2-AED (bilingual; startup-eligible via `ENGINE_TYPE=firered`, not POST-requestable) |
-| `sortformer-diar` | Sortformer | ❌ | Diarization adapter (internal component of `firered-sortformer` pipeline, not requestable) |
-| `firered-sortformer` | Pipeline | ❌ | Decoupled ASR+diarization pipeline (sequential FireRed → Sortformer; discoverable, POST returns `501` until public gate lifted) |
-
-> **Discovery vs requestable**: `GET /v1/models` lists all registered models and pipeline profiles (including discovery-only entries). Only aliases marked ✅ can be used in `POST /v1/audio/transcriptions`. Sending `model=firered-sortformer` returns `501 Not Implemented` until the decoupled runtime is publicly enabled.
-
-> **Startup defaults vs aliases**: `ENGINE_TYPE=mlx` currently boots `MLX_MODEL_ID=mlx-community/Qwen3-ASR-1.7B-4bit`. The requestable alias `qwen3-asr` points to the registered 8-bit variant for per-request switching and `/v1/models` discovery.
+| Alias | Engine | Description |
+|-------|--------|-------------|
+| `paraformer` | FunASR | Mandarin + Diarization (Best for meetings) |
+| `qwen3-asr` | MLX | English/Chinese single-speaker (Fast, low memory) |
+| `sensevoice-small` | FunASR | Speed-first, emotion/language detection |
 
 ### Query models
 
@@ -120,11 +112,10 @@ http://localhost:50700/docs
 
 ```bash
 # Engine and model
-ENGINE_TYPE=funasr            # funasr | mlx | firered
+ENGINE_TYPE=funasr            # funasr | mlx
 MODEL_ID=                     # Override model for any engine (highest priority)
 FUNASR_MODEL_ID=iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
-MLX_MODEL_ID=mlx-community/Qwen3-ASR-1.7B-4bit
-FIRERED_MODEL_ID=FireRedTeam/FireRedASR2-AED  # FireRed engine default (startup-eligible; not publicly requestable yet)
+MLX_MODEL_ID=mlx-community/Qwen3-ASR-1.7B-8bit
 
 # Service
 HOST=0.0.0.0
@@ -196,35 +187,19 @@ MODEL_IDLE_TIMEOUT_SEC=0 uv run python -m src.main
 
 ---
 
-## Decoupled Pipeline (SPEC-011)
-
-The `firered-sortformer` profile implements a **production-hardened decoupled pipeline** for ASR + diarization:
-
-- **Sequential execution**: ASR (FireRed) → Diarization (Sortformer) → Speaker alignment
-- **Independent model switching**: Models load/release in strict order (no double-peak memory)
-- **Result alignment**: Diarization speaker turns aligned to ASR segment timestamps
-- **Full lifecycle hardening**: Cancellation-safe cleanup, ownership gating, half-init prevention, comprehensive logging
-- **501-gated public endpoint**: Pipeline is discoverable (`GET /v1/models`) but POST returns `501 Not Implemented` until explicitly enabled
-  
-See [SPEC-011-Decoupled-ASR-Diarization.md](./docs/SPEC-011-Decoupled-ASR-Diarization.md) for full design + API details.
-
----
+## Architecture
 
 ```
 src/
 ├── api/          # HTTP routes + Pydantic schemas (contract layer)
 ├── services/     # Async queue + serial worker (scheduling layer)
-├── core/         # Engine abstraction + implementations
-│   ├── base_engine.py        # ASREngine Protocol + EngineCapabilities
-│   ├── funasr_engine.py      # FunASR/Paraformer (diarization support)
-│   ├── mlx_engine.py         # MLX Audio (Qwen3-ASR, Whisper, etc.)
-│   ├── firered_engine.py     # FireRed ASR adapter (SPEC-011 Phase 1 plumbing)
-│   ├── sortformer_engine.py  # Sortformer diarization adapter (SPEC-011 Phase 1 plumbing)
-│   ├── diarization_port.py   # Diarization port interface
-│   ├── pipeline_registry.py  # Decoupled pipeline profiles (firered-sortformer)
-│   ├── model_registry.py     # Alias → ModelSpec table (SPEC-108)
-│   └── factory.py            # Engine factory
-├── adapters/     # Pure functions: text cleaning, audio chunking, segment alignment
+├── core/         # Engine abstraction + FunASR/MLX implementations
+│   ├── base_engine.py      # ASREngine Protocol + EngineCapabilities
+│   ├── funasr_engine.py    # FunASR/Paraformer (diarization support)
+│   ├── mlx_engine.py       # MLX Audio (Qwen3-ASR, Whisper, etc.)
+│   ├── model_registry.py   # Alias → ModelSpec table (SPEC-108)
+│   └── factory.py          # Engine factory
+├── adapters/     # Pure functions: text cleaning, audio chunking
 └── config.py     # Centralized env var configuration
 ```
 

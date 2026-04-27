@@ -20,7 +20,7 @@ else:
     load_dotenv()
 
 # 引擎类型
-EngineType = Literal["funasr", "mlx", "firered"]
+EngineType = Literal["funasr", "mlx"]
 
 # === 引擎配置 ===
 ENGINE_TYPE: EngineType = os.getenv("ENGINE_TYPE", "funasr")  # type: ignore
@@ -37,9 +37,6 @@ FUNASR_MODEL_ID = os.getenv(
 # MLX 默认模型
 MLX_MODEL_ID = os.getenv("MLX_MODEL_ID", "mlx-community/Qwen3-ASR-1.7B-4bit")
 
-# FireRed 默认模型
-FIRERED_MODEL_ID = os.getenv("FIRERED_MODEL_ID", "FireRedTeam/FireRedASR2-AED")
-
 # 通用 MODEL_ID（优先级高于引擎特定配置）
 MODEL_ID = os.getenv("MODEL_ID", None)
 
@@ -50,8 +47,6 @@ def get_model_id() -> str:
         return MODEL_ID
     if ENGINE_TYPE == "mlx":
         return MLX_MODEL_ID
-    if ENGINE_TYPE == "firered":
-        return FIRERED_MODEL_ID
     return FUNASR_MODEL_ID
 
 

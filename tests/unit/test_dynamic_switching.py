@@ -11,7 +11,6 @@ worker subprocess and are covered by test_worker.py.
 """
 import asyncio
 import multiprocessing
-from contextlib import suppress
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,7 +18,6 @@ import pytest
 from fastapi import UploadFile
 
 from src.core.model_registry import lookup
-from src.core.pipeline_registry import lookup_profile
 from src.services.transcription import TranscriptionService
 
 
@@ -59,8 +57,10 @@ async def _stop_service(svc: TranscriptionService) -> None:
     svc.is_running = False
     if svc._result_reader_task and not svc._result_reader_task.done():
         svc._result_reader_task.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
             await svc._result_reader_task
+        except asyncio.CancelledError:
+            pass
 
 
 @pytest.mark.asyncio
@@ -159,11 +159,9 @@ class TestModelSwitching:
         async def failing_switch(spec: object) -> None:
             raise RuntimeError("switch failed")
 
-        with (
-            patch.object(svc, "_switch_worker", side_effect=failing_switch),
-            pytest.raises(RuntimeError, match="switch failed"),
-        ):
-            await svc.submit(_make_upload(), {}, request_id="req-1", model_spec=mlx_spec)
+        with patch.object(svc, "_switch_worker", side_effect=failing_switch):
+            with pytest.raises(RuntimeError, match="switch failed"):
+                await svc.submit(_make_upload(), {}, request_id="req-1", model_spec=mlx_spec)
 
         assert len(svc._temp_dirs) == 0, "All temp dirs must be cleaned up after a failed switch"
         assert "req-1" not in svc._pending, "Pending future must be removed after failure"
@@ -199,38 +197,6 @@ class TestModelSwitching:
                 svc.submit(_make_upload(), {}, request_id="req-ok", model_spec=None),
                 timeout=5.0,
             )
-            assert isinstance(result, dict)
-            assert result["text"] == "recovered"
+            assert result["text"] == "recovered"  # type: ignore[index]
 
         await _stop_service(svc)
-
-    async def test_submit_uses_pipeline_profile_helper(
-        self,
-        funasr_spec,
-    ) -> None:
-        svc = _setup_service(funasr_spec)
-        profile = lookup_profile("firered-sortformer")
-        expected = {
-            "text": "pipeline result",
-            "segments": [{"start": 0.0, "end": 1.0, "text": "hello", "speaker": "Speaker 0"}],
-            "duration": 1.0,
-        }
-
-        with patch.object(
-            svc,
-            "_run_decoupled_pipeline",
-            new=AsyncMock(return_value=expected),
-        ) as mock_pipeline:
-            result = await svc.submit(
-                _make_upload(),
-                {"language": "zh", "output_format": "json"},
-                request_id="req-pipeline",
-                pipeline_profile=profile,
-            )
-
-        assert result == expected
-        assert mock_pipeline.await_count == 1
-        _, params, request_id, actual_profile = mock_pipeline.await_args.args
-        assert params == {"language": "zh", "output_format": "json"}
-        assert request_id == "req-pipeline"
-        assert actual_profile == profile
