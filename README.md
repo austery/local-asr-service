@@ -27,6 +27,25 @@ ENGINE_TYPE=mlx uv run python -m src.main
 
 First launch downloads the model automatically (~1-2GB, may take a few minutes).
 
+### FireRed runtime setup
+
+`firered-asr` now uses the **official FireRed AED runtime**, not `transformers.pipeline(...)`.
+The adapter also applies **conservative pre-inference chunking** before AED transcription so long
+recordings do not get sent to the bare runtime as one giant sequence.
+Because the upstream `fireredasr2s` package pins `torch==2.10.0`, it is **not** locked in this repo's
+`pyproject.toml`. To try FireRed locally:
+
+```bash
+# Project deps already provide: cn2an, kaldi-native-fbank, textgrid
+uv pip install --no-deps git+https://github.com/FireRedTeam/FireRedASR2S.git
+
+# Start the service with FireRed as the resident engine
+ENGINE_TYPE=firered uv run python -m src.main
+```
+
+On first FireRed startup, the official checkpoint `FireRedTeam/FireRedASR2-AED` (~4.7 GB) is
+downloaded via `huggingface_hub.snapshot_download(...)`.
+
 ---
 
 ## Use Cases
@@ -93,7 +112,7 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `paraformer` | FunASR | ✅ | Mandarin ASR + speaker diarization (best for multi-speaker, 20-60min audio) |
 | `qwen3-asr` | MLX | ✅ | Qwen3-ASR-1.7B-8bit (fast, low memory, English/Chinese single-speaker) |
 | `sensevoice-small` | FunASR | ✅ | SenseVoice (fastest; emotion/language detection, no timestamps) |
-| `firered-asr` | FireRed | ❌ | FireRedASR2-AED (bilingual; startup-eligible via `ENGINE_TYPE=firered`, not POST-requestable) |
+| `firered-asr` | FireRed | ❌ | FireRedASR2-AED via official FireRed AED runtime with conservative pre-inference chunking (startup-eligible via `ENGINE_TYPE=firered`, not POST-requestable) |
 | `sortformer-diar` | Sortformer | ❌ | Diarization adapter (internal component of `firered-sortformer` pipeline, not requestable) |
 | `firered-sortformer` | Pipeline | ❌ | Decoupled ASR+diarization pipeline (sequential FireRed → Sortformer; discoverable, POST returns `501` until public gate lifted) |
 
@@ -144,6 +163,9 @@ CHUNK_OVERLAP_SECONDS=15
 ```
 
 Copy `.env.example` to `.env` to persist settings.
+
+> **FireRed note**: `ENGINE_TYPE=firered` requires the upstream runtime source package:
+> `uv pip install --no-deps git+https://github.com/FireRedTeam/FireRedASR2S.git`
 
 ---
 

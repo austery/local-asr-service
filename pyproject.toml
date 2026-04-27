@@ -5,12 +5,15 @@ description = "Local ASR service optimized for Apple Silicon with FunASR/MLX dua
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "cn2an>=0.5.24",
     "fastapi>=0.121.3",
     "funasr[llm]>=1.2.7",
     "huggingface-hub>=0.26.0",
+    "kaldi-native-fbank>=1.22.3",
     "mlx-audio>=0.3.1",
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.20",
+    "textgrid>=1.6.1",
     "torch>=2.11.0,<3.0",  # Apple Silicon Metal compatibility; block PyTorch 3.0+ until tested
     "torchaudio>=2.9.1,<3.0",  # Must track torch version; block 3.0+ with torch
     "transformers>=4.40.0",

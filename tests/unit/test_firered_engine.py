@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
 import pytest
 
@@ -20,55 +20,172 @@ class TestFireRedEngineCapabilities:
         assert caps.language_detect is True
 
 
+@pytest.fixture
+def firered_load_env():
+    """Shared mock runtime + hub for FireRed load tests."""
+    mock_model = MagicMock(name="firered-model")
+    mock_config_ctor = MagicMock(return_value="cfg")
+    runtime = SimpleNamespace(
+        FireRedAsr2=SimpleNamespace(from_pretrained=MagicMock(return_value=mock_model)),
+        FireRedAsr2Config=mock_config_ctor,
+    )
+    hub = SimpleNamespace(snapshot_download=MagicMock(return_value="/tmp/firered-model"))
+
+    def import_module(name: str) -> object:
+        if name == "fireredasr2s.fireredasr2":
+            return runtime
+        if name == "huggingface_hub":
+            return hub
+        raise ModuleNotFoundError(name)
+
+    return SimpleNamespace(
+        runtime=runtime, hub=hub, mock_model=mock_model, import_module=import_module
+    )
+
+
 class TestFireRedEngineLoad:
-    def test_load_creates_pipeline_via_transformers_runtime(self) -> None:
+    def test_load_downloads_snapshot_and_builds_official_aed_runtime(
+        self, firered_load_env: SimpleNamespace
+    ) -> None:
         engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
-        mock_pipeline_instance = MagicMock(name="pipeline-instance")
-        mock_pipeline_fn = MagicMock(return_value=mock_pipeline_instance)
-        runtime = SimpleNamespace(pipeline=mock_pipeline_fn)
+        env = firered_load_env
 
-        with patch("src.core.firered_engine.importlib.import_module", return_value=runtime):
+        with patch("src.core.firered_engine.importlib.import_module", side_effect=env.import_module):
             engine.load()
 
-        mock_pipeline_fn.assert_called_once_with(
-            "automatic-speech-recognition",
-            model="FireRedTeam/FireRedASR2-AED",
-            return_timestamps=True,
+        env.hub.snapshot_download.assert_called_once_with(repo_id="FireRedTeam/FireRedASR2-AED")
+        env.runtime.FireRedAsr2Config.assert_called_once_with(use_gpu=False, return_timestamp=True)
+        env.runtime.FireRedAsr2.from_pretrained.assert_called_once_with(
+            "aed",
+            "/tmp/firered-model",
+            "cfg",
         )
-        assert engine._pipeline is mock_pipeline_instance
+        assert engine._model is env.mock_model
+        assert engine._pipeline is not None
 
-    def test_load_is_idempotent(self) -> None:
+    def test_load_is_idempotent(self, firered_load_env: SimpleNamespace) -> None:
         engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
-        mock_pipeline_instance = MagicMock(name="pipeline-instance")
-        mock_pipeline_fn = MagicMock(return_value=mock_pipeline_instance)
-        runtime = SimpleNamespace(pipeline=mock_pipeline_fn)
+        env = firered_load_env
 
-        with patch("src.core.firered_engine.importlib.import_module", return_value=runtime):
+        with patch("src.core.firered_engine.importlib.import_module", side_effect=env.import_module):
             engine.load()
             engine.load()
 
-        mock_pipeline_fn.assert_called_once()
+        env.hub.snapshot_download.assert_called_once()
+        env.runtime.FireRedAsr2.from_pretrained.assert_called_once()
 
-    def test_load_raises_actionable_error_when_transformers_unavailable(self) -> None:
+    def test_load_raises_actionable_error_when_firered_runtime_unavailable(self) -> None:
         engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
 
         with patch(
             "src.core.firered_engine.importlib.import_module",
-            side_effect=ModuleNotFoundError("No module named 'transformers'"),
+            side_effect=ModuleNotFoundError("No module named 'fireredasr2s'"),
         ):
-            with pytest.raises(RuntimeError, match="transformers"):
+            with pytest.raises(RuntimeError, match="fireredasr2s"):
+                engine.load()
+
+    def test_load_surfaces_missing_transitive_runtime_dependency(self) -> None:
+        engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+
+        def import_module(name: str) -> object:
+            if name == "fireredasr2s.fireredasr2":
+                raise ModuleNotFoundError("No module named 'kaldi_native_fbank'")
+            raise AssertionError(f"unexpected import: {name}")
+
+        with patch("src.core.firered_engine.importlib.import_module", side_effect=import_module):
+            with pytest.raises(RuntimeError, match="kaldi_native_fbank"):
                 engine.load()
 
     def test_load_should_include_model_id_when_pipeline_creation_fails(self) -> None:
         engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
-        runtime = SimpleNamespace(pipeline=MagicMock(side_effect=RuntimeError("boom")))
+        runtime = SimpleNamespace(
+            FireRedAsr2=SimpleNamespace(from_pretrained=MagicMock(side_effect=RuntimeError("boom"))),
+            FireRedAsr2Config=MagicMock(return_value="cfg"),
+        )
+        hub = SimpleNamespace(snapshot_download=MagicMock(return_value="/tmp/firered-model"))
 
-        with patch("src.core.firered_engine.importlib.import_module", return_value=runtime):
+        def import_module(name: str) -> object:
+            if name == "fireredasr2s.fireredasr2":
+                return runtime
+            if name == "huggingface_hub":
+                return hub
+            raise ModuleNotFoundError(name)
+
+        with patch("src.core.firered_engine.importlib.import_module", side_effect=import_module):
             with pytest.raises(RuntimeError, match="FireRedTeam/FireRedASR2-AED"):
                 engine.load()
 
 
 class TestFireRedEngineTranscribe:
+    def test_transcribe_chunks_long_audio_before_runtime_call(self) -> None:
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = [
+            [{"text": "hello", "timestamp": [("hello", 0.0, 0.4)]}],
+            [{"text": "world", "timestamp": [("world", 0.0, 0.5)]}],
+        ]
+        chunking_service = MagicMock()
+        chunking_service.process_audio.return_value = [
+            "/tmp/audio.chunk_000.wav",
+            "/tmp/audio.chunk_001.wav",
+        ]
+
+        with patch("src.core.firered_engine.AudioChunkingService", return_value=chunking_service):
+            engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+            engine._model = mock_model
+            engine._pipeline = engine._transcribe_with_runtime
+            result = engine.transcribe_file("/tmp/original.mp3", output_format="json")
+
+        assert result["text"] == "hello world"
+        assert result["segments"] == [
+            {"start": 0.0, "end": 0.4, "text": "hello"},
+            {"start": 0.4, "end": 0.9, "text": "world"},
+        ]
+        chunking_service.process_audio.assert_called_once_with("/tmp/original.mp3")
+        assert mock_model.transcribe.call_args_list == [
+            call(ANY, ["/tmp/audio.chunk_000.wav"]),
+            call(ANY, ["/tmp/audio.chunk_001.wav"]),
+        ]
+
+    def test_firered_engine_uses_conservative_chunking_threshold(self) -> None:
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = [{"text": "hello", "timestamp": []}]
+
+        with patch("src.core.firered_engine.AudioChunkingService") as chunking_cls:
+            engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+            engine._model = mock_model
+            engine._pipeline = engine._transcribe_with_runtime
+            chunking_cls.return_value.process_audio.return_value = [
+                "/tmp/audio.chunk_000.wav"
+            ]
+            engine.transcribe_file("/tmp/original.mp3", output_format="json")
+
+        chunking_cls.assert_called_once_with(max_duration_minutes=1)
+
+    def test_transcribe_normalizes_audio_before_official_runtime(self) -> None:
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = [
+            {
+                "text": "normalized text",
+                "timestamp": [("normalized", 0.0, 0.5)],
+            }
+        ]
+        chunking_service = MagicMock()
+        chunking_service.process_audio.return_value = ["/tmp/audio.normalized.wav"]
+
+        with patch("src.core.firered_engine.AudioChunkingService", return_value=chunking_service):
+            engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
+            engine._model = mock_model
+            engine._pipeline = engine._transcribe_with_runtime
+            result = engine.transcribe_file("audio.mp3", output_format="json")
+
+        chunking_service.process_audio.assert_called_once_with("audio.mp3")
+        mock_model.transcribe.assert_called_once_with(
+            [ANY],
+            ["/tmp/audio.normalized.wav"],
+        )
+        assert isinstance(result, dict)
+        assert result["text"] == "normalized text"
+
     def test_transcribe_raises_before_load(self) -> None:
         engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
 
@@ -332,10 +449,12 @@ class TestFireRedEngineRelease:
     def test_release_clears_pipeline_reference(self) -> None:
         engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")
         engine._pipeline = MagicMock()
+        engine._model = MagicMock()
 
         engine.release()
 
         assert engine._pipeline is None
+        assert engine._model is None
 
     def test_release_calls_gc_collect(self) -> None:
         engine = FireRedEngine(model_id="FireRedTeam/FireRedASR2-AED")

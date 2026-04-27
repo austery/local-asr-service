@@ -1,6 +1,6 @@
 """FireRed ASR runtime adapter.
 
-Thin adapter around the FireRed ASR model via HuggingFace Transformers.
+Thin adapter around the official FireRed AED runtime.
 Implements the ASREngine Protocol via structural subtyping.
 """
 
@@ -9,13 +9,16 @@ import importlib
 import logging
 import math
 from collections.abc import Callable
+from pathlib import Path
 from typing import Protocol, cast
 
+from src.adapters.audio_chunking import AudioChunkingService
 from src.core.base_engine import EngineCapabilities
 
 logger = logging.getLogger(__name__)
 
-_RUNTIME_MODULE = "transformers"
+_RUNTIME_MODULE = "fireredasr2s.fireredasr2"
+_HF_HUB_MODULE = "huggingface_hub"
 
 _FIRERED_CAPABILITIES = EngineCapabilities(
     timestamp=True,
@@ -25,35 +28,67 @@ _FIRERED_CAPABILITIES = EngineCapabilities(
 )
 
 
-class _TransformersRuntime(Protocol):
-    """Structural type for the subset of transformers we use."""
-
-    def pipeline(
-        self,
-        task: str,
-        *,
-        model: str,
-        return_timestamps: bool,
-    ) -> Callable[[str], object]: ...
+class _FireRedModel(Protocol):
+    def transcribe(
+        self, batch_uttid: list[str], batch_wav_path: list[str]
+    ) -> list[dict[str, object]]: ...
 
 
-def _load_transformers_runtime() -> _TransformersRuntime:
-    """Lazy-import the transformers runtime. Raises RuntimeError if unavailable."""
+class _FireRedAsr2Factory(Protocol):
+    def from_pretrained(
+        self, asr_type: str, model_dir: str, config: object
+    ) -> _FireRedModel: ...
+
+
+class _FireRedRuntime(Protocol):
+    """Structural type for the subset of fireredasr2s we use."""
+
+    FireRedAsr2: _FireRedAsr2Factory
+    FireRedAsr2Config: Callable[..., object]
+
+
+class _HuggingFaceHubRuntime(Protocol):
+    def snapshot_download(self, *, repo_id: str) -> str: ...
+
+
+def _load_firered_runtime() -> _FireRedRuntime:
+    """Lazy-import the official FireRed runtime."""
     try:
-        return cast(_TransformersRuntime, importlib.import_module(_RUNTIME_MODULE))
+        return cast(_FireRedRuntime, importlib.import_module(_RUNTIME_MODULE))
+    except ModuleNotFoundError as exc:
+        missing_name = exc.name or str(exc)
+        if missing_name.startswith("fireredasr2s"):
+            raise RuntimeError(
+                "FireRed ASR runtime is unavailable. "
+                "Install fireredasr2s from the official FireRedASR2S repository "
+                "before using this adapter."
+            ) from exc
+        raise RuntimeError(
+            "FireRed ASR runtime is installed but missing a transitive dependency: "
+            f"{missing_name}. Install the official FireRed runtime dependencies "
+            "before using this adapter."
+        ) from exc
+
+
+def _load_hf_hub_runtime() -> _HuggingFaceHubRuntime:
+    """Lazy-import huggingface_hub to download official FireRed checkpoints."""
+    try:
+        return cast(_HuggingFaceHubRuntime, importlib.import_module(_HF_HUB_MODULE))
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "FireRed ASR runtime is unavailable. "
-            "Install transformers before using this adapter."
+            "huggingface_hub is unavailable. Install project dependencies before "
+            "using the FireRed adapter."
         ) from exc
 
 
 class FireRedEngine:
-    """Thin adapter around a FireRed ASR model via HuggingFace Transformers pipeline."""
+    """Thin adapter around the official FireRed AED runtime."""
 
     def __init__(self, model_id: str = "FireRedTeam/FireRedASR2-AED"):
         self.model_id = model_id
+        self._model: _FireRedModel | None = None
         self._pipeline: Callable[[str], object] | None = None
+        self._chunking_service = AudioChunkingService(max_duration_minutes=1)
 
     @property
     def capabilities(self) -> EngineCapabilities:
@@ -63,19 +98,85 @@ class FireRedEngine:
         if self._pipeline is not None:
             return
 
-        runtime = _load_transformers_runtime()
+        runtime = _load_firered_runtime()
+        hub_runtime = _load_hf_hub_runtime()
         logger.info(f"🚀 Loading FireRed model '{self.model_id}'...")
         try:
-            self._pipeline = runtime.pipeline(
-                "automatic-speech-recognition",
-                model=self.model_id,
-                return_timestamps=True,
+            local_model_dir = hub_runtime.snapshot_download(repo_id=self.model_id)
+            runtime_config = runtime.FireRedAsr2Config(
+                use_gpu=False,
+                return_timestamp=True,
             )
+            self._model = runtime.FireRedAsr2.from_pretrained(
+                "aed",
+                local_model_dir,
+                runtime_config,
+            )
+            self._pipeline = self._transcribe_with_runtime
         except Exception as exc:
             raise RuntimeError(
                 f"Failed to load FireRed model '{self.model_id}': {exc}"
             ) from exc
         logger.info(f"✅ FireRed model loaded: {self.model_id}")
+
+    def _transcribe_with_runtime(self, file_path: str) -> dict[str, object]:
+        if self._model is None:
+            raise RuntimeError("Model not loaded! Call engine.load() first.")
+
+        chunk_paths = self._chunking_service.process_audio(file_path)
+        merged_texts: list[str] = []
+        merged_chunks: list[dict[str, object]] = []
+        time_offset = 0.0
+
+        for chunk_path in chunk_paths:
+            try:
+                results = self._model.transcribe([Path(chunk_path).stem], [chunk_path])
+            finally:
+                if chunk_path != file_path and (
+                    ".chunk_" in chunk_path or chunk_path.endswith(".normalized.wav")
+                ):
+                    Path(chunk_path).unlink(missing_ok=True)
+
+            if not results:
+                continue
+
+            first_result = results[0]
+            chunk_text = str(first_result.get("text", "")).strip()
+            if chunk_text:
+                merged_texts.append(chunk_text)
+
+            shifted_chunks = self._offset_runtime_chunks(first_result, time_offset)
+            if shifted_chunks:
+                merged_chunks.extend(shifted_chunks)
+                time_offset = self._normalize_timestamp(shifted_chunks[-1]["timestamp"][1]) or time_offset
+
+        return {"text": " ".join(merged_texts), "chunks": merged_chunks}
+
+    def _offset_runtime_chunks(
+        self,
+        runtime_result: dict[str, object],
+        time_offset: float,
+    ) -> list[dict[str, object]]:
+        chunks: list[dict[str, object]] = []
+        raw_timestamps = runtime_result.get("timestamp", [])
+        if not isinstance(raw_timestamps, list):
+            return chunks
+
+        for item in raw_timestamps:
+            if not isinstance(item, (list, tuple)) or len(item) < 3:
+                continue
+            start = self._normalize_timestamp(item[1])
+            end = self._normalize_timestamp(item[2])
+            if start is None or end is None:
+                continue
+            chunks.append(
+                {
+                    "text": str(item[0]),
+                    "timestamp": (start + time_offset, end + time_offset),
+                }
+            )
+
+        return chunks
 
     def transcribe_file(
         self, file_path: str, language: str = "auto", **kwargs: object
@@ -198,5 +299,6 @@ class FireRedEngine:
 
     def release(self) -> None:
         logger.info("🧹 Releasing FireRed model '%s'", self.model_id)
+        self._model = None
         self._pipeline = None
         gc.collect()
