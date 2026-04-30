@@ -71,6 +71,22 @@ class TestCapabilities:
     # threshold (50min) is too high for this model. Deregistered until OOM is fixed.
 
 
+class TestRuntimeContracts:
+    def test_qwen3_asr_should_use_mlx_runtime_contract(self) -> None:
+        spec = lookup("qwen3-asr")
+
+        assert spec.engine_type == "mlx"
+        assert "mlx-audio" in spec.description.lower()
+        assert "MLX Metal" in spec.description
+
+    def test_sensevoice_should_use_funasr_runtime_contract(self) -> None:
+        spec = lookup("sensevoice-small")
+
+        assert spec.engine_type == "funasr"
+        assert "FunASR" in spec.description
+        assert "PyTorch" in spec.description
+
+
 class TestPassthrough:
     def test_should_return_true_for_none(self) -> None:
         assert is_passthrough(None) is True
