@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from src.config import MAX_UPLOAD_SIZE_MB
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
-from src.core.pipeline_registry import list_all_profiles
+from src.core.pipeline_registry import PipelineProfile, list_all_profiles, lookup_profile
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,16 @@ def _resolve_model(model: str | None) -> ModelSpec | None:
         raise HTTPException(status_code=400, detail=str(e)) from None
 
 
+def _resolve_pipeline_profile(model: str | None) -> PipelineProfile | None:
+    """Resolve a pipeline alias, returning None for non-pipeline model values."""
+    if is_passthrough(model):
+        return None
+    try:
+        return lookup_profile(model)  # type: ignore[arg-type]
+    except KeyError:
+        return None
+
+
 @router.post("/v1/audio/transcriptions", response_model=None)
 async def create_transcription(
     request: Request,
@@ -181,8 +191,19 @@ async def create_transcription(
 
     file.file.seek(0)
 
-    # 3. Resolve model → ModelSpec (or None = keep current engine)
-    resolved_spec = _resolve_model(model)
+    # 3. Resolve model/pipeline aliases. Pipeline profiles are discovery-only
+    # until their runtime dependencies and resource profile are validated.
+    resolved_profile = _resolve_pipeline_profile(model)
+    if resolved_profile is not None and not resolved_profile.requestable:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"Pipeline profile '{resolved_profile.alias}' is discoverable "
+                "but not enabled for POST yet."
+            ),
+        )
+
+    resolved_spec = None if resolved_profile is not None else _resolve_model(model)
 
     # 4. Resolve effective output format
     effective_format = response_format if response_format is not None else output_format

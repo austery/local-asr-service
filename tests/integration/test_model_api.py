@@ -128,6 +128,17 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
     assert "Unknown model" in response.json()["detail"]
 
 
+def test_should_return_501_for_non_requestable_pipeline_profile(client) -> None:
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "qwen3-sortformer"},
+        files={"file": _audio_file()},
+    )
+
+    assert response.status_code == 501
+    assert "not enabled" in response.json()["detail"]
+
+
 # MA-5
 def test_should_use_current_model_when_model_field_omitted(client) -> None:
     response = client.post(
