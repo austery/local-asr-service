@@ -57,6 +57,12 @@ class TestMlxLanguageNormalization:
 
         assert _normalize_mlx_language("mlx-community/whisper-large-v3", "en") == "en"
 
+    def test_should_reject_unknown_language_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        with pytest.raises(ValueError, match="Unsupported Qwen3-ASR language"):
+            _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "not-a-language")
+
 
 class TestMlxAudioEngine:
     """
@@ -258,3 +264,28 @@ class TestMlxAudioEngine:
 
         assert engine.model is None
         mock_gc.collect.assert_called_once()
+
+    def test_merge_json_results_should_advance_offset_when_last_segment_has_no_end(
+        self, mock_chunking_service
+    ):
+        from src.core.mlx_engine import MlxAudioEngine
+
+        engine = MlxAudioEngine()
+
+        result = engine._merge_json_results([
+            {"text": "first", "segments": [{"text": "first", "start": 2.0}]},
+            {"text": "second", "segments": [{"text": "second", "start": 0.0, "end": 1.0}]},
+        ])
+
+        assert result["segments"][1]["start"] == 2.0
+        assert result["segments"][1]["end"] == 3.0
+
+    @pytest.mark.parametrize("text_value", ["", None])
+    def test_result_to_dict_should_normalize_empty_text_values(
+        self, mock_chunking_service, text_value
+    ):
+        from src.core.mlx_engine import MlxAudioEngine
+
+        engine = MlxAudioEngine()
+
+        assert engine._result_to_dict({"text": text_value})["text"] == ""

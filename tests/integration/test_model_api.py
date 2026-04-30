@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from src.core.base_engine import EngineCapabilities
 from src.core.model_registry import lookup as real_lookup
+from src.core.pipeline_registry import PipelineProfile
 from src.main import app
 from src.services.transcription import TranscriptionService
 
@@ -28,6 +29,7 @@ def _make_mock_service(
     type(service).capabilities = PropertyMock(return_value=capabilities)
     service.current_model_spec = current_model_spec
     service.submit = AsyncMock(return_value=submit_result)
+    service.submit_pipeline = AsyncMock(return_value=submit_result)
     service.start_worker = AsyncMock()
     service.stop_worker = AsyncMock()
     type(service).queue_size = PropertyMock(return_value=0)
@@ -141,6 +143,44 @@ def test_should_return_501_for_non_requestable_pipeline_profile(client) -> None:
 
     assert response.status_code == 501
     assert "not enabled" in response.json()["detail"]
+
+
+def test_should_submit_requestable_pipeline_profile() -> None:
+    qwen_spec = real_lookup("qwen3-asr")
+    requestable_profile = PipelineProfile(
+        alias="qwen3-sortformer",
+        transcription_alias="qwen3-asr",
+        diarization_alias="sortformer-diar",
+        description="test requestable profile",
+        capabilities=EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
+        requestable=True,
+    )
+    mock_service = _make_mock_service(
+        qwen_spec.capabilities,
+        {
+            "text": "pipeline result",
+            "segments": [{"text": "hello", "start": 0.0, "end": 1.0, "speaker": "Speaker A"}],
+            "duration": 1.0,
+        },
+        current_model_spec=qwen_spec,
+    )
+
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        patch("src.api.routes.lookup_profile", return_value=requestable_profile),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"model": "qwen3-sortformer", "output_format": "json"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["model"] == "qwen3-sortformer"
+    mock_service.submit.assert_not_called()
+    mock_service.submit_pipeline.assert_awaited_once()
 
 
 # MA-5

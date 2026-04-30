@@ -1,3 +1,5 @@
+import math
+
 from src.core.diarization_port import SpeakerTurn
 
 
@@ -8,9 +10,12 @@ def _read_timestamp(segment: dict[str, object], field: str) -> float:
     if isinstance(value, bool):
         raise ValueError(f"segment timestamp must be numeric: {field}")
     try:
-        return float(value)
+        timestamp = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"segment timestamp must be numeric: {field}") from exc
+    if not math.isfinite(timestamp):
+        raise ValueError(f"segment timestamp must be finite: {field}")
+    return timestamp
 
 
 def align_speakers(
@@ -21,6 +26,8 @@ def align_speakers(
     for segment in transcript_segments:
         start = _read_timestamp(segment, "start")
         end = _read_timestamp(segment, "end")
+        if end <= start:
+            raise ValueError(f"Invalid segment interval: end ({end}) must be > start ({start})")
         best_speaker = "Unknown"
         best_overlap = 0.0
 

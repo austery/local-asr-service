@@ -16,6 +16,7 @@ from fastapi import UploadFile
 
 from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import lookup
+from src.core.pipeline_registry import PipelineProfile
 from src.services.transcription import TranscriptionService
 
 
@@ -187,3 +188,88 @@ async def test_decoupled_pipeline_should_align_speakers_and_restore_previous_mod
 
     assert result["segments"][0]["speaker"] == "Speaker A"
     svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
+
+
+@pytest.mark.asyncio
+async def test_decoupled_pipeline_alignment_failure_returns_transcript_and_restores_model(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = lookup_profile("qwen3-sortformer")
+    transcript = {"text": "hello world", "segments": [{"text": "hello", "start": 0.0, "end": 1.0}]}
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias):
+        return transcript
+
+    async def fake_diarize(temp_file_path, request_id, alias):
+        return [SpeakerTurn(speaker="Speaker A", start=0.0, end=1.0)]
+
+    svc._transcribe_with_alias = fake_transcribe
+    svc._diarize_with_alias = fake_diarize
+    svc._restore_resident_model = AsyncMock()
+
+    with patch("src.services.transcription.align_speakers", side_effect=ValueError("bad interval")):
+        result = await svc._run_decoupled_pipeline(
+            "audio.wav",
+            {"output_format": "json"},
+            "req-pipeline",
+            profile,
+        )
+
+    assert result == transcript
+    svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
+
+
+@pytest.mark.asyncio
+async def test_diarize_with_alias_rejects_malformed_worker_result(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    svc._submit_worker_job = AsyncMock(return_value={"not": "speaker turns"})
+
+    with pytest.raises(TypeError, match="Expected diarization result"):
+        await svc._diarize_with_alias("audio.wav", "req-pipeline", "paraformer")
+
+
+@pytest.mark.asyncio
+async def test_decoupled_pipeline_restore_failure_is_propagated(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = lookup_profile("qwen3-sortformer")
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias):
+        return "transcript"
+
+    svc._transcribe_with_alias = fake_transcribe
+    svc._restore_resident_model = AsyncMock(side_effect=RuntimeError("restore failed"))
+
+    with pytest.raises(RuntimeError, match="restore failed"):
+        await asyncio.wait_for(
+            svc._run_decoupled_pipeline(
+                "audio.wav",
+                {"output_format": "txt"},
+                "req-pipeline",
+                profile,
+            ),
+            timeout=1.0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_submit_pipeline_rejects_non_requestable_profile(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    profile = PipelineProfile(
+        alias="test-pipeline",
+        transcription_alias="qwen3-asr",
+        diarization_alias="sortformer-diar",
+        description="test",
+        capabilities=funasr_spec.capabilities,
+        requestable=False,
+    )
+
+    with pytest.raises(RuntimeError, match="not enabled"):
+        await svc.submit_pipeline(
+            _make_upload(),
+            {"output_format": "json"},
+            request_id="req-pipeline",
+            profile=profile,
+        )

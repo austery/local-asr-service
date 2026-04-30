@@ -46,6 +46,39 @@ _QWEN3_LANGUAGE_ALIASES: dict[str, str] = {
     "cantonese": "Cantonese",
 }
 
+_QWEN3_SUPPORTED_LANGUAGES = frozenset({
+    "Chinese",
+    "English",
+    "Cantonese",
+    "Arabic",
+    "German",
+    "French",
+    "Spanish",
+    "Portuguese",
+    "Indonesian",
+    "Italian",
+    "Korean",
+    "Russian",
+    "Thai",
+    "Vietnamese",
+    "Japanese",
+    "Turkish",
+    "Hindi",
+    "Malay",
+    "Dutch",
+    "Swedish",
+    "Danish",
+    "Finnish",
+    "Polish",
+    "Czech",
+    "Filipino",
+    "Persian",
+    "Greek",
+    "Romanian",
+    "Hungarian",
+    "Macedonian",
+})
+
 
 def _resolve_mlx_capabilities(model_id: str) -> EngineCapabilities:
     """Resolve capabilities via longest-prefix match against model_id."""
@@ -66,7 +99,13 @@ def _normalize_mlx_language(model_id: str, language: str) -> str:
     if not _is_qwen3_asr_model(model_id):
         return language
     normalized_key = language.strip().lower()
-    return _QWEN3_LANGUAGE_ALIASES.get(normalized_key, language)
+    normalized = _QWEN3_LANGUAGE_ALIASES.get(normalized_key, language.strip())
+    if normalized not in _QWEN3_SUPPORTED_LANGUAGES:
+        raise ValueError(
+            f"Unsupported Qwen3-ASR language: {language}. "
+            f"Expected one of: {', '.join(sorted(_QWEN3_SUPPORTED_LANGUAGES))}"
+        )
+    return normalized
 
 
 class MlxAudioEngine:
@@ -230,8 +269,11 @@ class MlxAudioEngine:
                 all_segments.append(adjusted_segment)
 
             # 更新时间偏移（使用最后一个 segment 的结束时间）
-            if segments and "end" in segments[-1]:
-                time_offset = segments[-1]["end"] + time_offset
+            if segments:
+                last_segment = segments[-1]
+                last_timestamp = last_segment.get("end", last_segment.get("start"))
+                if isinstance(last_timestamp, int | float) and not isinstance(last_timestamp, bool):
+                    time_offset += float(last_timestamp)
 
         return {"text": " ".join(all_text), "segments": all_segments}
 
@@ -249,9 +291,11 @@ class MlxAudioEngine:
 
         # 提取文本
         if hasattr(result, "text"):
-            result_dict["text"] = result.text.strip()
+            text = result.text
+            result_dict["text"] = text.strip() if isinstance(text, str) else ""
         elif isinstance(result, dict):
-            result_dict["text"] = result.get("text", "")
+            text = result.get("text", "")
+            result_dict["text"] = text if isinstance(text, str) else ""
 
         # 提取 segments（说话人信息）
         if hasattr(result, "segments"):

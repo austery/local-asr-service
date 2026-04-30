@@ -6,7 +6,7 @@ import queue as _stdlib_queue
 import shutil
 import tempfile
 from contextlib import suppress
-from typing import Any, cast
+from typing import Literal, TypedDict
 
 from fastapi import UploadFile
 
@@ -17,7 +17,22 @@ from src.core.model_registry import ModelSpec
 from src.core.pipeline_registry import PipelineProfile
 from src.workers.model_worker import WorkerJob, run_worker
 
-TranscriptionResult = str | dict[str, Any]
+
+class TranscriptionResultDict(TypedDict, total=False):
+    text: str
+    segments: list[dict[str, object]] | None
+    duration: float
+    language: str
+
+
+TranscriptionResult = str | TranscriptionResultDict
+WorkerStartupMessage = tuple[Literal["READY"], None] | tuple[Literal["LOAD_ERROR"], str]
+WorkerResultMessage = (
+    tuple[Literal["RESULT"], str, object]
+    | tuple[Literal["ERROR"], str, str]
+    | tuple[Literal["IDLE_EXIT"], None]
+)
+WorkerMessage = WorkerStartupMessage | WorkerResultMessage
 
 
 class TranscriptionService:
@@ -44,8 +59,8 @@ class TranscriptionService:
 
         self._worker: multiprocessing.Process | None = None
         self._job_queue: multiprocessing.Queue[WorkerJob | None] | None = None
-        self._result_queue: multiprocessing.Queue[tuple[Any, ...]] | None = None
-        self._pending: dict[str, asyncio.Future[Any]] = {}
+        self._result_queue: multiprocessing.Queue[WorkerMessage] | None = None
+        self._pending: dict[str, asyncio.Future[object]] = {}
         self._temp_dirs: dict[str, str] = {}
         self._spawn_lock: asyncio.Lock = asyncio.Lock()
         self._result_reader_task: asyncio.Task[None] | None = None
@@ -96,7 +111,7 @@ class TranscriptionService:
     async def submit(
         self,
         file: UploadFile,
-        params: dict[str, Any],
+        params: dict[str, object],
         request_id: str = "unknown",
         model_spec: ModelSpec | None = None,
     ) -> TranscriptionResult:
@@ -118,9 +133,7 @@ class TranscriptionService:
                 model_spec=model_spec,
                 temp_dir=temp_dir,
             )
-            if isinstance(result, str):
-                return result
-            return cast(dict[str, Any], result)
+            return self._coerce_transcription_result(result)
 
         except BaseException:
             self._pending.pop(request_id, None)
@@ -128,10 +141,39 @@ class TranscriptionService:
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise
 
+    async def submit_pipeline(
+        self,
+        file: UploadFile,
+        params: dict[str, object],
+        request_id: str,
+        profile: PipelineProfile,
+    ) -> TranscriptionResult:
+        if not profile.requestable:
+            raise RuntimeError(f"Pipeline profile '{profile.alias}' is not enabled for requests.")
+        if len(self._pending) >= self._max_queue_size:
+            self.logger.warning(f"[{request_id}] Queue full, rejecting pipeline request")
+            raise RuntimeError("Service busy: Queue is full.")
+
+        temp_dir = tempfile.mkdtemp(prefix="asr_pipeline_")
+        try:
+            file_ext = os.path.splitext(file.filename or "upload.wav")[1] or ".wav"
+            temp_path = os.path.join(temp_dir, f"original{file_ext}")
+            with open(temp_path, "wb") as buf:
+                shutil.copyfileobj(file.file, buf)
+
+            return await self._run_decoupled_pipeline(
+                temp_file_path=temp_path,
+                params=params,
+                request_id=request_id,
+                profile=profile,
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
     async def _submit_worker_job(
         self,
         temp_file_path: str,
-        params: dict[str, Any],
+        params: dict[str, object],
         request_id: str,
         model_spec: ModelSpec | None,
         temp_dir: str | None = None,
@@ -171,7 +213,7 @@ class TranscriptionService:
     async def _transcribe_with_alias(
         self,
         temp_file_path: str,
-        params: dict[str, Any],
+        params: dict[str, object],
         request_id: str,
         alias: str,
     ) -> TranscriptionResult:
@@ -181,9 +223,7 @@ class TranscriptionService:
             request_id=f"{request_id}:transcribe",
             model_spec=self._lookup_model_spec(alias),
         )
-        if isinstance(result, str):
-            return result
-        return cast(dict[str, Any], result)
+        return self._coerce_transcription_result(result)
 
     async def _diarize_with_alias(
         self,
@@ -197,17 +237,46 @@ class TranscriptionService:
             request_id=f"{request_id}:diarize",
             model_spec=self._lookup_model_spec(alias),
         )
-        return cast(list[SpeakerTurn], result)
+        if not isinstance(result, list) or not all(isinstance(turn, SpeakerTurn) for turn in result):
+            raise TypeError(f"Expected diarization result as list[SpeakerTurn], got {type(result).__name__}")
+        return result
 
     def _lookup_model_spec(self, alias: str) -> ModelSpec:
         from src.core.model_registry import lookup
 
         return lookup(alias)
 
+    @staticmethod
+    def _coerce_transcription_result(result: object) -> TranscriptionResult:
+        if isinstance(result, str):
+            return result
+        if not isinstance(result, dict):
+            raise TypeError(f"Expected transcription result as str or dict, got {type(result).__name__}")
+
+        coerced: TranscriptionResultDict = {}
+        text = result.get("text", "")
+        coerced["text"] = text if isinstance(text, str) else ""
+
+        segments = result.get("segments")
+        if segments is None or isinstance(segments, list):
+            coerced["segments"] = segments
+        else:
+            raise TypeError("Expected transcription result 'segments' to be a list or None")
+
+        duration = result.get("duration")
+        if isinstance(duration, int | float) and not isinstance(duration, bool):
+            coerced["duration"] = float(duration)
+
+        language = result.get("language")
+        if isinstance(language, str):
+            coerced["language"] = language
+
+        return coerced
+
     async def _run_decoupled_pipeline(
         self,
         temp_file_path: str,
-        params: dict[str, Any],
+        params: dict[str, object],
         request_id: str,
         profile: PipelineProfile,
     ) -> TranscriptionResult:
@@ -245,7 +314,7 @@ class TranscriptionService:
 
             try:
                 aligned_segments = align_speakers(
-                    cast(list[dict[str, object]], segments),
+                    self._coerce_segment_list(segments),
                     speaker_turns,
                 )
             except (TypeError, ValueError) as exc:
@@ -260,6 +329,12 @@ class TranscriptionService:
             return {**transcript_result, "segments": aligned_segments}
         finally:
             await self._restore_resident_model(previous_spec)
+
+    @staticmethod
+    def _coerce_segment_list(segments: list[object]) -> list[dict[str, object]]:
+        if not all(isinstance(segment, dict) for segment in segments):
+            raise TypeError("Expected transcription segments to be dictionaries")
+        return segments
 
     async def _restore_resident_model(self, previous_spec: ModelSpec | None) -> None:
         async with self._spawn_lock:
@@ -315,7 +390,7 @@ class TranscriptionService:
 
         loop = asyncio.get_running_loop()
         try:
-            msg: tuple[Any, ...] = await asyncio.wait_for(
+            msg = await asyncio.wait_for(
                 loop.run_in_executor(None, self._result_queue.get),
                 timeout=120.0,
             )
@@ -323,6 +398,11 @@ class TranscriptionService:
             self._worker.terminate()
             self._worker = None
             raise RuntimeError("Worker failed to start within 120s timeout.") from exc
+
+        if not isinstance(msg, tuple) or len(msg) != 2 or not isinstance(msg[0], str):
+            self._worker.terminate()
+            self._worker = None
+            raise RuntimeError(f"Worker sent unexpected startup message: {msg!r}")
 
         if msg[0] == "LOAD_ERROR":
             self._worker.terminate()
@@ -472,7 +552,12 @@ class TranscriptionService:
             shutil.rmtree(temp_dir, ignore_errors=True)
         self._temp_dirs.clear()
 
-    def _resolve_future(self, uid: str, result: Any = None, error: Exception | None = None) -> None:
+    def _resolve_future(
+        self,
+        uid: str,
+        result: object | None = None,
+        error: Exception | None = None,
+    ) -> None:
         future = self._pending.pop(uid, None)
         self._cleanup_temp(uid)
         if future is None or future.done():
