@@ -6,6 +6,7 @@ Uses injected mock worker infrastructure (no real subprocess spawned).
 import asyncio
 import multiprocessing
 import os
+import queue as _stdlib_queue
 import tempfile as _tempfile
 from contextlib import suppress
 from io import BytesIO
@@ -273,3 +274,69 @@ async def test_submit_pipeline_rejects_non_requestable_profile(funasr_spec):
             request_id="req-pipeline",
             profile=profile,
         )
+
+
+@pytest.mark.asyncio
+async def test_submit_worker_job_enforces_queue_limit_for_internal_callers(funasr_spec):
+    svc = _setup_service(funasr_spec, max_queue_size=1)
+    loop = asyncio.get_running_loop()
+    svc._pending["existing"] = loop.create_future()
+
+    with pytest.raises(RuntimeError, match="Queue is full"):
+        await asyncio.wait_for(
+            svc._submit_worker_job(
+                temp_file_path="audio.wav",
+                params={},
+                request_id="req-internal",
+                model_spec=funasr_spec,
+            ),
+            timeout=0.2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_spawn_worker_cancels_existing_result_reader_before_startup_handshake(funasr_spec):
+    class FakeQueue:
+        def get(self):
+            return ("READY", None)
+
+        def get_nowait(self):
+            raise _stdlib_queue.Empty
+
+        def close(self) -> None:
+            return None
+
+        def join_thread(self) -> None:
+            return None
+
+        def put(self, item, timeout=None) -> None:
+            return None
+
+        def put_nowait(self, item) -> None:
+            return None
+
+    svc = TranscriptionService(
+        engine_type=funasr_spec.engine_type,
+        model_id=funasr_spec.model_id,
+        max_queue_size=2,
+        initial_model_spec=funasr_spec,
+        idle_timeout=0,
+    )
+    svc.is_running = True
+    old_reader = asyncio.create_task(asyncio.sleep(60))
+    svc._result_reader_task = old_reader
+    mock_process = MagicMock()
+    mock_process.is_alive.return_value = True
+
+    try:
+        with (
+            patch("src.services.transcription.multiprocessing.Process", return_value=mock_process),
+            patch("src.services.transcription.multiprocessing.Queue", side_effect=[FakeQueue(), FakeQueue()]),
+        ):
+            await svc._spawn_worker(funasr_spec)
+
+        assert old_reader.cancelled()
+        assert svc._result_reader_task is not old_reader
+        assert svc._result_reader_task is not None
+    finally:
+        await _stop_service(svc)

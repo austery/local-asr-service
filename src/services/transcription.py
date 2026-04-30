@@ -183,6 +183,10 @@ class TranscriptionService:
 
         try:
             async with self._spawn_lock:
+                if len(self._pending) >= self._max_queue_size:
+                    self.logger.warning(f"[{request_id}] Queue full, rejecting worker job")
+                    raise RuntimeError("Service busy: Queue is full.")
+
                 if model_spec is not None and model_spec != self._current_model_spec:
                     await self._switch_worker(model_spec)
                 elif not self.model_loaded:
@@ -359,7 +363,23 @@ class TranscriptionService:
             )
         )
 
+    async def _stop_result_reader_task(self) -> None:
+        task = self._result_reader_task
+        if task is None:
+            return
+        if task.done():
+            self._result_reader_task = None
+            return
+        if task is asyncio.current_task():
+            return
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        self._result_reader_task = None
+
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
+        await self._stop_result_reader_task()
+
         for old_q in (self._job_queue, self._result_queue):
             if old_q is not None:
                 try:
