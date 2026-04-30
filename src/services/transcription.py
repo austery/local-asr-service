@@ -136,8 +136,7 @@ class TranscriptionService:
             return self._coerce_transcription_result(result)
 
         except BaseException:
-            self._pending.pop(request_id, None)
-            self._temp_dirs.pop(request_id, None)
+            self._discard_request_state(request_id)
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise
 
@@ -167,6 +166,9 @@ class TranscriptionService:
                 request_id=request_id,
                 profile=profile,
             )
+        except BaseException:
+            self._discard_pipeline_request_state(request_id)
+            raise
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -208,11 +210,14 @@ class TranscriptionService:
                     params=params,
                 ))
         except BaseException:
-            self._pending.pop(request_id, None)
-            self._temp_dirs.pop(request_id, None)
+            self._discard_request_state(request_id)
             raise
 
-        return await future
+        try:
+            return await future
+        except BaseException:
+            self._discard_request_state(request_id)
+            raise
 
     async def _transcribe_with_alias(
         self,
@@ -313,7 +318,12 @@ class TranscriptionService:
                 return transcript_result
 
             segments = transcript_result.get("segments")
-            if not isinstance(segments, list):
+            if not isinstance(segments, list) or not segments:
+                self.logger.warning(
+                    "[%s] Decoupled pipeline has no transcript segments to align for profile %s; returning transcript-only result",
+                    request_id,
+                    profile.alias,
+                )
                 return transcript_result
 
             try:
@@ -339,6 +349,19 @@ class TranscriptionService:
         if not all(isinstance(segment, dict) for segment in segments):
             raise TypeError("Expected transcription segments to be dictionaries")
         return segments
+
+    def _discard_request_state(self, request_id: str) -> None:
+        future = self._pending.pop(request_id, None)
+        if future is not None and not future.done():
+            future.cancel()
+        temp_dir = self._temp_dirs.pop(request_id, None)
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _discard_pipeline_request_state(self, request_id: str) -> None:
+        self._discard_request_state(request_id)
+        self._discard_request_state(f"{request_id}:transcribe")
+        self._discard_request_state(f"{request_id}:diarize")
 
     async def _restore_resident_model(self, previous_spec: ModelSpec | None) -> None:
         async with self._spawn_lock:

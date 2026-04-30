@@ -4,11 +4,13 @@ Tests: success result delivery, txt format, queue full, temp file cleanup, error
 Uses injected mock worker infrastructure (no real subprocess spawned).
 """
 import asyncio
+import logging
 import multiprocessing
 import os
 import queue as _stdlib_queue
 import tempfile as _tempfile
 from contextlib import suppress
+from dataclasses import replace
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -166,7 +168,7 @@ async def test_decoupled_pipeline_should_align_speakers_and_restore_previous_mod
     from src.core.pipeline_registry import lookup_profile
 
     svc = _setup_service(funasr_spec)
-    profile = lookup_profile("qwen3-sortformer")
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
 
     async def fake_transcribe(temp_file_path, params, request_id, alias):
         assert alias == "qwen3-asr"
@@ -196,7 +198,7 @@ async def test_decoupled_pipeline_alignment_failure_returns_transcript_and_resto
     from src.core.pipeline_registry import lookup_profile
 
     svc = _setup_service(funasr_spec)
-    profile = lookup_profile("qwen3-sortformer")
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
     transcript = {"text": "hello world", "segments": [{"text": "hello", "start": 0.0, "end": 1.0}]}
 
     async def fake_transcribe(temp_file_path, params, request_id, alias):
@@ -218,6 +220,95 @@ async def test_decoupled_pipeline_alignment_failure_returns_transcript_and_resto
         )
 
     assert result == transcript
+    svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
+
+
+@pytest.mark.asyncio
+async def test_decoupled_pipeline_diarization_failure_returns_transcript_and_restores_model(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = lookup_profile("qwen3-sortformer")
+    transcript = {"text": "hello world", "segments": [{"text": "hello", "start": 0.0, "end": 1.0}]}
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias):
+        return transcript
+
+    async def fake_diarize(temp_file_path, request_id, alias):
+        raise ValueError("diarization failed")
+
+    svc._transcribe_with_alias = fake_transcribe
+    svc._diarize_with_alias = fake_diarize
+    svc._restore_resident_model = AsyncMock()
+
+    result = await svc._run_decoupled_pipeline(
+        "audio.wav",
+        {"output_format": "json"},
+        "req-pipeline",
+        profile,
+    )
+
+    assert result == transcript
+    svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
+
+
+@pytest.mark.asyncio
+async def test_decoupled_pipeline_segment_coercion_failure_returns_transcript_and_restores_model(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = lookup_profile("qwen3-sortformer")
+    transcript = {"text": "hello world", "segments": ["bad segment"]}
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias):
+        return transcript
+
+    async def fake_diarize(temp_file_path, request_id, alias):
+        return [SpeakerTurn(speaker="Speaker A", start=0.0, end=1.0)]
+
+    svc._transcribe_with_alias = fake_transcribe
+    svc._diarize_with_alias = fake_diarize
+    svc._restore_resident_model = AsyncMock()
+
+    result = await svc._run_decoupled_pipeline(
+        "audio.wav",
+        {"output_format": "json"},
+        "req-pipeline",
+        profile,
+    )
+
+    assert result == transcript
+    svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
+
+
+@pytest.mark.asyncio
+async def test_decoupled_pipeline_empty_segments_logs_warning_and_returns_transcript(funasr_spec, caplog):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = lookup_profile("qwen3-sortformer")
+    transcript = {"text": "hello world", "segments": []}
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias):
+        return transcript
+
+    async def fake_diarize(temp_file_path, request_id, alias):
+        return [SpeakerTurn(speaker="Speaker A", start=0.0, end=1.0)]
+
+    svc._transcribe_with_alias = fake_transcribe
+    svc._diarize_with_alias = fake_diarize
+    svc._restore_resident_model = AsyncMock()
+
+    with caplog.at_level(logging.WARNING, logger="src.services.transcription"):
+        result = await svc._run_decoupled_pipeline(
+            "audio.wav",
+            {"output_format": "json"},
+            "req-pipeline",
+            profile,
+        )
+
+    assert result == transcript
+    assert "no transcript segments to align" in caplog.text
     svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
 
 
@@ -277,6 +368,34 @@ async def test_submit_pipeline_rejects_non_requestable_profile(funasr_spec):
 
 
 @pytest.mark.asyncio
+async def test_submit_pipeline_cleans_composite_request_state_on_error(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    request_id = "req-pipeline"
+    loop = asyncio.get_running_loop()
+
+    async def fake_run_pipeline(temp_file_path, params, request_id, profile):
+        svc._pending[f"{request_id}:transcribe"] = loop.create_future()
+        svc._pending[f"{request_id}:diarize"] = loop.create_future()
+        raise RuntimeError("pipeline failed")
+
+    svc._run_decoupled_pipeline = fake_run_pipeline
+
+    with pytest.raises(RuntimeError, match="pipeline failed"):
+        await svc.submit_pipeline(
+            _make_upload(),
+            {"output_format": "json"},
+            request_id=request_id,
+            profile=profile,
+        )
+
+    assert f"{request_id}:transcribe" not in svc._pending
+    assert f"{request_id}:diarize" not in svc._pending
+
+
+@pytest.mark.asyncio
 async def test_submit_worker_job_enforces_queue_limit_for_internal_callers(funasr_spec):
     svc = _setup_service(funasr_spec, max_queue_size=1)
     loop = asyncio.get_running_loop()
@@ -292,6 +411,37 @@ async def test_submit_worker_job_enforces_queue_limit_for_internal_callers(funas
             ),
             timeout=0.2,
         )
+
+
+@pytest.mark.asyncio
+async def test_submit_worker_job_cleans_pending_when_wait_is_cancelled(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    request_id = "req-cancelled"
+
+    task = asyncio.create_task(
+        svc._submit_worker_job(
+            temp_file_path="audio.wav",
+            params={},
+            request_id=request_id,
+            model_spec=funasr_spec,
+        )
+    )
+    try:
+        for _ in range(20):
+            if request_id in svc._pending:
+                break
+            await asyncio.sleep(0.01)
+        assert request_id in svc._pending
+
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        assert request_id not in svc._pending
+    finally:
+        if not task.done():
+            task.cancel()
+        await _stop_service(svc)
 
 
 @pytest.mark.asyncio
