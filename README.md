@@ -7,6 +7,10 @@ OpenAI Whisper-compatible HTTP API on port **50700**.
 - **FunASR** — Paraformer (Chinese SOTA) + CAM++ speaker diarization
 - **MLX Audio** — Apple-native models (Qwen3-ASR, Whisper, etc.)
 
+**Runtime-aware model registration:** models are added through `ModelSpec` when
+they fit an existing runtime contract. New engines are only needed for new
+runtime APIs, not for every new model release.
+
 → See [MODELS.md](./MODELS.md) for model list, benchmark results, and selection guide.
 
 ---
@@ -32,9 +36,10 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 
 | Scenario | Recommended | Command |
 |----------|-------------|---------|
-| Multi-speaker podcast / meeting | `paraformer` (default) | `uv run python -m src.main` |
-| Fast single-speaker transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
-| Bulk speed-first (no diarization) | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
+| Mandarin multi-speaker podcast / meeting | `paraformer` (default) | `uv run python -m src.main` |
+| Chinese/English quality-first transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
+| Bulk speed-first tags / language detection | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
+| Future multi-speaker MLX pipeline | `qwen3-sortformer` | Discovery-only until Sortformer runtime validation passes |
 
 ## API & Web UI
 
@@ -89,9 +94,10 @@ curl http://localhost:50700/v1/audio/transcriptions \
 
 | Alias | Engine | Description |
 |-------|--------|-------------|
-| `paraformer` | FunASR | Mandarin + Diarization (Best for meetings) |
-| `qwen3-asr` | MLX | English/Chinese single-speaker (Fast, low memory) |
-| `sensevoice-small` | FunASR | Speed-first, emotion/language detection |
+| `paraformer` | FunASR | FunASR/PyTorch MPS path; Mandarin-focused with CAM++ diarization |
+| `qwen3-asr` | MLX | mlx-audio/MLX Metal path; Chinese/English quality-first ASR |
+| `sensevoice-small` | FunASR | FunASR/PyTorch MPS path; speed-first language/emotion tags |
+| `qwen3-sortformer` | Pipeline | Discovery-only Qwen3-ASR + Sortformer profile; POST returns 501 until enabled |
 
 ### Query models
 
