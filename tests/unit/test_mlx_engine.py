@@ -34,6 +34,28 @@ class TestMlxCapabilities:
             assert engine.capabilities.timestamp is True
 
 
+class TestMlxLanguageNormalization:
+    def test_should_map_english_code_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "en") == "English"
+
+    def test_should_map_chinese_code_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "zh") == "Chinese"
+
+    def test_should_map_cantonese_code_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "yue") == "Cantonese"
+
+    def test_should_preserve_language_for_non_qwen_mlx_model(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/whisper-large-v3", "en") == "en"
+
+
 class TestMlxAudioEngine:
     """
     测试 src/core/mlx_engine.py
@@ -149,7 +171,8 @@ class TestMlxAudioEngine:
             model=mock_model,
             audio="test.wav",
             format="txt",
-            verbose=False
+            verbose=False,
+            language="English",
         )
 
     def test_transcribe_success_multiple_chunks(
@@ -215,7 +238,8 @@ class TestMlxAudioEngine:
             model=mock_model,
             audio="test.wav",
             format="txt",
-            verbose=True
+            verbose=True,
+            language="English",
         )
 
     def test_release(self, mock_load_model, mock_gc, mock_chunking_service):

@@ -34,6 +34,18 @@ _MLX_MODEL_CAPABILITIES: dict[str, EngineCapabilities] = {
 # Conservative default for unknown MLX models
 _MLX_DEFAULT_CAPS = EngineCapabilities()
 
+_QWEN3_LANGUAGE_ALIASES: dict[str, str] = {
+    "auto": "English",
+    "en": "English",
+    "eng": "English",
+    "english": "English",
+    "zh": "Chinese",
+    "cn": "Chinese",
+    "chinese": "Chinese",
+    "yue": "Cantonese",
+    "cantonese": "Cantonese",
+}
+
 
 def _resolve_mlx_capabilities(model_id: str) -> EngineCapabilities:
     """Resolve capabilities via longest-prefix match against model_id."""
@@ -44,6 +56,17 @@ def _resolve_mlx_capabilities(model_id: str) -> EngineCapabilities:
             best_match = prefix
             best_caps = caps
     return best_caps
+
+
+def _is_qwen3_asr_model(model_id: str) -> bool:
+    return "qwen3-asr" in model_id.lower()
+
+
+def _normalize_mlx_language(model_id: str, language: str) -> str:
+    if not _is_qwen3_asr_model(model_id):
+        return language
+    normalized_key = language.strip().lower()
+    return _QWEN3_LANGUAGE_ALIASES.get(normalized_key, language)
 
 
 class MlxAudioEngine:
@@ -129,11 +152,16 @@ class MlxAudioEngine:
 
             # 步骤2: 转录所有切片
             results = []
+            normalized_language = _normalize_mlx_language(self.model_id, language)
             for i, chunk_path in enumerate(chunks):
                 print(f"🎙️ Transcribing chunk {i + 1}/{len(chunks)} (format: {output_format})...")
                 try:
                     result = generate_transcription(
-                        model=self.model, audio=chunk_path, format=output_format, verbose=verbose
+                        model=self.model,
+                        audio=chunk_path,
+                        format=output_format,
+                        verbose=verbose,
+                        language=normalized_language,
                     )
                     results.append(result)
                 finally:
