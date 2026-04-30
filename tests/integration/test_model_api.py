@@ -83,6 +83,17 @@ def test_should_return_model_list_on_get_models(client) -> None:
     
 
 
+def test_models_endpoint_should_include_non_requestable_pipeline_profiles(client) -> None:
+    response = client.get("/v1/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    models = {item["alias"]: item for item in body["models"]}
+    assert "qwen3-sortformer" in models
+    assert models["qwen3-sortformer"]["capabilities"]["diarization"] is True
+    assert models["qwen3-sortformer"]["requestable"] is False
+
+
 # MA-2
 def test_should_include_current_model_in_get_models_response(client) -> None:
     response = client.get("/v1/models")

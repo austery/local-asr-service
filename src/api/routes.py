@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from src.config import MAX_UPLOAD_SIZE_MB
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
+from src.core.pipeline_registry import list_all_profiles
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ class ModelInfo(BaseModel):
     engine_type: str
     description: str
     capabilities: dict[str, bool]
+    requestable: bool = True
 
 
 class ModelsResponse(BaseModel):
@@ -320,19 +322,35 @@ async def list_models(request: Request) -> ModelsResponse:
     current_spec = service.current_model_spec
     current_alias = current_spec.alias if current_spec else None
 
+    model_entries = [
+        ModelInfo(
+            alias=spec.alias,
+            model_id=spec.model_id,
+            engine_type=spec.engine_type,
+            description=spec.description,
+            capabilities={
+                k: v for k, v in asdict(spec.capabilities).items()
+            },
+            requestable=True,
+        )
+        for spec in list_all()
+    ]
+    profile_entries = [
+        ModelInfo(
+            alias=profile.alias,
+            model_id=f"{profile.transcription_alias}+{profile.diarization_alias}",
+            engine_type="pipeline",
+            description=profile.description,
+            capabilities={
+                k: v for k, v in asdict(profile.capabilities).items()
+            },
+            requestable=profile.requestable,
+        )
+        for profile in list_all_profiles()
+    ]
+
     return ModelsResponse(
-        models=[
-            ModelInfo(
-                alias=spec.alias,
-                model_id=spec.model_id,
-                engine_type=spec.engine_type,
-                description=spec.description,
-                capabilities={
-                    k: v for k, v in asdict(spec.capabilities).items()
-                },
-            )
-            for spec in list_all()
-        ],
+        models=sorted(model_entries + profile_entries, key=lambda item: item.alias),
         current=current_alias,
     )
 
