@@ -5,13 +5,18 @@ import os
 import queue as _stdlib_queue
 import shutil
 import tempfile
-from typing import Any
+from typing import Any, cast
 
 from fastapi import UploadFile
 
+from src.adapters.segment_alignment import align_speakers
 from src.core.base_engine import EngineCapabilities
+from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import ModelSpec
+from src.core.pipeline_registry import PipelineProfile
 from src.workers.model_worker import WorkerJob, run_worker
+
+TranscriptionResult = str | dict[str, Any]
 
 
 class TranscriptionService:
@@ -95,7 +100,7 @@ class TranscriptionService:
         params: dict[str, Any],
         request_id: str = "unknown",
         model_spec: ModelSpec | None = None,
-    ) -> str | dict[str, Any]:
+    ) -> TranscriptionResult:
         if len(self._pending) >= self._max_queue_size:
             self.logger.warning(f"[{request_id}] Queue full, rejecting request")
             raise RuntimeError("Service busy: Queue is full.")
@@ -107,9 +112,35 @@ class TranscriptionService:
             with open(temp_path, "wb") as buf:
                 shutil.copyfileobj(file.file, buf)
 
-            loop = asyncio.get_running_loop()
-            future: asyncio.Future[str | dict[str, Any]] = loop.create_future()
+            result = await self._submit_worker_job(
+                temp_file_path=temp_path,
+                params=params,
+                request_id=request_id,
+                model_spec=model_spec,
+                temp_dir=temp_dir,
+            )
+            if isinstance(result, str):
+                return result
+            return cast(dict[str, Any], result)
 
+        except BaseException:
+            self._pending.pop(request_id, None)
+            self._temp_dirs.pop(request_id, None)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+
+    async def _submit_worker_job(
+        self,
+        temp_file_path: str,
+        params: dict[str, Any],
+        request_id: str,
+        model_spec: ModelSpec | None,
+        temp_dir: str | None = None,
+    ) -> object:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[object] = loop.create_future()
+
+        try:
             async with self._spawn_lock:
                 if model_spec is not None and model_spec != self._current_model_spec:
                     await self._switch_worker(model_spec)
@@ -123,21 +154,136 @@ class TranscriptionService:
                 # during a concurrent model switch) does not cancel this request's
                 # future or delete its temp dir before the job is even queued.
                 self._pending[request_id] = future
-                self._temp_dirs[request_id] = temp_dir
+                if temp_dir is not None:
+                    self._temp_dirs[request_id] = temp_dir
 
                 self._job_queue.put_nowait(WorkerJob(
                     uid=request_id,
-                    temp_file_path=temp_path,
+                    temp_file_path=temp_file_path,
                     params=params,
                 ))
-
-            return await future
-
         except BaseException:
             self._pending.pop(request_id, None)
             self._temp_dirs.pop(request_id, None)
-            shutil.rmtree(temp_dir, ignore_errors=True)
             raise
+
+        return await future
+
+    async def _transcribe_with_alias(
+        self,
+        temp_file_path: str,
+        params: dict[str, Any],
+        request_id: str,
+        alias: str,
+    ) -> TranscriptionResult:
+        result = await self._submit_worker_job(
+            temp_file_path=temp_file_path,
+            params=params,
+            request_id=f"{request_id}:transcribe",
+            model_spec=self._lookup_model_spec(alias),
+        )
+        if isinstance(result, str):
+            return result
+        return cast(dict[str, Any], result)
+
+    async def _diarize_with_alias(
+        self,
+        temp_file_path: str,
+        request_id: str,
+        alias: str,
+    ) -> list[SpeakerTurn]:
+        result = await self._submit_worker_job(
+            temp_file_path=temp_file_path,
+            params={},
+            request_id=f"{request_id}:diarize",
+            model_spec=self._lookup_model_spec(alias),
+        )
+        return cast(list[SpeakerTurn], result)
+
+    def _lookup_model_spec(self, alias: str) -> ModelSpec:
+        from src.core.model_registry import lookup
+
+        return lookup(alias)
+
+    async def _run_decoupled_pipeline(
+        self,
+        temp_file_path: str,
+        params: dict[str, Any],
+        request_id: str,
+        profile: PipelineProfile,
+    ) -> TranscriptionResult:
+        previous_spec = self._current_model_spec
+        try:
+            transcript_result = await self._transcribe_with_alias(
+                temp_file_path,
+                params,
+                request_id,
+                profile.transcription_alias,
+            )
+            if not isinstance(transcript_result, dict):
+                return transcript_result
+
+            try:
+                speaker_turns = await self._diarize_with_alias(
+                    temp_file_path,
+                    request_id,
+                    profile.diarization_alias,
+                )
+            except Exception as exc:
+                if self._is_worker_lifecycle_error(exc):
+                    raise
+                self.logger.warning(
+                    "[%s] Decoupled pipeline diarization failed for profile %s; returning transcript-only result: %s",
+                    request_id,
+                    profile.alias,
+                    exc,
+                )
+                return transcript_result
+
+            segments = transcript_result.get("segments")
+            if not isinstance(segments, list):
+                return transcript_result
+
+            try:
+                aligned_segments = align_speakers(
+                    cast(list[dict[str, object]], segments),
+                    speaker_turns,
+                )
+            except (TypeError, ValueError) as exc:
+                self.logger.warning(
+                    "[%s] Decoupled pipeline alignment failed for profile %s; returning transcript-only result: %s",
+                    request_id,
+                    profile.alias,
+                    exc,
+                )
+                return transcript_result
+
+            return {**transcript_result, "segments": aligned_segments}
+        finally:
+            await self._restore_resident_model(previous_spec)
+
+    async def _restore_resident_model(self, previous_spec: ModelSpec | None) -> None:
+        async with self._spawn_lock:
+            current_spec = self._current_model_spec
+            if current_spec == previous_spec:
+                return
+            if previous_spec is None:
+                await self._shutdown_worker()
+                self._current_model_spec = None
+                return
+            await self._switch_worker(previous_spec)
+
+    @staticmethod
+    def _is_worker_lifecycle_error(exc: Exception) -> bool:
+        return isinstance(exc, RuntimeError) and str(exc).startswith(
+            (
+                "Worker terminated",
+                "Worker process died unexpectedly",
+                "Worker failed to start",
+                "Worker failed to load model",
+                "Worker sent unexpected startup message",
+            )
+        )
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
         for old_q in (self._job_queue, self._result_queue):

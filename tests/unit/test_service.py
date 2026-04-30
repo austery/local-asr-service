@@ -8,11 +8,12 @@ import multiprocessing
 import os
 import tempfile as _tempfile
 from io import BytesIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import UploadFile
 
+from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import lookup
 from src.services.transcription import TranscriptionService
 
@@ -157,3 +158,33 @@ class TestTranscriptionService:
                 )
         finally:
             await _stop_service(svc)
+
+
+@pytest.mark.asyncio
+async def test_decoupled_pipeline_should_align_speakers_and_restore_previous_model(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = lookup_profile("qwen3-sortformer")
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias):
+        assert alias == "qwen3-asr"
+        return {"text": "hello world", "segments": [{"text": "hello", "start": 0.0, "end": 1.0}]}
+
+    async def fake_diarize(temp_file_path, request_id, alias):
+        assert alias == "sortformer-diar"
+        return [SpeakerTurn(speaker="Speaker A", start=0.0, end=1.0)]
+
+    svc._transcribe_with_alias = fake_transcribe
+    svc._diarize_with_alias = fake_diarize
+    svc._restore_resident_model = AsyncMock()
+
+    result = await svc._run_decoupled_pipeline(
+        "audio.wav",
+        {"output_format": "json"},
+        "req-pipeline",
+        profile,
+    )
+
+    assert result["segments"][0]["speaker"] == "Speaker A"
+    svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
