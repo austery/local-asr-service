@@ -44,10 +44,12 @@ def client():
         {"text": "test result", "segments": None, "duration": 1.0},
         current_model_spec=qwen_spec,
     )
-    with patch("src.main.TranscriptionService", return_value=mock_service):
-        with patch("src.main.lookup", return_value=qwen_spec):
-            with TestClient(app) as c:
-                yield c
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        TestClient(app) as c,
+    ):
+        yield c
 
 
 @pytest.fixture
@@ -59,10 +61,12 @@ def funasr_client():
         {"text": "funasr result", "segments": [], "duration": 1.0},
         current_model_spec=paraformer_spec,
     )
-    with patch("src.main.TranscriptionService", return_value=mock_service):
-        with patch("src.main.lookup", return_value=paraformer_spec):
-            with TestClient(app) as c:
-                yield c
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=paraformer_spec),
+        TestClient(app) as c,
+    ):
+        yield c
 
 
 def _audio_file() -> tuple[str, BytesIO, str]:
@@ -80,7 +84,7 @@ def test_should_return_model_list_on_get_models(client) -> None:
     assert "paraformer" in aliases
     assert "qwen3-asr" in aliases
     assert "sensevoice-small" in aliases
-    
+
 
 
 def test_models_endpoint_should_include_non_requestable_pipeline_profiles(client) -> None:

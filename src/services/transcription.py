@@ -5,6 +5,7 @@ import os
 import queue as _stdlib_queue
 import shutil
 import tempfile
+from contextlib import suppress
 from typing import Any, cast
 
 from fastapi import UploadFile
@@ -89,10 +90,8 @@ class TranscriptionService:
         await self._shutdown_worker()
         if self._result_reader_task and not self._result_reader_task.done():
             self._result_reader_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._result_reader_task
-            except asyncio.CancelledError:
-                pass
 
     async def submit(
         self,
@@ -320,10 +319,10 @@ class TranscriptionService:
                 loop.run_in_executor(None, self._result_queue.get),
                 timeout=120.0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError as exc:
             self._worker.terminate()
             self._worker = None
-            raise RuntimeError("Worker failed to start within 120s timeout.")
+            raise RuntimeError("Worker failed to start within 120s timeout.") from exc
 
         if msg[0] == "LOAD_ERROR":
             self._worker.terminate()
@@ -351,12 +350,12 @@ class TranscriptionService:
 
     async def _shutdown_worker(self) -> None:
         """Gracefully shutdown worker subprocess and clean up IPC resources.
-        
+
         Critical: This method MUST properly reap the child process and close
         all multiprocessing.Queue instances to avoid zombie processes and
         resource_tracker hangs that prevent the main process from exiting.
         """
-        for uid, fut in list(self._pending.items()):
+        for _uid, fut in list(self._pending.items()):
             if not fut.done():
                 fut.set_exception(RuntimeError("Worker terminated (model switch or shutdown)"))
         self._pending.clear()
@@ -381,14 +380,14 @@ class TranscriptionService:
                 loop.run_in_executor(None, lambda: self._worker.join(timeout=5)),  # type: ignore[union-attr]
                 timeout=6.0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.logger.warning("Worker did not exit gracefully within 5s timeout")
 
         # 3. Force-kill if still alive
         if self._worker.is_alive():
             self.logger.warning("Sending SIGTERM to worker subprocess")
             self._worker.terminate()
-            
+
             # CRITICAL: join() after terminate() to reap the zombie process.
             # Without this, the process becomes a zombie and resource_tracker
             # cannot exit, causing the main process to hang indefinitely.
@@ -397,7 +396,7 @@ class TranscriptionService:
                     loop.run_in_executor(None, lambda: self._worker.join(timeout=3)),  # type: ignore[union-attr]
                     timeout=4.0,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self.logger.error("Worker did not respond to SIGTERM within 3s, using SIGKILL")
                 self._worker.kill()  # SIGKILL (last resort)
                 # Final join (no timeout wrap — must wait for kill to complete)
@@ -456,14 +455,16 @@ class TranscriptionService:
                     if self._worker:
                         worker = self._worker
                         loop = asyncio.get_running_loop()
-                        await loop.run_in_executor(None, lambda: worker.join(timeout=1))
+                        await loop.run_in_executor(
+                            None, lambda current_worker=worker: current_worker.join(timeout=1)
+                        )
                     self._worker = None
             except Exception:
                 self.logger.exception("Unexpected error processing IPC message: %r", msg)
 
     def _fail_all_pending(self, error: Exception) -> None:
         """Fail all in-flight futures with the given error (e.g., after worker crash)."""
-        for uid, fut in list(self._pending.items()):
+        for _uid, fut in list(self._pending.items()):
             if not fut.done():
                 fut.set_exception(error)
         self._pending.clear()

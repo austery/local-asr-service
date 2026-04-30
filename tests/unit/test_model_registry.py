@@ -6,8 +6,7 @@ These are pure-function tests — no mocks needed.
 
 import pytest
 
-from src.core.base_engine import EngineCapabilities
-from src.core.model_registry import ModelSpec, alias_for, is_passthrough, list_all, lookup
+from src.core.model_registry import alias_for, is_passthrough, list_all, lookup
 
 
 class TestLookup:

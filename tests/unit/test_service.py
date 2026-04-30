@@ -7,6 +7,7 @@ import asyncio
 import multiprocessing
 import os
 import tempfile as _tempfile
+from contextlib import suppress
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -49,10 +50,8 @@ async def _stop_service(svc: TranscriptionService) -> None:
     svc.is_running = False
     if svc._result_reader_task and not svc._result_reader_task.done():
         svc._result_reader_task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await svc._result_reader_task
-        except asyncio.CancelledError:
-            pass
 
 
 @pytest.mark.asyncio
