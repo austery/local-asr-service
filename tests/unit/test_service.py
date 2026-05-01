@@ -313,11 +313,10 @@ async def test_decoupled_pipeline_empty_segments_logs_warning_and_returns_transc
 
 
 @pytest.mark.asyncio
-async def test_diarize_with_alias_rejects_malformed_worker_result(funasr_spec):
+async def test_diarize_with_alias_requires_dedicated_diarization_worker_path(funasr_spec):
     svc = _setup_service(funasr_spec)
-    svc._submit_worker_job = AsyncMock(return_value={"not": "speaker turns"})
 
-    with pytest.raises(TypeError, match="Expected diarization result"):
+    with pytest.raises(NotImplementedError, match="dedicated diarization job kind"):
         await svc._diarize_with_alias("audio.wav", "req-pipeline", "paraformer")
 
 
@@ -344,6 +343,21 @@ async def test_decoupled_pipeline_restore_failure_is_propagated(funasr_spec):
             ),
             timeout=1.0,
         )
+
+
+@pytest.mark.asyncio
+async def test_restore_resident_model_skips_switch_when_other_requests_are_pending(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    qwen_spec = lookup("qwen3-asr")
+    svc._current_model_spec = qwen_spec
+    loop = asyncio.get_running_loop()
+    svc._pending["other-request"] = loop.create_future()
+    svc._switch_worker = AsyncMock()
+
+    await svc._restore_resident_model(funasr_spec)
+
+    svc._switch_worker.assert_not_awaited()
+    assert svc._current_model_spec == qwen_spec
 
 
 @pytest.mark.asyncio

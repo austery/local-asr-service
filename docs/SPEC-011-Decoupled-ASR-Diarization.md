@@ -231,6 +231,7 @@ The service must not keep two large ML models resident in the same worker longer
 - [ ] Reintroduce a `DiarizationPort` for diarization-only adapters.
 - [ ] Reintroduce `segment_alignment.align_speakers()` as a pure function using maximum overlap.
 - [ ] Add a pipeline registry or equivalent profile resolver for `qwen3-sortformer`.
+- [ ] Add a dedicated diarization worker job kind / IPC path before any pipeline profile becomes requestable.
 - [ ] Keep pipeline aliases non-requestable until Sortformer runtime validation and integration tests pass.
 
 **Acceptance**: alignment and profile resolution are fully unit-tested without loading real models.
@@ -286,5 +287,5 @@ The service must not keep two large ML models resident in the same worker longer
 - **Rejected archived code**: `src/core/firered_engine.py`, `firered-asr`, `firered-sortformer`
 - **Reusable archived ideas**: `DiarizationPort`, `SpeakerTurn`, `segment_alignment`, `PipelineProfile`, serial pipeline orchestration, submission gate, cancellation-safe cleanup
 - **Research notes**:
-  - `/Users/leipeng/Documents/research-notes/01-inbox/2026-04-27_local-asr-service_spec011-retrospective-and-diarization-roadmap.md`
-  - `/Users/leipeng/Documents/research-notes/01-inbox/2026-04-27_local-asr-service_apple-silicon-asr-model-landscape.md`
+  - `2026-04-27 local-asr-service retrospective and diarization roadmap`
+  - `2026-04-27 Apple Silicon ASR model landscape`

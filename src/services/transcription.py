@@ -240,15 +240,14 @@ class TranscriptionService:
         request_id: str,
         alias: str,
     ) -> list[SpeakerTurn]:
-        result = await self._submit_worker_job(
-            temp_file_path=temp_file_path,
-            params={},
-            request_id=f"{request_id}:diarize",
-            model_spec=self._lookup_model_spec(alias),
+        _ = temp_file_path
+        _ = request_id
+        _ = alias
+        raise NotImplementedError(
+            "Diarization cannot be submitted through the default worker transcription job. "
+            "Add a dedicated diarization job kind / IPC path so the worker can call a "
+            "diarization-specific engine method and return list[SpeakerTurn]."
         )
-        if not isinstance(result, list) or not all(isinstance(turn, SpeakerTurn) for turn in result):
-            raise TypeError(f"Expected diarization result as list[SpeakerTurn], got {type(result).__name__}")
-        return result
 
     def _lookup_model_spec(self, alias: str) -> ModelSpec:
         from src.core.model_registry import lookup
@@ -367,6 +366,13 @@ class TranscriptionService:
         async with self._spawn_lock:
             current_spec = self._current_model_spec
             if current_spec == previous_spec:
+                return
+            if self._pending:
+                self.logger.warning(
+                    "Skipping resident model restore while %d request(s) are pending; current model remains %s",
+                    len(self._pending),
+                    current_spec.alias if current_spec else "unknown",
+                )
                 return
             if previous_spec is None:
                 await self._shutdown_worker()
