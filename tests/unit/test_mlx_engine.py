@@ -324,3 +324,20 @@ class TestMlxAudioEngine:
         engine = MlxAudioEngine()
 
         assert engine._result_to_dict({"text": text_value})["text"] == ""
+
+    def test_result_to_dict_should_extract_language_from_object_and_dict(
+        self, mock_chunking_service
+    ):
+        from src.core.mlx_engine import MlxAudioEngine
+
+        engine = MlxAudioEngine()
+
+        object_result = MagicMock()
+        object_result.text = "hello"
+        object_result.language = "en"
+        object_result.segments = []
+
+        assert engine._result_to_dict(object_result)["language"] == "en"
+        assert engine._result_to_dict(
+            {"text": "hello", "language": "zh", "segments": []}
+        )["language"] == "zh"

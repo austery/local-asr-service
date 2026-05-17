@@ -299,6 +299,16 @@ class MlxAudioEngine:
             text = result.get("text", "")
             result_dict["text"] = text if isinstance(text, str) else ""
 
+        # 提取语言（自动检测结果）
+        if hasattr(result, "language"):
+            language = result.language
+            if isinstance(language, str):
+                result_dict["language"] = language
+        elif isinstance(result, dict):
+            language = result.get("language")
+            if isinstance(language, str):
+                result_dict["language"] = language
+
         # 提取 segments（说话人信息）
         if hasattr(result, "segments"):
             segments = result.segments
