@@ -34,6 +34,50 @@ _MLX_MODEL_CAPABILITIES: dict[str, EngineCapabilities] = {
 # Conservative default for unknown MLX models
 _MLX_DEFAULT_CAPS = EngineCapabilities()
 
+_QWEN3_LANGUAGE_ALIASES: dict[str, str] = {
+    "en": "English",
+    "eng": "English",
+    "english": "English",
+    "zh": "Chinese",
+    "cn": "Chinese",
+    "chinese": "Chinese",
+    "yue": "Cantonese",
+    "cantonese": "Cantonese",
+}
+
+_QWEN3_SUPPORTED_LANGUAGES = frozenset({
+    "Chinese",
+    "English",
+    "Cantonese",
+    "Arabic",
+    "German",
+    "French",
+    "Spanish",
+    "Portuguese",
+    "Indonesian",
+    "Italian",
+    "Korean",
+    "Russian",
+    "Thai",
+    "Vietnamese",
+    "Japanese",
+    "Turkish",
+    "Hindi",
+    "Malay",
+    "Dutch",
+    "Swedish",
+    "Danish",
+    "Finnish",
+    "Polish",
+    "Czech",
+    "Filipino",
+    "Persian",
+    "Greek",
+    "Romanian",
+    "Hungarian",
+    "Macedonian",
+})
+
 
 def _resolve_mlx_capabilities(model_id: str) -> EngineCapabilities:
     """Resolve capabilities via longest-prefix match against model_id."""
@@ -44,6 +88,26 @@ def _resolve_mlx_capabilities(model_id: str) -> EngineCapabilities:
             best_match = prefix
             best_caps = caps
     return best_caps
+
+
+def _is_qwen3_asr_model(model_id: str) -> bool:
+    return "qwen3-asr" in model_id.lower()
+
+
+def _normalize_mlx_language(model_id: str, language: str) -> str:
+    if not _is_qwen3_asr_model(model_id):
+        return language
+    normalized_language = language.strip()
+    normalized_key = normalized_language.lower()
+    if normalized_key == "auto":
+        return normalized_language
+    normalized = _QWEN3_LANGUAGE_ALIASES.get(normalized_key, language.strip())
+    if normalized not in _QWEN3_SUPPORTED_LANGUAGES:
+        raise ValueError(
+            f"Unsupported Qwen3-ASR language: {language}. "
+            f"Expected one of: {', '.join(sorted(_QWEN3_SUPPORTED_LANGUAGES))}"
+        )
+    return normalized
 
 
 class MlxAudioEngine:
@@ -129,11 +193,16 @@ class MlxAudioEngine:
 
             # 步骤2: 转录所有切片
             results = []
+            normalized_language = _normalize_mlx_language(self.model_id, language)
             for i, chunk_path in enumerate(chunks):
                 print(f"🎙️ Transcribing chunk {i + 1}/{len(chunks)} (format: {output_format})...")
                 try:
                     result = generate_transcription(
-                        model=self.model, audio=chunk_path, format=output_format, verbose=verbose
+                        model=self.model,
+                        audio=chunk_path,
+                        format=output_format,
+                        verbose=verbose,
+                        language=normalized_language,
                     )
                     results.append(result)
                 finally:
@@ -202,8 +271,11 @@ class MlxAudioEngine:
                 all_segments.append(adjusted_segment)
 
             # 更新时间偏移（使用最后一个 segment 的结束时间）
-            if segments and "end" in segments[-1]:
-                time_offset = segments[-1]["end"] + time_offset
+            if segments:
+                last_segment = segments[-1]
+                last_timestamp = last_segment.get("end", last_segment.get("start"))
+                if isinstance(last_timestamp, int | float) and not isinstance(last_timestamp, bool):
+                    time_offset += float(last_timestamp)
 
         return {"text": " ".join(all_text), "segments": all_segments}
 
@@ -221,9 +293,21 @@ class MlxAudioEngine:
 
         # 提取文本
         if hasattr(result, "text"):
-            result_dict["text"] = result.text.strip()
+            text = result.text
+            result_dict["text"] = text.strip() if isinstance(text, str) else ""
         elif isinstance(result, dict):
-            result_dict["text"] = result.get("text", "")
+            text = result.get("text", "")
+            result_dict["text"] = text if isinstance(text, str) else ""
+
+        # 提取语言（自动检测结果）
+        if hasattr(result, "language"):
+            language = result.language
+            if isinstance(language, str):
+                result_dict["language"] = language
+        elif isinstance(result, dict):
+            language = result.get("language")
+            if isinstance(language, str):
+                result_dict["language"] = language
 
         # 提取 segments（说话人信息）
         if hasattr(result, "segments"):

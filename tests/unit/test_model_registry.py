@@ -6,8 +6,7 @@ These are pure-function tests — no mocks needed.
 
 import pytest
 
-from src.core.base_engine import EngineCapabilities
-from src.core.model_registry import ModelSpec, alias_for, is_passthrough, list_all, lookup
+from src.core.model_registry import alias_for, is_passthrough, list_all, lookup
 
 
 class TestLookup:
@@ -69,6 +68,22 @@ class TestCapabilities:
     # Achieved 121.7x RTF on 60s clips but crashes with Metal OOM on audio > ~5min.
     # Root cause: MLX Metal memory budget exceeded on full-length sequences; chunking
     # threshold (50min) is too high for this model. Deregistered until OOM is fixed.
+
+
+class TestRuntimeContracts:
+    def test_qwen3_asr_should_use_mlx_runtime_contract(self) -> None:
+        spec = lookup("qwen3-asr")
+
+        assert spec.engine_type == "mlx"
+        assert "mlx-audio" in spec.description.lower()
+        assert "MLX Metal" in spec.description
+
+    def test_sensevoice_should_use_funasr_runtime_contract(self) -> None:
+        spec = lookup("sensevoice-small")
+
+        assert spec.engine_type == "funasr"
+        assert "FunASR" in spec.description
+        assert "PyTorch" in spec.description
 
 
 class TestPassthrough:

@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from src.core.base_engine import EngineCapabilities
 from src.core.mlx_engine import _resolve_mlx_capabilities
 
@@ -34,6 +36,39 @@ class TestMlxCapabilities:
             assert engine.capabilities.timestamp is True
 
 
+class TestMlxLanguageNormalization:
+    def test_should_preserve_auto_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "auto") == "auto"
+
+    def test_should_map_english_code_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "en") == "English"
+
+    def test_should_map_chinese_code_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "zh") == "Chinese"
+
+    def test_should_map_cantonese_code_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "yue") == "Cantonese"
+
+    def test_should_preserve_language_for_non_qwen_mlx_model(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/whisper-large-v3", "en") == "en"
+
+    def test_should_reject_unknown_language_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        with pytest.raises(ValueError, match="Unsupported Qwen3-ASR language"):
+            _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "not-a-language")
+
+
 class TestMlxAudioEngine:
     """
     测试 src/core/mlx_engine.py
@@ -51,7 +86,7 @@ class TestMlxAudioEngine:
         """Mock mlx_audio.stt.generate.generate_transcription"""
         with patch("src.core.mlx_engine.generate_transcription") as mock:
             yield mock
-    
+
     @pytest.fixture
     def mock_chunking_service(self):
         """Mock AudioChunkingService"""
@@ -70,7 +105,7 @@ class TestMlxAudioEngine:
     def test_initialization(self, mock_chunking_service):
         """测试引擎初始化"""
         from src.core.mlx_engine import MlxAudioEngine
-        
+
         engine = MlxAudioEngine(model_id="test/mlx-model")
         assert engine.model_id == "test/mlx-model"
         assert engine.model is None
@@ -78,40 +113,40 @@ class TestMlxAudioEngine:
     def test_default_model_id(self, mock_chunking_service):
         """测试默认模型 ID"""
         from src.core.mlx_engine import MlxAudioEngine
-        
+
         engine = MlxAudioEngine()
         assert engine.model_id == "mlx-community/Qwen3-ASR-1.7B-4bit"
 
     def test_load_model(self, mock_load_model, mock_chunking_service):
         """测试模型加载逻辑"""
         from src.core.mlx_engine import MlxAudioEngine
-        
+
         mock_model = MagicMock()
         mock_load_model.return_value = mock_model
-        
+
         engine = MlxAudioEngine(model_id="mlx-community/test-model")
         engine.load()
-        
+
         mock_load_model.assert_called_once_with("mlx-community/test-model")
         assert engine.model is mock_model
 
     def test_load_model_idempotency(self, mock_load_model, mock_chunking_service):
         """测试重复加载（幂等性）"""
         from src.core.mlx_engine import MlxAudioEngine
-        
+
         mock_load_model.return_value = MagicMock()
-        
+
         engine = MlxAudioEngine()
         engine.load()
         engine.load()  # 第二次调用
-        
+
         # 应该只加载一次
         mock_load_model.assert_called_once()
 
     def test_transcribe_without_load(self, mock_chunking_service):
         """测试未加载模型直接推理应报错"""
         from src.core.mlx_engine import MlxAudioEngine
-        
+
         engine = MlxAudioEngine()
         with pytest.raises(RuntimeError, match="Model not loaded"):
             engine.transcribe_file("dummy.wav")
@@ -124,32 +159,33 @@ class TestMlxAudioEngine:
     ):
         """测试正常推理流程（单个文件，无切片）"""
         from src.core.mlx_engine import MlxAudioEngine
-        
+
         # Setup
         mock_model = MagicMock()
         mock_load_model.return_value = mock_model
-        
+
         # Mock chunking service 返回单个文件（无切片）
         mock_chunking_service.return_value.process_audio = MagicMock(
             return_value=["test.wav"]
         )
-        
+
         mock_result = MagicMock()
         mock_result.text = "  Hello from MLX  "
         mock_generate_transcription.return_value = mock_result
-        
+
         # Execute
         engine = MlxAudioEngine()
         engine.load()
         result = engine.transcribe_file("test.wav", language="en")
-        
+
         # Verify
         assert result == "Hello from MLX"  # stripped
         mock_generate_transcription.assert_called_once_with(
             model=mock_model,
             audio="test.wav",
             format="txt",
-            verbose=False
+            verbose=False,
+            language="English",
         )
 
     def test_transcribe_success_multiple_chunks(
@@ -160,16 +196,16 @@ class TestMlxAudioEngine:
     ):
         """测试长音频切片后推理（多个切片）"""
         from src.core.mlx_engine import MlxAudioEngine
-        
+
         # Setup
         mock_model = MagicMock()
         mock_load_model.return_value = mock_model
-        
+
         # Mock chunking service 返回3个切片
         mock_chunking_service.return_value.process_audio = MagicMock(
             return_value=["chunk_0.wav", "chunk_1.wav", "chunk_2.wav"]
         )
-        
+
         # Mock 每个切片的转录结果
         mock_results = [
             MagicMock(text="First part"),
@@ -177,15 +213,45 @@ class TestMlxAudioEngine:
             MagicMock(text="Third part"),
         ]
         mock_generate_transcription.side_effect = mock_results
-        
+
         # Execute
         engine = MlxAudioEngine()
         engine.load()
         result = engine.transcribe_file("long_audio.wav")
-        
+
         # Verify
         assert result == "First part Second part Third part"
         assert mock_generate_transcription.call_count == 3
+
+    def test_transcribe_should_forward_auto_language_for_qwen3_asr(
+        self,
+        mock_load_model,
+        mock_generate_transcription,
+        mock_chunking_service,
+    ):
+        """Qwen3-ASR should preserve the public auto-language contract."""
+        from src.core.mlx_engine import MlxAudioEngine
+
+        mock_model = MagicMock()
+        mock_load_model.return_value = mock_model
+        mock_chunking_service.return_value.process_audio = MagicMock(return_value=["test.wav"])
+
+        mock_result = MagicMock()
+        mock_result.text = "Auto language"
+        mock_generate_transcription.return_value = mock_result
+
+        engine = MlxAudioEngine(model_id="mlx-community/Qwen3-ASR-1.7B-8bit")
+        engine.load()
+        result = engine.transcribe_file("test.wav")
+
+        assert result == "Auto language"
+        mock_generate_transcription.assert_called_once_with(
+            model=mock_model,
+            audio="test.wav",
+            format="txt",
+            verbose=False,
+            language="auto",
+        )
 
     def test_transcribe_with_verbose(
         self,
@@ -195,40 +261,83 @@ class TestMlxAudioEngine:
     ):
         """测试 verbose 参数传递"""
         from src.core.mlx_engine import MlxAudioEngine
-        
+
         mock_model = MagicMock()
         mock_load_model.return_value = mock_model
-        
+
         mock_chunking_service.return_value.process_audio = MagicMock(
             return_value=["test.wav"]
         )
-        
+
         mock_result = MagicMock()
         mock_result.text = "Test"
         mock_generate_transcription.return_value = mock_result
-        
+
         engine = MlxAudioEngine()
         engine.load()
         engine.transcribe_file("test.wav", verbose=True)
-        
+
         mock_generate_transcription.assert_called_once_with(
             model=mock_model,
             audio="test.wav",
             format="txt",
-            verbose=True
+            verbose=True,
+            language="auto",
         )
 
     def test_release(self, mock_load_model, mock_gc, mock_chunking_service):
         """测试资源释放"""
         from src.core.mlx_engine import MlxAudioEngine
-        
+
         mock_load_model.return_value = MagicMock()
-        
+
         engine = MlxAudioEngine()
         engine.load()
         assert engine.model is not None
-        
+
         engine.release()
-        
+
         assert engine.model is None
         mock_gc.collect.assert_called_once()
+
+    def test_merge_json_results_should_advance_offset_when_last_segment_has_no_end(
+        self, mock_chunking_service
+    ):
+        from src.core.mlx_engine import MlxAudioEngine
+
+        engine = MlxAudioEngine()
+
+        result = engine._merge_json_results([
+            {"text": "first", "segments": [{"text": "first", "start": 2.0}]},
+            {"text": "second", "segments": [{"text": "second", "start": 0.0, "end": 1.0}]},
+        ])
+
+        assert result["segments"][1]["start"] == 2.0
+        assert result["segments"][1]["end"] == 3.0
+
+    @pytest.mark.parametrize("text_value", ["", None])
+    def test_result_to_dict_should_normalize_empty_text_values(
+        self, mock_chunking_service, text_value
+    ):
+        from src.core.mlx_engine import MlxAudioEngine
+
+        engine = MlxAudioEngine()
+
+        assert engine._result_to_dict({"text": text_value})["text"] == ""
+
+    def test_result_to_dict_should_extract_language_from_object_and_dict(
+        self, mock_chunking_service
+    ):
+        from src.core.mlx_engine import MlxAudioEngine
+
+        engine = MlxAudioEngine()
+
+        object_result = MagicMock()
+        object_result.text = "hello"
+        object_result.language = "en"
+        object_result.segments = []
+
+        assert engine._result_to_dict(object_result)["language"] == "en"
+        assert engine._result_to_dict(
+            {"text": "hello", "language": "zh", "segments": []}
+        )["language"] == "zh"

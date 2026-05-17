@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from src.config import MAX_UPLOAD_SIZE_MB
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
+from src.core.pipeline_registry import PipelineProfile, list_all_profiles, lookup_profile
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ class ModelInfo(BaseModel):
     engine_type: str
     description: str
     capabilities: dict[str, bool]
+    requestable: bool = True
 
 
 class ModelsResponse(BaseModel):
@@ -105,6 +107,16 @@ def _resolve_model(model: str | None) -> ModelSpec | None:
         return lookup(model)  # type: ignore[arg-type]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+def _resolve_pipeline_profile(model: str | None) -> PipelineProfile | None:
+    """Resolve a pipeline alias, returning None for non-pipeline model values."""
+    if is_passthrough(model):
+        return None
+    try:
+        return lookup_profile(model)  # type: ignore[arg-type]
+    except KeyError:
+        return None
 
 
 @router.post("/v1/audio/transcriptions", response_model=None)
@@ -179,8 +191,19 @@ async def create_transcription(
 
     file.file.seek(0)
 
-    # 3. Resolve model → ModelSpec (or None = keep current engine)
-    resolved_spec = _resolve_model(model)
+    # 3. Resolve model/pipeline aliases. Pipeline profiles are discovery-only
+    # until their runtime dependencies and resource profile are validated.
+    resolved_profile = _resolve_pipeline_profile(model)
+    if resolved_profile is not None and not resolved_profile.requestable:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"Pipeline profile '{resolved_profile.alias}' is discoverable "
+                "but not enabled for POST yet."
+            ),
+        )
+
+    resolved_spec = None if resolved_profile is not None else _resolve_model(model)
 
     # 4. Resolve effective output format
     effective_format = response_format if response_format is not None else output_format
@@ -192,12 +215,16 @@ async def create_transcription(
     #    Fall back to the current engine only for passthrough requests (model=None).
     if resolved_spec is not None:
         caps = resolved_spec.capabilities
+    elif resolved_profile is not None:
+        caps = resolved_profile.capabilities
     else:
         caps = request.app.state.service.capabilities
 
     model_label: str = (
         resolved_spec.alias
         if isinstance(resolved_spec, ModelSpec)
+        else resolved_profile.alias
+        if isinstance(resolved_profile, PipelineProfile)
         else str(getattr(request.app.state, "model_id", "unknown"))
     )
     service = request.app.state.service
@@ -227,7 +254,7 @@ async def create_transcription(
     )
 
     try:
-        params = {
+        params: dict[str, object] = {
             "language": language,
             "output_format": effective_format,
             "with_timestamp": with_timestamp,
@@ -237,20 +264,33 @@ async def create_transcription(
         #   - Explicit switch: use resolved_spec (always correct regardless of queue ordering).
         #   - Passthrough: capture current spec now; reading it after await is racy because
         #     another concurrent request may trigger a switch while this job is queued.
-        spec_for_response: ModelSpec | None = resolved_spec if resolved_spec is not None else service.current_model_spec
-
-        result = await service.submit(
-            file,
-            params,
-            request_id=request_id,
-            model_spec=resolved_spec,
+        spec_for_response: ModelSpec | PipelineProfile | None = (
+            resolved_profile
+            if resolved_profile is not None
+            else resolved_spec
+            if resolved_spec is not None
+            else service.current_model_spec
         )
 
-        response_model: str = (
-            spec_for_response.alias
-            if isinstance(spec_for_response, ModelSpec)
-            else str(getattr(request.app.state, "model_id", "unknown"))
-        )
+        if resolved_profile is not None:
+            result = await service.submit_pipeline(
+                file,
+                params,
+                request_id=request_id,
+                profile=resolved_profile,
+            )
+        else:
+            result = await service.submit(
+                file,
+                params,
+                request_id=request_id,
+                model_spec=resolved_spec,
+            )
+
+        if isinstance(spec_for_response, ModelSpec | PipelineProfile):
+            response_model = spec_for_response.alias
+        else:
+            response_model = str(getattr(request.app.state, "model_id", "unknown"))
 
         if effective_format == "srt":
             return PlainTextResponse(
@@ -258,35 +298,61 @@ async def create_transcription(
                 media_type="text/plain; charset=utf-8",
             )
 
+        response_language = language
         if isinstance(result, dict):
-            text = result.get("text", "")
-            segments_data = result.get("segments", [])
-            duration = result.get("duration", 0.0)
+            text_obj = result.get("text", "")
+            text = text_obj if isinstance(text_obj, str) else ""
+            segments_obj = result.get("segments", [])
+            segments_data = segments_obj if isinstance(segments_obj, list) else []
+            duration_obj = result.get("duration", 0.0)
+            duration = (
+                float(duration_obj)
+                if isinstance(duration_obj, int | float) and not isinstance(duration_obj, bool)
+                else 0.0
+            )
+            result_language = result.get("language")
+            if isinstance(result_language, str):
+                response_language = result_language
 
             segments: list[Segment] | None = None
             if effective_format == "json" and segments_data:
-                segments = [
-                    Segment(
-                        id=i,
-                        speaker=seg.get("speaker"),
-                        start=seg.get("start", 0.0),
-                        end=seg.get("end", 0.0),
-                        text=seg.get("text", ""),
+                segments = []
+                for i, seg in enumerate(segments_data):
+                    if not isinstance(seg, dict):
+                        continue
+                    speaker = seg.get("speaker")
+                    start = seg.get("start", 0.0)
+                    end = seg.get("end", 0.0)
+                    segment_text = seg.get("text", "")
+                    segments.append(
+                        Segment(
+                            id=i,
+                            speaker=speaker if isinstance(speaker, str) else None,
+                            start=(
+                                float(start)
+                                if isinstance(start, int | float) and not isinstance(start, bool)
+                                else 0.0
+                            ),
+                            end=(
+                                float(end)
+                                if isinstance(end, int | float) and not isinstance(end, bool)
+                                else 0.0
+                            ),
+                            text=segment_text if isinstance(segment_text, str) else "",
+                        )
                     )
-                    for i, seg in enumerate(segments_data)
-                ]
 
             return TranscriptionResponse(
                 text=text,
                 duration=duration,
-                language=language if language != "auto" else "zh",
+                language=response_language,
                 model=response_model,
                 segments=segments,
             )
         else:
             return TranscriptionResponse(
                 text=str(result),
-                language=language if language != "auto" else "zh",
+                language=response_language,
                 model=response_model,
                 segments=None,
             )
@@ -320,19 +386,35 @@ async def list_models(request: Request) -> ModelsResponse:
     current_spec = service.current_model_spec
     current_alias = current_spec.alias if current_spec else None
 
+    model_entries = [
+        ModelInfo(
+            alias=spec.alias,
+            model_id=spec.model_id,
+            engine_type=spec.engine_type,
+            description=spec.description,
+            capabilities={
+                k: v for k, v in asdict(spec.capabilities).items()
+            },
+            requestable=True,
+        )
+        for spec in list_all()
+    ]
+    profile_entries = [
+        ModelInfo(
+            alias=profile.alias,
+            model_id=f"{profile.transcription_alias}+{profile.diarization_alias}",
+            engine_type="pipeline",
+            description=profile.description,
+            capabilities={
+                k: v for k, v in asdict(profile.capabilities).items()
+            },
+            requestable=profile.requestable,
+        )
+        for profile in list_all_profiles()
+    ]
+
     return ModelsResponse(
-        models=[
-            ModelInfo(
-                alias=spec.alias,
-                model_id=spec.model_id,
-                engine_type=spec.engine_type,
-                description=spec.description,
-                capabilities={
-                    k: v for k, v in asdict(spec.capabilities).items()
-                },
-            )
-            for spec in list_all()
-        ],
+        models=sorted(model_entries + profile_entries, key=lambda item: item.alias),
         current=current_alias,
     )
 

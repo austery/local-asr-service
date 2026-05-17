@@ -7,11 +7,27 @@
 
 ## Active Models
 
-| Alias | Engine | Model ID | Diarization | Notes |
-|-------|--------|----------|:-----------:|-------|
-| `paraformer` | FunASR | `iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | ✅ | **Default. Best for long audio (20-60min).** |
-| `sensevoice-small` | FunASR | `iic/SenseVoiceSmall` | ❌ | Fast, emotion tags, no timestamps |
-| `qwen3-asr` | MLX | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | English single-speaker, low memory vs paraformer |
+| Alias | Engine Contract | Model ID | Diarization | Notes |
+|-------|-----------------|----------|:-----------:|-------|
+| `paraformer` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | ✅ | Mandarin-focused default with CAM++ diarization |
+| `sensevoice-small` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/SenseVoiceSmall` | ❌ | Fast language/emotion tags, no timestamps |
+| `qwen3-asr` | mlx-audio (`load_model` + `generate_transcription` on MLX Metal) | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | Chinese/English quality-first ASR; language prompts are normalized before inference |
+
+## Discovery-Only Pipeline Profiles
+
+| Alias | Components | Requestable | Notes |
+|-------|------------|:-----------:|-------|
+| `qwen3-sortformer` | `qwen3-asr` + `sortformer-diar` | ❌ | Exposed by `/v1/models` for discovery, but `POST /v1/audio/transcriptions` returns 501 until Sortformer runtime validation passes |
+
+---
+
+## Runtime Contract Rule
+
+The project registers models by runtime contract, not by vendor name.
+
+- Same runtime API means registry-only: for example, a future Qwen3-ASR model that still works with `mlx_audio.stt.utils.load_model()` and `generate_transcription()` should only need a new `ModelSpec`.
+- Different runtime API means a new engine adapter: for example, the independent `parakeet-mlx` package uses `from_pretrained(...).transcribe(...)`, so it should not be hidden inside `MlxAudioEngine` unless an adapter normalizes that contract.
+- Same Apple Silicon backend does not imply the same engine: MLX Metal, PyTorch MPS, CoreML/ANE, and CPU have different lifecycle and output contracts.
 
 ---
 
@@ -40,9 +56,11 @@
 
 | Use case | Recommended model | Reason |
 |----------|------------------|--------|
-| 20-60min English/Chinese podcast (PureSubs) | `paraformer` | Best long-audio RTF, speaker diarization |
-| Short voice input (<30s) | `qwen3-asr` | Low memory, fast |
-| Multi-speaker meeting | `paraformer` | Only model with diarization |
+| Mandarin long-form podcast (20-60min) | `paraformer` | Best verified long-audio RTF, CAM++ diarization |
+| Chinese/English quality-first single-speaker audio | `qwen3-asr` | MLX-native Qwen3-ASR with explicit language prompt forwarding |
+| English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
+| Multi-speaker meeting today | `paraformer` | Only requestable model with diarization |
+| Future MLX diarization pipeline | `qwen3-sortformer` | Discovery-only until Sortformer integration is validated |
 | Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
 
 ---

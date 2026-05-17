@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from src.core.base_engine import EngineCapabilities
 from src.core.model_registry import lookup as real_lookup
+from src.core.pipeline_registry import PipelineProfile
 from src.main import app
 from src.services.transcription import TranscriptionService
 
@@ -28,6 +29,7 @@ def _make_mock_service(
     type(service).capabilities = PropertyMock(return_value=capabilities)
     service.current_model_spec = current_model_spec
     service.submit = AsyncMock(return_value=submit_result)
+    service.submit_pipeline = AsyncMock(return_value=submit_result)
     service.start_worker = AsyncMock()
     service.stop_worker = AsyncMock()
     type(service).queue_size = PropertyMock(return_value=0)
@@ -44,10 +46,12 @@ def client():
         {"text": "test result", "segments": None, "duration": 1.0},
         current_model_spec=qwen_spec,
     )
-    with patch("src.main.TranscriptionService", return_value=mock_service):
-        with patch("src.main.lookup", return_value=qwen_spec):
-            with TestClient(app) as c:
-                yield c
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        TestClient(app) as c,
+    ):
+        yield c
 
 
 @pytest.fixture
@@ -59,10 +63,12 @@ def funasr_client():
         {"text": "funasr result", "segments": [], "duration": 1.0},
         current_model_spec=paraformer_spec,
     )
-    with patch("src.main.TranscriptionService", return_value=mock_service):
-        with patch("src.main.lookup", return_value=paraformer_spec):
-            with TestClient(app) as c:
-                yield c
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=paraformer_spec),
+        TestClient(app) as c,
+    ):
+        yield c
 
 
 def _audio_file() -> tuple[str, BytesIO, str]:
@@ -80,7 +86,18 @@ def test_should_return_model_list_on_get_models(client) -> None:
     assert "paraformer" in aliases
     assert "qwen3-asr" in aliases
     assert "sensevoice-small" in aliases
-    
+
+
+
+def test_models_endpoint_should_include_non_requestable_pipeline_profiles(client) -> None:
+    response = client.get("/v1/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    models = {item["alias"]: item for item in body["models"]}
+    assert "qwen3-sortformer" in models
+    assert models["qwen3-sortformer"]["capabilities"]["diarization"] is True
+    assert models["qwen3-sortformer"]["requestable"] is False
 
 
 # MA-2
@@ -117,6 +134,55 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
     assert "Unknown model" in response.json()["detail"]
 
 
+def test_should_return_501_for_non_requestable_pipeline_profile(client) -> None:
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "qwen3-sortformer"},
+        files={"file": _audio_file()},
+    )
+
+    assert response.status_code == 501
+    assert "not enabled" in response.json()["detail"]
+
+
+def test_should_submit_requestable_pipeline_profile() -> None:
+    qwen_spec = real_lookup("qwen3-asr")
+    requestable_profile = PipelineProfile(
+        alias="qwen3-sortformer",
+        transcription_alias="qwen3-asr",
+        diarization_alias="sortformer-diar",
+        description="test requestable profile",
+        capabilities=EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
+        requestable=True,
+    )
+    mock_service = _make_mock_service(
+        qwen_spec.capabilities,
+        {
+            "text": "pipeline result",
+            "segments": [{"text": "hello", "start": 0.0, "end": 1.0, "speaker": "Speaker A"}],
+            "duration": 1.0,
+        },
+        current_model_spec=qwen_spec,
+    )
+
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        patch("src.api.routes.lookup_profile", return_value=requestable_profile),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"model": "qwen3-sortformer", "output_format": "json"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["model"] == "qwen3-sortformer"
+    mock_service.submit.assert_not_called()
+    mock_service.submit_pipeline.assert_awaited_once()
+
+
 # MA-5
 def test_should_use_current_model_when_model_field_omitted(client) -> None:
     response = client.post(
@@ -126,6 +192,28 @@ def test_should_use_current_model_when_model_field_omitted(client) -> None:
     )
 
     assert response.status_code == 200
+
+
+def test_should_preserve_detected_language_when_request_uses_auto() -> None:
+    qwen_spec = real_lookup("qwen3-asr")
+    mock_service = _make_mock_service(
+        qwen_spec.capabilities,
+        {"text": "test result", "segments": None, "duration": 1.0, "language": "en"},
+        current_model_spec=qwen_spec,
+    )
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"language": "auto"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["language"] == "en"
 
 
 # MA-6
