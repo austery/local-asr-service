@@ -298,6 +298,7 @@ async def create_transcription(
                 media_type="text/plain; charset=utf-8",
             )
 
+        response_language = language
         if isinstance(result, dict):
             text_obj = result.get("text", "")
             text = text_obj if isinstance(text_obj, str) else ""
@@ -309,6 +310,9 @@ async def create_transcription(
                 if isinstance(duration_obj, int | float) and not isinstance(duration_obj, bool)
                 else 0.0
             )
+            result_language = result.get("language")
+            if isinstance(result_language, str):
+                response_language = result_language
 
             segments: list[Segment] | None = None
             if effective_format == "json" and segments_data:
@@ -341,14 +345,14 @@ async def create_transcription(
             return TranscriptionResponse(
                 text=text,
                 duration=duration,
-                language=language if language != "auto" else "zh",
+                language=response_language,
                 model=response_model,
                 segments=segments,
             )
         else:
             return TranscriptionResponse(
                 text=str(result),
-                language=language if language != "auto" else "zh",
+                language=response_language,
                 model=response_model,
                 segments=None,
             )

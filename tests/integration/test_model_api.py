@@ -194,6 +194,28 @@ def test_should_use_current_model_when_model_field_omitted(client) -> None:
     assert response.status_code == 200
 
 
+def test_should_preserve_detected_language_when_request_uses_auto() -> None:
+    qwen_spec = real_lookup("qwen3-asr")
+    mock_service = _make_mock_service(
+        qwen_spec.capabilities,
+        {"text": "test result", "segments": None, "duration": 1.0, "language": "en"},
+        current_model_spec=qwen_spec,
+    )
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"language": "auto"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["language"] == "en"
+
+
 # MA-6
 def test_should_return_400_when_srt_requested_with_no_timestamp_model(client) -> None:
     """Capability pre-validation: model with no timestamp support + SRT output → 400."""
