@@ -305,6 +305,8 @@ class TranscriptionService:
                     request_id,
                     profile.diarization_alias,
                 )
+            except NotImplementedError:
+                raise
             except Exception as exc:
                 if self._is_worker_lifecycle_error(exc):
                     raise

@@ -37,6 +37,11 @@ class TestMlxCapabilities:
 
 
 class TestMlxLanguageNormalization:
+    def test_should_preserve_auto_for_qwen3_asr(self) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "auto") == "auto"
+
     def test_should_map_english_code_for_qwen3_asr(self) -> None:
         from src.core.mlx_engine import _normalize_mlx_language
 
@@ -218,6 +223,36 @@ class TestMlxAudioEngine:
         assert result == "First part Second part Third part"
         assert mock_generate_transcription.call_count == 3
 
+    def test_transcribe_should_forward_auto_language_for_qwen3_asr(
+        self,
+        mock_load_model,
+        mock_generate_transcription,
+        mock_chunking_service,
+    ):
+        """Qwen3-ASR should preserve the public auto-language contract."""
+        from src.core.mlx_engine import MlxAudioEngine
+
+        mock_model = MagicMock()
+        mock_load_model.return_value = mock_model
+        mock_chunking_service.return_value.process_audio = MagicMock(return_value=["test.wav"])
+
+        mock_result = MagicMock()
+        mock_result.text = "Auto language"
+        mock_generate_transcription.return_value = mock_result
+
+        engine = MlxAudioEngine(model_id="mlx-community/Qwen3-ASR-1.7B-8bit")
+        engine.load()
+        result = engine.transcribe_file("test.wav")
+
+        assert result == "Auto language"
+        mock_generate_transcription.assert_called_once_with(
+            model=mock_model,
+            audio="test.wav",
+            format="txt",
+            verbose=False,
+            language="auto",
+        )
+
     def test_transcribe_with_verbose(
         self,
         mock_load_model,
@@ -247,7 +282,7 @@ class TestMlxAudioEngine:
             audio="test.wav",
             format="txt",
             verbose=True,
-            language="English",
+            language="auto",
         )
 
     def test_release(self, mock_load_model, mock_gc, mock_chunking_service):

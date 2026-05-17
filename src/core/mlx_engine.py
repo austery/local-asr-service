@@ -35,7 +35,6 @@ _MLX_MODEL_CAPABILITIES: dict[str, EngineCapabilities] = {
 _MLX_DEFAULT_CAPS = EngineCapabilities()
 
 _QWEN3_LANGUAGE_ALIASES: dict[str, str] = {
-    "auto": "English",
     "en": "English",
     "eng": "English",
     "english": "English",
@@ -98,7 +97,10 @@ def _is_qwen3_asr_model(model_id: str) -> bool:
 def _normalize_mlx_language(model_id: str, language: str) -> str:
     if not _is_qwen3_asr_model(model_id):
         return language
-    normalized_key = language.strip().lower()
+    normalized_language = language.strip()
+    normalized_key = normalized_language.lower()
+    if normalized_key == "auto":
+        return normalized_language
     normalized = _QWEN3_LANGUAGE_ALIASES.get(normalized_key, language.strip())
     if normalized not in _QWEN3_SUPPORTED_LANGUAGES:
         raise ValueError(
