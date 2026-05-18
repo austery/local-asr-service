@@ -62,6 +62,7 @@ class TranscriptionService:
         self._result_queue: multiprocessing.Queue[WorkerMessage] | None = None
         self._pending: dict[str, asyncio.Future[object]] = {}
         self._temp_dirs: dict[str, str] = {}
+        self._pipeline_lock: asyncio.Lock = asyncio.Lock()
         self._spawn_lock: asyncio.Lock = asyncio.Lock()
         self._result_reader_task: asyncio.Task[None] | None = None
         self.is_running = False
@@ -179,36 +180,37 @@ class TranscriptionService:
         request_id: str,
         model_spec: ModelSpec | None,
         temp_dir: str | None = None,
+        job_kind: Literal["transcribe", "diarize"] = "transcribe",
+        diarizer_alias: str | None = None,
+        pipeline_reserved: bool = False,
     ) -> object:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[object] = loop.create_future()
 
         try:
-            async with self._spawn_lock:
-                if len(self._pending) >= self._max_queue_size:
-                    self.logger.warning(f"[{request_id}] Queue full, rejecting worker job")
-                    raise RuntimeError("Service busy: Queue is full.")
-
-                if model_spec is not None and model_spec != self._current_model_spec:
-                    await self._switch_worker(model_spec)
-                elif not self.model_loaded:
-                    await self._spawn_worker()
-
-                if self._job_queue is None:
-                    raise RuntimeError("Job queue is None after successful spawn — this is a bug")
-
-                # Register AFTER the worker is ready so that _shutdown_worker (called
-                # during a concurrent model switch) does not cancel this request's
-                # future or delete its temp dir before the job is even queued.
-                self._pending[request_id] = future
-                if temp_dir is not None:
-                    self._temp_dirs[request_id] = temp_dir
-
-                self._job_queue.put_nowait(WorkerJob(
-                    uid=request_id,
+            if pipeline_reserved:
+                await self._enqueue_worker_job(
+                    future=future,
                     temp_file_path=temp_file_path,
                     params=params,
-                ))
+                    request_id=request_id,
+                    model_spec=model_spec,
+                    temp_dir=temp_dir,
+                    job_kind=job_kind,
+                    diarizer_alias=diarizer_alias,
+                )
+            else:
+                async with self._pipeline_lock:
+                    await self._enqueue_worker_job(
+                        future=future,
+                        temp_file_path=temp_file_path,
+                        params=params,
+                        request_id=request_id,
+                        model_spec=model_spec,
+                        temp_dir=temp_dir,
+                        job_kind=job_kind,
+                        diarizer_alias=diarizer_alias,
+                    )
         except BaseException:
             self._discard_request_state(request_id)
             raise
@@ -219,18 +221,61 @@ class TranscriptionService:
             self._discard_request_state(request_id)
             raise
 
+    async def _enqueue_worker_job(
+        self,
+        future: asyncio.Future[object],
+        temp_file_path: str,
+        params: dict[str, object],
+        request_id: str,
+        model_spec: ModelSpec | None,
+        temp_dir: str | None,
+        job_kind: Literal["transcribe", "diarize"],
+        diarizer_alias: str | None,
+    ) -> None:
+        async with self._spawn_lock:
+            if len(self._pending) >= self._max_queue_size:
+                self.logger.warning(f"[{request_id}] Queue full, rejecting worker job")
+                raise RuntimeError("Service busy: Queue is full.")
+
+            if model_spec is not None and model_spec != self._current_model_spec:
+                await self._switch_worker(model_spec)
+            elif not self.model_loaded:
+                await self._spawn_worker()
+
+            if self._job_queue is None:
+                raise RuntimeError("Job queue is None after successful spawn — this is a bug")
+
+            # Register AFTER the worker is ready so that _shutdown_worker (called
+            # during a concurrent model switch) does not cancel this request's
+            # future or delete its temp dir before the job is even queued.
+            self._pending[request_id] = future
+            if temp_dir is not None:
+                self._temp_dirs[request_id] = temp_dir
+
+            self._job_queue.put_nowait(WorkerJob(
+                uid=request_id,
+                temp_file_path=temp_file_path,
+                params=params,
+                job_kind=job_kind,
+                requested_model_spec_alias=model_spec.alias if model_spec is not None else None,
+                requested_diarizer_alias=diarizer_alias,
+            ))
+
     async def _transcribe_with_alias(
         self,
         temp_file_path: str,
         params: dict[str, object],
         request_id: str,
         alias: str,
+        pipeline_reserved: bool = False,
     ) -> TranscriptionResult:
+        model_spec = self._lookup_model_spec(alias)
         result = await self._submit_worker_job(
             temp_file_path=temp_file_path,
             params=params,
             request_id=f"{request_id}:transcribe",
-            model_spec=self._lookup_model_spec(alias),
+            model_spec=model_spec,
+            pipeline_reserved=pipeline_reserved,
         )
         return self._coerce_transcription_result(result)
 
@@ -239,15 +284,20 @@ class TranscriptionService:
         temp_file_path: str,
         request_id: str,
         alias: str,
+        pipeline_reserved: bool = False,
     ) -> list[SpeakerTurn]:
-        _ = temp_file_path
-        _ = request_id
-        _ = alias
-        raise NotImplementedError(
-            "Diarization cannot be submitted through the default worker transcription job. "
-            "Add a dedicated diarization job kind / IPC path so the worker can call a "
-            "diarization-specific engine method and return list[SpeakerTurn]."
+        result = await self._submit_worker_job(
+            temp_file_path=temp_file_path,
+            params={},
+            request_id=f"{request_id}:diarize",
+            model_spec=None,
+            job_kind="diarize",
+            diarizer_alias=alias,
+            pipeline_reserved=pipeline_reserved,
         )
+        if not isinstance(result, list) or not all(isinstance(item, SpeakerTurn) for item in result):
+            raise TypeError("Expected diarization result as list[SpeakerTurn]")
+        return result
 
     def _lookup_model_spec(self, alias: str) -> ModelSpec:
         from src.core.model_registry import lookup
@@ -288,62 +338,67 @@ class TranscriptionService:
         request_id: str,
         profile: PipelineProfile,
     ) -> TranscriptionResult:
-        previous_spec = self._current_model_spec
-        try:
-            transcript_result = await self._transcribe_with_alias(
-                temp_file_path,
-                params,
-                request_id,
-                profile.transcription_alias,
-            )
-            if not isinstance(transcript_result, dict):
-                return transcript_result
-
+        async with self._pipeline_lock:
+            previous_spec = self._current_model_spec
             try:
-                speaker_turns = await self._diarize_with_alias(
+                target_spec = self._lookup_model_spec(profile.transcription_alias)
+                if self._current_model_spec != target_spec:
+                    await self._switch_worker(target_spec)
+
+                transcript_result = await self._transcribe_with_alias(
                     temp_file_path,
+                    params,
                     request_id,
-                    profile.diarization_alias,
+                    profile.transcription_alias,
+                    pipeline_reserved=True,
                 )
-            except NotImplementedError:
-                raise
-            except Exception as exc:
-                if self._is_worker_lifecycle_error(exc):
-                    raise
-                self.logger.warning(
-                    "[%s] Decoupled pipeline diarization failed for profile %s; returning transcript-only result: %s",
-                    request_id,
-                    profile.alias,
-                    exc,
-                )
-                return transcript_result
+                if not isinstance(transcript_result, dict):
+                    return transcript_result
 
-            segments = transcript_result.get("segments")
-            if not isinstance(segments, list) or not segments:
-                self.logger.warning(
-                    "[%s] Decoupled pipeline has no transcript segments to align for profile %s; returning transcript-only result",
-                    request_id,
-                    profile.alias,
-                )
-                return transcript_result
+                try:
+                    speaker_turns = await self._diarize_with_alias(
+                        temp_file_path,
+                        request_id,
+                        profile.diarization_alias,
+                        pipeline_reserved=True,
+                    )
+                except Exception as exc:
+                    if self._is_worker_lifecycle_error(exc):
+                        raise
+                    self.logger.warning(
+                        "[%s] Decoupled pipeline diarization failed for profile %s; returning transcript-only result: %s",
+                        request_id,
+                        profile.alias,
+                        exc,
+                    )
+                    return transcript_result
 
-            try:
-                aligned_segments = align_speakers(
-                    self._coerce_segment_list(segments),
-                    speaker_turns,
-                )
-            except (TypeError, ValueError) as exc:
-                self.logger.warning(
-                    "[%s] Decoupled pipeline alignment failed for profile %s; returning transcript-only result: %s",
-                    request_id,
-                    profile.alias,
-                    exc,
-                )
-                return transcript_result
+                segments = transcript_result.get("segments")
+                if not isinstance(segments, list) or not segments:
+                    self.logger.warning(
+                        "[%s] Decoupled pipeline has no transcript segments to align for profile %s; returning transcript-only result",
+                        request_id,
+                        profile.alias,
+                    )
+                    return transcript_result
 
-            return {**transcript_result, "segments": aligned_segments}
-        finally:
-            await self._restore_resident_model(previous_spec)
+                try:
+                    aligned_segments = align_speakers(
+                        self._coerce_segment_list(segments),
+                        speaker_turns,
+                    )
+                except (TypeError, ValueError) as exc:
+                    self.logger.warning(
+                        "[%s] Decoupled pipeline alignment failed for profile %s; returning transcript-only result: %s",
+                        request_id,
+                        profile.alias,
+                        exc,
+                    )
+                    return transcript_result
+
+                return {**transcript_result, "segments": aligned_segments}
+            finally:
+                await self._restore_resident_model(previous_spec)
 
     @staticmethod
     def _coerce_segment_list(segments: list[object]) -> list[dict[str, object]]:
@@ -370,12 +425,7 @@ class TranscriptionService:
             if current_spec == previous_spec:
                 return
             if self._pending:
-                self.logger.warning(
-                    "Skipping resident model restore while %d request(s) are pending; current model remains %s",
-                    len(self._pending),
-                    current_spec.alias if current_spec else "unknown",
-                )
-                return
+                raise RuntimeError("Cannot restore resident model while worker jobs are still pending")
             if previous_spec is None:
                 await self._shutdown_worker()
                 self._current_model_spec = None
