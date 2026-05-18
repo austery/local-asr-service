@@ -29,6 +29,19 @@ def _make_diarize_job(
     )
 
 
+def _make_custom_kind_job(
+    uid="custom-kind-1",
+    path="/tmp/test.wav",
+    job_kind="summarize",
+):
+    return WorkerJob(
+        uid=uid,
+        temp_file_path=path,
+        params={},
+        job_kind=job_kind,  # type: ignore[arg-type]
+    )
+
+
 class TestRunWorker:
     def test_sends_ready_after_load(self):
         """Worker must put READY on result_queue after engine.load() succeeds."""
@@ -178,3 +191,46 @@ class TestRunWorker:
         assert err_msg[0] == "ERROR"
         assert err_msg[1] == "diarize-fail"
         assert "diarizer crashed" in err_msg[2]
+
+    def test_puts_error_on_unsupported_job_kind(self):
+        """Worker rejects unknown job kinds instead of falling through to transcription."""
+        job_q = multiprocessing.Queue()
+        result_q = multiprocessing.Queue()
+
+        job = _make_custom_kind_job(uid="bad-kind")
+        job_q.put(job)
+        job_q.put(None)
+
+        mock_engine = MagicMock()
+
+        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
+            with pytest.raises(SystemExit):
+                run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+
+        result_q.get_nowait()  # READY
+        err_msg = result_q.get_nowait()
+        assert err_msg[0] == "ERROR"
+        assert err_msg[1] == "bad-kind"
+        assert "Unsupported job_kind" in err_msg[2]
+        mock_engine.transcribe_file.assert_not_called()
+
+    def test_puts_error_when_diarize_job_is_missing_alias(self):
+        """Worker rejects diarize jobs without a requested diarizer alias."""
+        job_q = multiprocessing.Queue()
+        result_q = multiprocessing.Queue()
+
+        job = _make_diarize_job(uid="missing-alias", requested_diarizer_alias=None)
+        job_q.put(job)
+        job_q.put(None)
+
+        mock_engine = MagicMock()
+
+        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
+            with pytest.raises(SystemExit):
+                run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+
+        result_q.get_nowait()  # READY
+        err_msg = result_q.get_nowait()
+        assert err_msg[0] == "ERROR"
+        assert err_msg[1] == "missing-alias"
+        assert "requested_diarizer_alias" in err_msg[2]

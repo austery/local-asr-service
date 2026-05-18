@@ -1,12 +1,12 @@
-"""ModelWorker subprocess entry point for memory-isolated ASR inference.
+"""ModelWorker subprocess entry point for memory-isolated audio inference jobs.
 
 Runs inside a child process. Communicates with the parent via multiprocessing
 Queues using a simple IPC protocol:
 
   ("READY", None)          — engine loaded, ready for jobs
   ("LOAD_ERROR", str)      — engine.load() failed; process exits with code 1
-  ("RESULT", uid, result)  — transcription succeeded
-  ("ERROR", uid, str)      — transcription raised an exception
+  ("RESULT", uid, result)  — job succeeded
+  ("ERROR", uid, str)      — job raised an exception
   ("IDLE_EXIT", None)      — idle timeout reached; process exits with code 0
 """
 import io
@@ -157,7 +157,7 @@ def run_worker(
                             raise ValueError("Diarization job requires requested_diarizer_alias")
                         diarizer = _get_or_create_diarizer(diarizers, alias)
                         result = diarizer.diarize_file(job.temp_file_path)
-                    else:
+                    elif job.job_kind == "transcribe":
                         result = engine.transcribe_file(
                             job.temp_file_path,
                             language=job.params.get("language", "auto"),
@@ -165,6 +165,8 @@ def run_worker(
                             with_timestamp=job.params.get("with_timestamp", False),
                             use_itn=job.params.get("use_itn", True),
                         )
+                    else:
+                        raise ValueError(f"Unsupported job_kind: {job.job_kind}")
                     _sync_put(result_queue, ("RESULT", job.uid, result))
                 except Exception as exc:
                     logger.exception("%s failed for job %s", job.job_kind.title(), job.uid)
