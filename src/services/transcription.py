@@ -339,6 +339,7 @@ class TranscriptionService:
         profile: PipelineProfile,
     ) -> TranscriptionResult:
         async with self._pipeline_lock:
+            await self._wait_for_pending_work_to_drain()
             previous_spec = self._current_model_spec
             try:
                 target_spec = self._lookup_model_spec(profile.transcription_alias)
@@ -364,6 +365,8 @@ class TranscriptionService:
                     )
                 except Exception as exc:
                     if self._is_worker_lifecycle_error(exc):
+                        raise
+                    if self._is_diarization_contract_error(exc):
                         raise
                     self.logger.warning(
                         "[%s] Decoupled pipeline diarization failed for profile %s; returning transcript-only result: %s",
@@ -406,6 +409,10 @@ class TranscriptionService:
             raise TypeError("Expected transcription segments to be dictionaries")
         return segments
 
+    async def _wait_for_pending_work_to_drain(self) -> None:
+        while self._pending:
+            await asyncio.sleep(0.01)
+
     def _discard_request_state(self, request_id: str) -> None:
         future = self._pending.pop(request_id, None)
         if future is not None and not future.done():
@@ -441,6 +448,19 @@ class TranscriptionService:
                 "Worker failed to start",
                 "Worker failed to load model",
                 "Worker sent unexpected startup message",
+            )
+        )
+
+    @staticmethod
+    def _is_diarization_contract_error(exc: Exception) -> bool:
+        if isinstance(exc, (NotImplementedError, TypeError, KeyError)):
+            return True
+        return isinstance(exc, RuntimeError) and str(exc).startswith(
+            (
+                "Unsupported job_kind",
+                "Diarization job requires",
+                "Unsupported diarization runtime",
+                "Unknown diarization alias",
             )
         )
 

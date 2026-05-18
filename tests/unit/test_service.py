@@ -262,16 +262,15 @@ async def test_decoupled_pipeline_diarization_failure_returns_transcript_and_res
 
 
 @pytest.mark.asyncio
-async def test_decoupled_pipeline_diarization_not_implemented_returns_transcript_and_restores_model(funasr_spec):
+async def test_decoupled_pipeline_diarization_not_implemented_is_propagated(funasr_spec):
     from src.core.pipeline_registry import lookup_profile
 
     svc = _setup_service(funasr_spec)
     profile = lookup_profile("qwen3-sortformer")
-    transcript = {"text": "hello world", "segments": [{"text": "hello", "start": 0.0, "end": 1.0}]}
 
     async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
         assert pipeline_reserved is True
-        return transcript
+        return {"text": "hello world", "segments": [{"text": "hello", "start": 0.0, "end": 1.0}]}
 
     async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
         assert pipeline_reserved is True
@@ -282,14 +281,14 @@ async def test_decoupled_pipeline_diarization_not_implemented_returns_transcript
     svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
     svc._restore_resident_model = AsyncMock()
 
-    result = await svc._run_decoupled_pipeline(
-        "audio.wav",
-        {"output_format": "json"},
-        "req-pipeline",
-        profile,
-    )
+    with pytest.raises(NotImplementedError, match="dedicated diarization job kind required"):
+        await svc._run_decoupled_pipeline(
+            "audio.wav",
+            {"output_format": "json"},
+            "req-pipeline",
+            profile,
+        )
 
-    assert result == transcript
     svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
 
 
@@ -431,6 +430,52 @@ async def test_pipeline_should_hold_worker_reservation_until_restore(funasr_spec
     assert result["segments"][0]["speaker"] == "Speaker 0"
     assert observed_current_specs == ["qwen3-asr", "qwen3-asr"]
     assert svc.current_model_spec == funasr_spec
+
+
+@pytest.mark.asyncio
+async def test_pipeline_waits_for_existing_pending_work_before_switching_models(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    loop = asyncio.get_running_loop()
+    unrelated_future: asyncio.Future[object] = loop.create_future()
+    svc._pending["other-request"] = unrelated_future
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
+        assert pipeline_reserved is True
+        return {"text": "hello", "segments": [{"text": "hello", "start": 0.0, "end": 1.0}]}
+
+    async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
+        assert pipeline_reserved is True
+        return [SpeakerTurn(speaker="Speaker 0", start=0.0, end=1.0)]
+
+    svc._transcribe_with_alias = fake_transcribe
+    svc._diarize_with_alias = fake_diarize
+    svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
+    svc._restore_resident_model = AsyncMock()
+
+    task = asyncio.create_task(
+        svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req-pipeline", profile)
+    )
+    try:
+        await asyncio.sleep(0.05)
+        svc._switch_worker.assert_not_awaited()
+        assert not task.done()
+        assert not unrelated_future.cancelled()
+
+        svc._resolve_future("other-request", result={"text": "finished elsewhere"})
+        result = await asyncio.wait_for(task, timeout=1.0)
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    assert unrelated_future.done()
+    assert not unrelated_future.cancelled()
+    assert result["segments"][0]["speaker"] == "Speaker 0"
+    svc._switch_worker.assert_awaited_once()
 
 
 @pytest.mark.asyncio
