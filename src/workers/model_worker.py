@@ -17,10 +17,11 @@ import sys
 from dataclasses import dataclass, field
 from multiprocessing import Queue
 from multiprocessing.reduction import ForkingPickler
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from src.core.base_engine import ASREngine
+    from src.core.diarization_port import DiarizationPort
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,9 @@ class WorkerJob:
     uid: str
     temp_file_path: str
     params: dict[str, Any]
+    job_kind: Literal["transcribe", "diarize"] = field(default="transcribe")
     requested_model_spec_alias: str | None = field(default=None)
+    requested_diarizer_alias: str | None = field(default=None)
 
 
 def create_engine(engine_type: str, model_id: str) -> "ASREngine":
@@ -41,6 +44,17 @@ def create_engine(engine_type: str, model_id: str) -> "ASREngine":
     from src.core.factory import _create_by_type  # noqa: PLC0415
 
     return _create_by_type(engine_type, model_id)
+
+
+def create_diarizer(alias: str) -> "DiarizationPort":
+    """Construct a diarizer from the registry alias."""
+    from src.core.diarization_registry import lookup_diarizer  # noqa: PLC0415
+    from src.core.mlx_sortformer_diarizer import MlxSortformerDiarizer  # noqa: PLC0415
+
+    spec = lookup_diarizer(alias)
+    if spec.runtime == "mlx":
+        return MlxSortformerDiarizer(model_id=spec.model_id)
+    raise ValueError(f"Unsupported diarization runtime: {spec.runtime}")
 
 
 def _sync_put(q: Queue, item: Any) -> None:
@@ -58,6 +72,26 @@ def _sync_put(q: Queue, item: Any) -> None:
     # is called immediately after put(). In production (cross-process), the
     # parent's blocking queue.get() has ample time for the feeder thread to flush.
     q._writer.send_bytes(buf.getvalue())  # type: ignore[attr-defined]
+
+
+def _release_diarizers(diarizers: dict[str, "DiarizationPort"]) -> None:
+    for alias, diarizer in diarizers.items():
+        try:
+            diarizer.release()
+        except Exception:
+            logger.warning("diarizer.release() failed during worker cleanup for %s", alias, exc_info=True)
+
+
+def _get_or_create_diarizer(
+    diarizers: dict[str, "DiarizationPort"],
+    alias: str,
+) -> "DiarizationPort":
+    diarizer = diarizers.get(alias)
+    if diarizer is None:
+        diarizer = create_diarizer(alias)
+        diarizer.load()
+        diarizers[alias] = diarizer
+    return diarizer
 
 
 def run_worker(
@@ -93,36 +127,49 @@ def run_worker(
     _sync_put(result_queue, ("READY", None))
 
     get_timeout: float | None = idle_timeout if idle_timeout > 0 else None
+    diarizers: dict[str, DiarizationPort] = {}
 
-    while True:
+    try:
         try:
-            job: WorkerJob | None = job_queue.get(timeout=get_timeout)
-        except queue.Empty:
-            try:
-                engine.release()
-            except Exception:
-                logger.warning("engine.release() failed during idle timeout — proceeding with IDLE_EXIT", exc_info=True)
-            _sync_put(result_queue, ("IDLE_EXIT", None))
-            sys.exit(0)
+            while True:
+                try:
+                    job: WorkerJob | None = job_queue.get(timeout=get_timeout)
+                except queue.Empty:
+                    try:
+                        engine.release()
+                    except Exception:
+                        logger.warning("engine.release() failed during idle timeout — proceeding with IDLE_EXIT", exc_info=True)
+                    _sync_put(result_queue, ("IDLE_EXIT", None))
+                    sys.exit(0)
 
-        if job is None:
-            logger.info("Received shutdown sentinel — releasing model and exiting")
-            try:
-                engine.release()
-            except Exception:
-                logger.warning("engine.release() failed during shutdown", exc_info=True)
-            sys.exit(0)
+                if job is None:
+                    logger.info("Received shutdown sentinel — releasing model and exiting")
+                    try:
+                        engine.release()
+                    except Exception:
+                        logger.warning("engine.release() failed during shutdown", exc_info=True)
+                    sys.exit(0)
 
-        try:
-            result = engine.transcribe_file(
-                job.temp_file_path,
-                language=job.params.get("language", "auto"),
-                output_format=job.params.get("output_format", "txt"),
-                with_timestamp=job.params.get("with_timestamp", False),
-                use_itn=job.params.get("use_itn", True),
-            )
-            _sync_put(result_queue, ("RESULT", job.uid, result))
-        except Exception as exc:
-            logger.exception("Transcription failed for job %s", job.uid)
-            _sync_put(result_queue, ("ERROR", job.uid, str(exc)))
-
+                try:
+                    if job.job_kind == "diarize":
+                        alias = job.requested_diarizer_alias
+                        if not alias:
+                            raise ValueError("Diarization job requires requested_diarizer_alias")
+                        diarizer = _get_or_create_diarizer(diarizers, alias)
+                        result = diarizer.diarize_file(job.temp_file_path)
+                    else:
+                        result = engine.transcribe_file(
+                            job.temp_file_path,
+                            language=job.params.get("language", "auto"),
+                            output_format=job.params.get("output_format", "txt"),
+                            with_timestamp=job.params.get("with_timestamp", False),
+                            use_itn=job.params.get("use_itn", True),
+                        )
+                    _sync_put(result_queue, ("RESULT", job.uid, result))
+                except Exception as exc:
+                    logger.exception("%s failed for job %s", job.job_kind.title(), job.uid)
+                    _sync_put(result_queue, ("ERROR", job.uid, str(exc)))
+        finally:
+            _release_diarizers(diarizers)
+    finally:
+        diarizers.clear()

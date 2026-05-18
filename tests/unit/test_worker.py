@@ -15,6 +15,20 @@ def _make_job(uid="job-1", path="/tmp/test.wav", params=None):
     )
 
 
+def _make_diarize_job(
+    uid="diarize-1",
+    path="/tmp/test.wav",
+    requested_diarizer_alias="sortformer-diar",
+):
+    return WorkerJob(
+        uid=uid,
+        temp_file_path=path,
+        params={},
+        job_kind="diarize",
+        requested_diarizer_alias=requested_diarizer_alias,
+    )
+
+
 class TestRunWorker:
     def test_sends_ready_after_load(self):
         """Worker must put READY on result_queue after engine.load() succeeds."""
@@ -109,3 +123,58 @@ class TestRunWorker:
         idle_exit = result_q.get_nowait()
         assert idle_exit == ("IDLE_EXIT", None)
         mock_engine.release.assert_called_once()
+
+    def test_diarizes_job_and_puts_result(self):
+        """Worker dispatches diarize jobs through the dedicated diarizer runtime."""
+        job_q = multiprocessing.Queue()
+        result_q = multiprocessing.Queue()
+
+        job = _make_diarize_job(uid="diarize-ok")
+        job_q.put(job)
+        job_q.put(None)
+
+        mock_engine = MagicMock()
+        mock_diarizer = MagicMock()
+        mock_diarizer.diarize_file.return_value = [
+            {"speaker": "Speaker 1", "start": 0.0, "end": 1.0},
+        ]
+
+        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
+            with patch("src.workers.model_worker.create_diarizer", return_value=mock_diarizer):
+                with pytest.raises(SystemExit):
+                    run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+
+        ready = result_q.get_nowait()
+        assert ready == ("READY", None)
+        result_msg = result_q.get_nowait()
+        assert result_msg == (
+            "RESULT",
+            "diarize-ok",
+            [{"speaker": "Speaker 1", "start": 0.0, "end": 1.0}],
+        )
+        mock_diarizer.diarize_file.assert_called_once_with("/tmp/test.wav")
+        mock_diarizer.release.assert_called_once()
+
+    def test_puts_error_on_diarization_failure(self):
+        """Worker puts ERROR when the dedicated diarizer raises."""
+        job_q = multiprocessing.Queue()
+        result_q = multiprocessing.Queue()
+
+        job = _make_diarize_job(uid="diarize-fail")
+        job_q.put(job)
+        job_q.put(None)
+
+        mock_engine = MagicMock()
+        mock_diarizer = MagicMock()
+        mock_diarizer.diarize_file.side_effect = RuntimeError("diarizer crashed")
+
+        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
+            with patch("src.workers.model_worker.create_diarizer", return_value=mock_diarizer):
+                with pytest.raises(SystemExit):
+                    run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+
+        result_q.get_nowait()  # READY
+        err_msg = result_q.get_nowait()
+        assert err_msg[0] == "ERROR"
+        assert err_msg[1] == "diarize-fail"
+        assert "diarizer crashed" in err_msg[2]
