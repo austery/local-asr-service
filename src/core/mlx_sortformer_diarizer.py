@@ -25,6 +25,7 @@ def _load_sortformer_runtime(model_id: str) -> _SortformerRuntime:
     load = vad_module.load
     return load(model_id)
 
+
 def _require_runtime_segment(segment: object) -> RuntimeDiarizationSegment:
     if not isinstance(segment, RuntimeDiarizationSegment):
         raise TypeError(

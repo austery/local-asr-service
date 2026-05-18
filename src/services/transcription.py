@@ -45,6 +45,8 @@ WorkerResultMessage = (
 WorkerMessage = WorkerStartupMessage | WorkerResultMessage
 PIPELINE_ALIGN_CHUNK_SECONDS = 300.0
 PIPELINE_ALIGN_OVERLAP_SECONDS = 15.0
+PIPELINE_PENDING_DRAIN_TIMEOUT_SECONDS = 30.0
+PIPELINE_PENDING_DRAIN_POLL_SECONDS = 0.01
 
 
 class TranscriptionService:
@@ -788,9 +790,21 @@ class TranscriptionService:
                 return turn.speaker
         return best_speaker
 
-    async def _wait_for_pending_work_to_drain(self) -> None:
+    async def _wait_for_pending_work_to_drain(
+        self,
+        *,
+        timeout_seconds: float = PIPELINE_PENDING_DRAIN_TIMEOUT_SECONDS,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
         while self._pending:
-            await asyncio.sleep(0.01)
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                pending_ids = ", ".join(sorted(self._pending))
+                raise RuntimeError(
+                    f"Timed out waiting for pending worker jobs to drain: {pending_ids}"
+                )
+            await asyncio.sleep(min(PIPELINE_PENDING_DRAIN_POLL_SECONDS, remaining))
 
     def _discard_request_state(self, request_id: str) -> None:
         future = self._pending.pop(request_id, None)

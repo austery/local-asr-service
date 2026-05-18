@@ -820,6 +820,18 @@ async def test_pipeline_waits_for_existing_pending_work_before_switching_models(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_pending_drain_times_out_instead_of_waiting_forever(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    loop = asyncio.get_running_loop()
+    svc._pending["stuck-request"] = loop.create_future()
+
+    with pytest.raises(RuntimeError, match="Timed out waiting for pending worker jobs"):
+        await svc._wait_for_pending_work_to_drain(timeout_seconds=0.01)
+
+    assert "stuck-request" in svc._pending
+
+
+@pytest.mark.asyncio
 async def test_restore_resident_model_raises_when_jobs_are_still_pending(funasr_spec):
     svc = _setup_service(funasr_spec)
     qwen_spec = lookup("qwen3-asr")

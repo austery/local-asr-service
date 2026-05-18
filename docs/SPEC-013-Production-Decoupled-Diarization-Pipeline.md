@@ -268,6 +268,10 @@ enablement. The remaining gaps are:
    stability and speaker-consistency criteria are met.
 6. 5-hour long-form validation has not run yet. Public enablement still requires
    truthful long-form evidence, not just the 10-minute probe.
+7. Align and diarize jobs still share the same worker process as the resident
+   ASR engine. This is acceptable while the profile is discovery-only, but
+   production enablement should evaluate a lighter worker mode or split worker
+   topology to reduce peak Apple Silicon UMA pressure.
 
 Immediate implementation priority:
 

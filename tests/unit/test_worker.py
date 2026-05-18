@@ -7,6 +7,10 @@ import pytest
 from src.workers.model_worker import WorkerJob, run_worker
 
 
+def _get_result(result_q):
+    return result_q.get(timeout=1.0)
+
+
 def _make_job(uid="job-1", path="/tmp/test.wav", params=None):
     return WorkerJob(
         uid=uid,
@@ -71,7 +75,7 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
-        msg = result_q.get_nowait()
+        msg = _get_result(result_q)
         assert msg == ("READY", None)
         mock_engine.load.assert_called_once()
 
@@ -89,7 +93,7 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
-        msg = result_q.get_nowait()
+        msg = _get_result(result_q)
         assert msg[0] == "LOAD_ERROR"
         assert "out of memory" in msg[1]
 
@@ -111,9 +115,9 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="funasr", model_id="para", idle_timeout=0)
 
-        ready = result_q.get_nowait()
+        ready = _get_result(result_q)
         assert ready == ("READY", None)
-        result_msg = result_q.get_nowait()
+        result_msg = _get_result(result_q)
         assert result_msg[0] == "RESULT"
         assert result_msg[1] == "abc-123"
 
@@ -135,8 +139,8 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="funasr", model_id="para", idle_timeout=0)
 
-        result_q.get_nowait()  # READY
-        err_msg = result_q.get_nowait()
+        _get_result(result_q)  # READY
+        err_msg = _get_result(result_q)
         assert err_msg[0] == "ERROR"
         assert err_msg[1] == "fail-1"
         assert "GPU crash" in err_msg[2]
@@ -155,9 +159,9 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="mlx", model_id="test", idle_timeout=0.01)
 
-        ready = result_q.get_nowait()
+        ready = _get_result(result_q)
         assert ready == ("READY", None)
-        idle_exit = result_q.get_nowait()
+        idle_exit = _get_result(result_q)
         assert idle_exit == ("IDLE_EXIT", None)
         mock_engine.release.assert_called_once()
 
@@ -183,9 +187,9 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
-        ready = result_q.get_nowait()
+        ready = _get_result(result_q)
         assert ready == ("READY", None)
-        result_msg = result_q.get_nowait()
+        result_msg = _get_result(result_q)
         assert result_msg == (
             "RESULT",
             "diarize-ok",
@@ -217,9 +221,9 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
-        ready = result_q.get_nowait()
+        ready = _get_result(result_q)
         assert ready == ("READY", None)
-        result_msg = result_q.get_nowait()
+        result_msg = _get_result(result_q)
         assert result_msg == (
             "RESULT",
             "align-ok",
@@ -255,8 +259,8 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
-        result_q.get_nowait()  # READY
-        err_msg = result_q.get_nowait()
+        _get_result(result_q)  # READY
+        err_msg = _get_result(result_q)
         assert err_msg[0] == "ERROR"
         assert err_msg[1] == "diarize-fail"
         assert "diarizer crashed" in err_msg[2]
@@ -278,8 +282,8 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
-        result_q.get_nowait()  # READY
-        err_msg = result_q.get_nowait()
+        _get_result(result_q)  # READY
+        err_msg = _get_result(result_q)
         assert err_msg[0] == "ERROR"
         assert err_msg[1] == "bad-kind"
         assert "Unsupported job_kind" in err_msg[2]
@@ -302,8 +306,8 @@ class TestRunWorker:
         ):
             run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
-        result_q.get_nowait()  # READY
-        err_msg = result_q.get_nowait()
+        _get_result(result_q)  # READY
+        err_msg = _get_result(result_q)
         assert err_msg[0] == "ERROR"
         assert err_msg[1] == "missing-alias"
         assert "requested_diarizer_alias" in err_msg[2]

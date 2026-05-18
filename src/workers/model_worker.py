@@ -9,14 +9,11 @@ Queues using a simple IPC protocol:
   ("ERROR", uid, str)      — job raised an exception
   ("IDLE_EXIT", None)      — idle timeout reached; process exits with code 0
 """
-import io
 import logging
-import pickle
 import queue
 import sys
 from dataclasses import dataclass, field
 from multiprocessing import Queue
-from multiprocessing.reduction import ForkingPickler
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -70,21 +67,9 @@ def create_aligner(alias: str) -> "AlignmentPort":
     raise ValueError(f"Unsupported alignment runtime: {spec.runtime}")
 
 
-def _sync_put(q: Queue, item: Any) -> None:
-    """Write directly to the queue's OS pipe, bypassing the async feeder thread.
-
-    multiprocessing.Queue.put() buffers items in a deque and drains them via a
-    background thread. In same-process tests, get_nowait() may be called before
-    the feeder thread has had a chance to flush. Writing straight to the
-    underlying Connection ensures data is available immediately.
-    """
-    buf = io.BytesIO()
-    ForkingPickler(buf, pickle.HIGHEST_PROTOCOL).dump(item)
-    # NOTE: Uses CPython internals (_writer) to bypass the feeder thread.
-    # This is only necessary in same-process unit tests where get_nowait()
-    # is called immediately after put(). In production (cross-process), the
-    # parent's blocking queue.get() has ample time for the feeder thread to flush.
-    q._writer.send_bytes(buf.getvalue())  # type: ignore[attr-defined]
+def _put_result(q: Queue, item: Any) -> None:
+    """Send a worker IPC message using the public Queue API."""
+    q.put(item)
 
 
 def _release_diarizers(diarizers: dict[str, "DiarizationPort"]) -> None:
@@ -154,10 +139,10 @@ def run_worker(
         engine = create_engine(engine_type, model_id)
         engine.load()
     except Exception as exc:
-        _sync_put(result_queue, ("LOAD_ERROR", str(exc)))
+        _put_result(result_queue, ("LOAD_ERROR", str(exc)))
         sys.exit(1)
 
-    _sync_put(result_queue, ("READY", None))
+    _put_result(result_queue, ("READY", None))
 
     get_timeout: float | None = idle_timeout if idle_timeout > 0 else None
     aligners: dict[str, AlignmentPort] = {}
@@ -173,7 +158,7 @@ def run_worker(
                         engine.release()
                     except Exception:
                         logger.warning("engine.release() failed during idle timeout — proceeding with IDLE_EXIT", exc_info=True)
-                    _sync_put(result_queue, ("IDLE_EXIT", None))
+                    _put_result(result_queue, ("IDLE_EXIT", None))
                     sys.exit(0)
 
                 if job is None:
@@ -217,10 +202,10 @@ def run_worker(
                         )
                     else:
                         raise ValueError(f"Unsupported job_kind: {job.job_kind}")
-                    _sync_put(result_queue, ("RESULT", job.uid, result))
+                    _put_result(result_queue, ("RESULT", job.uid, result))
                 except Exception as exc:
                     logger.exception("%s failed for job %s", job.job_kind.title(), job.uid)
-                    _sync_put(result_queue, ("ERROR", job.uid, str(exc)))
+                    _put_result(result_queue, ("ERROR", job.uid, str(exc)))
         finally:
             _release_aligners(aligners)
             _release_diarizers(diarizers)
