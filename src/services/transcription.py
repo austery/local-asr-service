@@ -455,14 +455,15 @@ class TranscriptionService:
     def _is_diarization_contract_error(exc: Exception) -> bool:
         if isinstance(exc, (NotImplementedError, TypeError, KeyError)):
             return True
-        return isinstance(exc, RuntimeError) and str(exc).startswith(
-            (
-                "Unsupported job_kind",
-                "Diarization job requires",
-                "Unsupported diarization runtime",
-                "Unknown diarization alias",
-            )
-        )
+        if not isinstance(exc, RuntimeError):
+            return False
+        message = str(exc)
+        return any(marker in message for marker in (
+            "Unsupported job_kind",
+            "Diarization job requires",
+            "Unsupported diarization runtime",
+            "Unknown diarization alias",
+        ))
 
     async def _stop_result_reader_task(self) -> None:
         task = self._result_reader_task

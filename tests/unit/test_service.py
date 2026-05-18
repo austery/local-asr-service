@@ -293,6 +293,37 @@ async def test_decoupled_pipeline_diarization_not_implemented_is_propagated(funa
 
 
 @pytest.mark.asyncio
+async def test_decoupled_pipeline_unknown_diarizer_alias_is_propagated(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = lookup_profile("qwen3-sortformer")
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
+        assert pipeline_reserved is True
+        return {"text": "hello world", "segments": [{"text": "hello", "start": 0.0, "end": 1.0}]}
+
+    async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
+        assert pipeline_reserved is True
+        raise RuntimeError("'Unknown diarization alias: \\'sortformer-typo\\''")
+
+    svc._transcribe_with_alias = fake_transcribe
+    svc._diarize_with_alias = fake_diarize
+    svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
+    svc._restore_resident_model = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="Unknown diarization alias"):
+        await svc._run_decoupled_pipeline(
+            "audio.wav",
+            {"output_format": "json"},
+            "req-pipeline",
+            profile,
+        )
+
+    svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
+
+
+@pytest.mark.asyncio
 async def test_decoupled_pipeline_segment_coercion_failure_returns_transcript_and_restores_model(funasr_spec):
     from src.core.pipeline_registry import lookup_profile
 
