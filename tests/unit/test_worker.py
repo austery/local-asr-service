@@ -1,7 +1,7 @@
 """Unit tests for model_worker subprocess entry point."""
-import queue
 import multiprocessing
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 from src.workers.model_worker import WorkerJob, run_worker
@@ -29,6 +29,20 @@ def _make_diarize_job(
     )
 
 
+def _make_align_job(
+    uid="align-1",
+    path="/tmp/test.wav",
+    requested_aligner_alias="qwen3-forced-aligner",
+):
+    return WorkerJob(
+        uid=uid,
+        temp_file_path=path,
+        params={"text": "hello world", "language": "English"},
+        job_kind="align",
+        requested_aligner_alias=requested_aligner_alias,
+    )
+
+
 def _make_custom_kind_job(
     uid="custom-kind-1",
     path="/tmp/test.wav",
@@ -51,9 +65,11 @@ class TestRunWorker:
 
         mock_engine = MagicMock()
 
-        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
-            with pytest.raises(SystemExit):
-                run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
         msg = result_q.get_nowait()
         assert msg == ("READY", None)
@@ -67,9 +83,11 @@ class TestRunWorker:
         mock_engine = MagicMock()
         mock_engine.load.side_effect = RuntimeError("out of memory")
 
-        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
-            with pytest.raises(SystemExit):
-                run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
         msg = result_q.get_nowait()
         assert msg[0] == "LOAD_ERROR"
@@ -87,9 +105,11 @@ class TestRunWorker:
         mock_engine = MagicMock()
         mock_engine.transcribe_file.return_value = {"text": "hello world", "segments": None}
 
-        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
-            with pytest.raises(SystemExit):
-                run_worker(job_q, result_q, engine_type="funasr", model_id="para", idle_timeout=0)
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="funasr", model_id="para", idle_timeout=0)
 
         ready = result_q.get_nowait()
         assert ready == ("READY", None)
@@ -109,9 +129,11 @@ class TestRunWorker:
         mock_engine = MagicMock()
         mock_engine.transcribe_file.side_effect = RuntimeError("GPU crash")
 
-        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
-            with pytest.raises(SystemExit):
-                run_worker(job_q, result_q, engine_type="funasr", model_id="para", idle_timeout=0)
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="funasr", model_id="para", idle_timeout=0)
 
         result_q.get_nowait()  # READY
         err_msg = result_q.get_nowait()
@@ -127,9 +149,11 @@ class TestRunWorker:
 
         mock_engine = MagicMock()
 
-        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
-            with pytest.raises(SystemExit):
-                run_worker(job_q, result_q, engine_type="mlx", model_id="test", idle_timeout=0.01)
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="mlx", model_id="test", idle_timeout=0.01)
 
         ready = result_q.get_nowait()
         assert ready == ("READY", None)
@@ -152,10 +176,12 @@ class TestRunWorker:
             {"speaker": "Speaker 1", "start": 0.0, "end": 1.0},
         ]
 
-        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
-            with patch("src.workers.model_worker.create_diarizer", return_value=mock_diarizer):
-                with pytest.raises(SystemExit):
-                    run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            patch("src.workers.model_worker.create_diarizer", return_value=mock_diarizer),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
         ready = result_q.get_nowait()
         assert ready == ("READY", None)
@@ -167,6 +193,47 @@ class TestRunWorker:
         )
         mock_diarizer.diarize_file.assert_called_once_with("/tmp/test.wav")
         mock_diarizer.release.assert_called_once()
+
+    def test_aligns_job_and_puts_result(self):
+        """Worker dispatches align jobs through the dedicated forced aligner runtime."""
+        job_q = multiprocessing.Queue()
+        result_q = multiprocessing.Queue()
+
+        job = _make_align_job(uid="align-ok")
+        job_q.put(job)
+        job_q.put(None)
+
+        mock_engine = MagicMock()
+        mock_aligner = MagicMock()
+        mock_aligner.align_file.return_value = [
+            {"text": "hello", "start": 0.0, "end": 0.5},
+            {"text": "world", "start": 0.5, "end": 1.0},
+        ]
+
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            patch("src.workers.model_worker.create_aligner", return_value=mock_aligner),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+
+        ready = result_q.get_nowait()
+        assert ready == ("READY", None)
+        result_msg = result_q.get_nowait()
+        assert result_msg == (
+            "RESULT",
+            "align-ok",
+            [
+                {"text": "hello", "start": 0.0, "end": 0.5},
+                {"text": "world", "start": 0.5, "end": 1.0},
+            ],
+        )
+        mock_aligner.align_file.assert_called_once_with(
+            "/tmp/test.wav",
+            text="hello world",
+            language="English",
+        )
+        mock_aligner.release.assert_called_once()
 
     def test_puts_error_on_diarization_failure(self):
         """Worker puts ERROR when the dedicated diarizer raises."""
@@ -181,10 +248,12 @@ class TestRunWorker:
         mock_diarizer = MagicMock()
         mock_diarizer.diarize_file.side_effect = RuntimeError("diarizer crashed")
 
-        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
-            with patch("src.workers.model_worker.create_diarizer", return_value=mock_diarizer):
-                with pytest.raises(SystemExit):
-                    run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            patch("src.workers.model_worker.create_diarizer", return_value=mock_diarizer),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
         result_q.get_nowait()  # READY
         err_msg = result_q.get_nowait()
@@ -203,9 +272,11 @@ class TestRunWorker:
 
         mock_engine = MagicMock()
 
-        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
-            with pytest.raises(SystemExit):
-                run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
         result_q.get_nowait()  # READY
         err_msg = result_q.get_nowait()
@@ -225,9 +296,11 @@ class TestRunWorker:
 
         mock_engine = MagicMock()
 
-        with patch("src.workers.model_worker.create_engine", return_value=mock_engine):
-            with pytest.raises(SystemExit):
-                run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
+        with (
+            patch("src.workers.model_worker.create_engine", return_value=mock_engine),
+            pytest.raises(SystemExit),
+        ):
+            run_worker(job_q, result_q, engine_type="mlx", model_id="test-model", idle_timeout=0)
 
         result_q.get_nowait()  # READY
         err_msg = result_q.get_nowait()

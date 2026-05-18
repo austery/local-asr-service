@@ -6,8 +6,8 @@ The API layer (routes.py) is tested in isolation; subprocess worker logic is cov
 by unit tests.
 """
 
-from io import BytesIO
 from dataclasses import replace
+from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest

@@ -1,7 +1,7 @@
 ---
 specId: SPEC-013
 title: Production Qwen3 + Sortformer Speaker Separation Pipeline
-status: 📝 重新切分中 (Rescoping)
+status: 🟡 实现中 (Implementation)
 priority: P1 - Core Feature
 creationDate: 2026-05-17
 lastUpdateDate: 2026-05-18
@@ -155,55 +155,67 @@ Additional intake from 2026-05-18 E2E debugging:
 
 ### Phase 1: Runtime Contract Intake
 
-- [ ] import the validated runtime assumptions from `SPEC-012`
-- [ ] define the exact worker request and response contract for diarization jobs
-- [ ] define the exact worker request and response contract for forced-alignment jobs
-- [ ] define how diarization results map into `SpeakerTurn`
-- [ ] define how forced-alignment results map into local word timestamp objects
+- [x] import the validated runtime assumptions from `SPEC-012`
+- [x] define the exact worker request and response contract for diarization jobs
+- [x] define the exact worker request and response contract for forced-alignment jobs
+- [x] define how diarization results map into `SpeakerTurn`
+- [x] define how forced-alignment results map into local word timestamp objects
 
 **Acceptance**: explicit ASR, forced-alignment, and diarization runtime contracts
 exist for the service to implement against.
 
 ### Phase 2: Worker IPC Extension
 
-- [ ] add a dedicated diarization job kind
-- [ ] add a dedicated forced-alignment job kind or a single composite pipeline job kind
-- [ ] add result handling for diarization output
-- [ ] add result handling for aligned word output
-- [ ] keep transcription and diarization execution paths explicit rather than overloaded
-- [ ] add unit coverage for diarization job lifecycle and error propagation
+- [x] add a dedicated diarization job kind
+- [x] add a dedicated forced-alignment job kind
+- [x] add result handling for diarization output
+- [x] add result handling for aligned word output
+- [x] keep transcription, forced-alignment, and diarization execution paths explicit rather than overloaded
+- [x] add unit coverage for diarization and forced-alignment job lifecycle and error propagation
 
 **Acceptance**: the subprocess worker can execute the required pipeline stages
 and return typed results.
 
 ### Phase 3: Pipeline Orchestration
 
-- [ ] implement serial ASR, forced alignment, then diarization orchestration in `TranscriptionService`
-- [ ] assign words to speakers using overlap or midpoint rules
-- [ ] merge adjacent words into readable speaker-labeled transcript segments
-- [ ] prevent concurrent requests from leaving the service resident on the wrong model
-- [ ] make restore behavior deterministic rather than best-effort
-- [ ] preserve cancellation-safe cleanup semantics
+- [x] implement serial ASR, forced alignment, then diarization orchestration in `TranscriptionService`
+- [x] assign words to speakers using overlap or midpoint rules
+- [x] merge adjacent words into readable speaker-labeled transcript segments
+- [x] prevent concurrent requests from leaving the service resident on the wrong model in unit-covered orchestration
+- [ ] validate restore behavior under real pipeline load
+- [x] preserve cancellation-safe cleanup semantics for composite request IDs
 
 **Acceptance**: pipeline execution produces speaker-labeled transcript segments
 from word timestamps and leaves the service in a correct post-request state.
 
 ### Phase 4: Public Enablement
 
-- [ ] enable requestable pipeline profiles only after integration coverage passes
-- [ ] return real speaker-labeled output on success
-- [ ] fail clearly on ASR, forced-alignment, diarization, or orchestration failure
-- [ ] update public model and pipeline documentation
+- [ ] enable requestable pipeline profiles only after integration and real-model E2E coverage passes
+- [ ] return real speaker-labeled output on success in real-model E2E
+- [x] fail clearly on ASR, forced-alignment, diarization, or orchestration failure
+- [x] update public model and pipeline documentation
 
 **Acceptance**: the service exposes a truthful requestable pipeline profile backed by real diarization execution.
 
 ## 7. Acceptance Criteria
 
-- [ ] AC-1: a dedicated diarization worker path exists
-- [ ] AC-2: a forced-alignment stage exists between Qwen3-ASR text and Sortformer speaker turns
-- [ ] AC-3: resident-model restoration becomes deterministic for pipeline requests
+- [x] AC-1: a dedicated diarization worker path exists
+- [x] AC-2: a forced-alignment stage exists between Qwen3-ASR text and Sortformer speaker turns
+- [ ] AC-3: resident-model restoration is validated under real pipeline requests
 - [ ] AC-4: requestable pipeline profiles return real speaker-labeled results or fail clearly
-- [ ] AC-5: integration and concurrency tests cover orchestration and failure modes
+- [x] AC-5: unit and integration tests cover orchestration and failure modes
+
+## 7.1 Current Implementation Status
+
+The current branch implements the non-public three-stage code path:
+
+- `AlignmentPort` and `AlignedWord` define the forced-alignment boundary.
+- `qwen3-forced-aligner` maps to `mlx-community/Qwen3-ForcedAligner-0.6B-8bit`.
+- `model_worker` supports explicit `transcribe`, `align`, and `diarize` job kinds.
+- `TranscriptionService` runs Qwen3-ASR text, forced alignment, Sortformer turns,
+  then groups adjacent aligned words by speaker.
+- `qwen3-sortformer` remains `requestable=False`; public API calls still return
+  501 until real-model E2E validates the path.
 
 ## 8. Affected Areas
 
@@ -224,6 +236,7 @@ from word timestamps and leaves the service in a correct post-request state.
 |------|--------|------|
 | 2026-05-17 | 🔵 待办 (Backlog) | Created as the production follow-up gated by SPEC-012 |
 | 2026-05-18 | 📝 重新切分中 (Rescoping) | E2E showed two-stage Qwen3-ASR + Sortformer is too coarse; rescope to Qwen3-ASR + Qwen3-ForcedAligner + Sortformer |
+| 2026-05-18 | 🟡 实现中 (Implementation) | Added forced-alignment port, worker align job, and unit-tested three-stage orchestration; profile remains discovery-only pending real-model E2E |
 
 ## 10. Related
 

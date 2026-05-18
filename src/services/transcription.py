@@ -11,6 +11,7 @@ from typing import Literal, TypedDict
 from fastapi import UploadFile
 
 from src.adapters.segment_alignment import align_speakers
+from src.core.alignment_port import AlignedWord
 from src.core.base_engine import EngineCapabilities
 from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import ModelSpec
@@ -180,7 +181,8 @@ class TranscriptionService:
         request_id: str,
         model_spec: ModelSpec | None,
         temp_dir: str | None = None,
-        job_kind: Literal["transcribe", "diarize"] = "transcribe",
+        job_kind: Literal["transcribe", "align", "diarize"] = "transcribe",
+        aligner_alias: str | None = None,
         diarizer_alias: str | None = None,
         pipeline_reserved: bool = False,
     ) -> object:
@@ -197,6 +199,7 @@ class TranscriptionService:
                     model_spec=model_spec,
                     temp_dir=temp_dir,
                     job_kind=job_kind,
+                    aligner_alias=aligner_alias,
                     diarizer_alias=diarizer_alias,
                 )
             else:
@@ -209,6 +212,7 @@ class TranscriptionService:
                         model_spec=model_spec,
                         temp_dir=temp_dir,
                         job_kind=job_kind,
+                        aligner_alias=aligner_alias,
                         diarizer_alias=diarizer_alias,
                     )
         except BaseException:
@@ -229,7 +233,8 @@ class TranscriptionService:
         request_id: str,
         model_spec: ModelSpec | None,
         temp_dir: str | None,
-        job_kind: Literal["transcribe", "diarize"],
+        job_kind: Literal["transcribe", "align", "diarize"],
+        aligner_alias: str | None,
         diarizer_alias: str | None,
     ) -> None:
         async with self._spawn_lock:
@@ -258,6 +263,7 @@ class TranscriptionService:
                 params=params,
                 job_kind=job_kind,
                 requested_model_spec_alias=model_spec.alias if model_spec is not None else None,
+                requested_aligner_alias=aligner_alias,
                 requested_diarizer_alias=diarizer_alias,
             ))
 
@@ -278,6 +284,28 @@ class TranscriptionService:
             pipeline_reserved=pipeline_reserved,
         )
         return self._coerce_transcription_result(result)
+
+    async def _align_with_alias(
+        self,
+        temp_file_path: str,
+        text: str,
+        language: str,
+        request_id: str,
+        alias: str,
+        pipeline_reserved: bool = False,
+    ) -> list[AlignedWord]:
+        result = await self._submit_worker_job(
+            temp_file_path=temp_file_path,
+            params={"text": text, "language": language},
+            request_id=f"{request_id}:align",
+            model_spec=None,
+            job_kind="align",
+            aligner_alias=alias,
+            pipeline_reserved=pipeline_reserved,
+        )
+        if not isinstance(result, list) or not all(isinstance(item, AlignedWord) for item in result):
+            raise TypeError("Expected alignment result as list[AlignedWord]")
+        return result
 
     async def _diarize_with_alias(
         self,
@@ -356,6 +384,26 @@ class TranscriptionService:
                 if not isinstance(transcript_result, dict):
                     return transcript_result
 
+                transcript_text = transcript_result.get("text")
+                if not isinstance(transcript_text, str) or not transcript_text.strip():
+                    self.logger.warning(
+                        "[%s] Decoupled pipeline has no transcript text to align for profile %s; returning transcript-only result",
+                        request_id,
+                        profile.alias,
+                    )
+                    return transcript_result
+
+                aligned_words: list[AlignedWord] | None = None
+                if profile.alignment_alias is not None:
+                    aligned_words = await self._align_with_alias(
+                        temp_file_path,
+                        transcript_text,
+                        self._resolve_alignment_language(params, transcript_result),
+                        request_id,
+                        profile.alignment_alias,
+                        pipeline_reserved=True,
+                    )
+
                 try:
                     speaker_turns = await self._diarize_with_alias(
                         temp_file_path,
@@ -375,6 +423,12 @@ class TranscriptionService:
                         exc,
                     )
                     return transcript_result
+
+                if aligned_words is not None:
+                    return {
+                        **transcript_result,
+                        "segments": self._align_words_to_speaker_segments(aligned_words, speaker_turns),
+                    }
 
                 segments = transcript_result.get("segments")
                 if not isinstance(segments, list) or not segments:
@@ -409,6 +463,114 @@ class TranscriptionService:
             raise TypeError("Expected transcription segments to be dictionaries")
         return segments
 
+    @staticmethod
+    def _resolve_alignment_language(
+        params: dict[str, object],
+        transcript_result: TranscriptionResultDict,
+    ) -> str:
+        language = params.get("language")
+        if isinstance(language, str) and language.strip().lower() != "auto":
+            return TranscriptionService._normalize_alignment_language(language)
+
+        detected_language = transcript_result.get("language")
+        if isinstance(detected_language, str) and detected_language.strip().lower() != "auto":
+            return TranscriptionService._normalize_alignment_language(detected_language)
+
+        return "English"
+
+    @staticmethod
+    def _normalize_alignment_language(language: str) -> str:
+        aliases = {
+            "en": "English",
+            "eng": "English",
+            "english": "English",
+            "zh": "Chinese",
+            "cn": "Chinese",
+            "zho": "Chinese",
+            "chinese": "Chinese",
+            "yue": "Cantonese",
+            "cantonese": "Cantonese",
+            "ja": "Japanese",
+            "japanese": "Japanese",
+            "ko": "Korean",
+            "korean": "Korean",
+            "de": "German",
+            "german": "German",
+            "es": "Spanish",
+            "spanish": "Spanish",
+            "fr": "French",
+            "french": "French",
+            "it": "Italian",
+            "italian": "Italian",
+            "pt": "Portuguese",
+            "portuguese": "Portuguese",
+            "ru": "Russian",
+            "russian": "Russian",
+        }
+        stripped = language.strip()
+        return aliases.get(stripped.lower(), stripped or "English")
+
+    @staticmethod
+    def _align_words_to_speaker_segments(
+        aligned_words: list[AlignedWord],
+        speaker_turns: list[SpeakerTurn],
+    ) -> list[dict[str, object]]:
+        segments: list[dict[str, object]] = []
+        current_speaker: str | None = None
+        current_words: list[str] = []
+        current_start = 0.0
+        current_end = 0.0
+
+        for word in aligned_words:
+            speaker = TranscriptionService._speaker_for_word(word, speaker_turns)
+            if current_speaker is None:
+                current_speaker = speaker
+                current_start = word.start
+            elif speaker != current_speaker and current_words:
+                segments.append({
+                    "id": len(segments),
+                    "speaker": current_speaker,
+                    "start": current_start,
+                    "end": current_end,
+                    "text": " ".join(current_words),
+                })
+                current_speaker = speaker
+                current_start = word.start
+                current_words = []
+
+            current_words.append(word.text)
+            current_end = word.end
+
+        if current_speaker is not None and current_words:
+            segments.append({
+                "id": len(segments),
+                "speaker": current_speaker,
+                "start": current_start,
+                "end": current_end,
+                "text": " ".join(current_words),
+            })
+
+        return segments
+
+    @staticmethod
+    def _speaker_for_word(word: AlignedWord, speaker_turns: list[SpeakerTurn]) -> str:
+        best_speaker = "Unknown"
+        best_overlap = 0.0
+        for turn in speaker_turns:
+            overlap = max(0.0, min(word.end, turn.end) - max(word.start, turn.start))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_speaker = turn.speaker
+
+        if best_overlap > 0:
+            return best_speaker
+
+        midpoint = (word.start + word.end) / 2
+        for turn in speaker_turns:
+            if turn.start <= midpoint <= turn.end:
+                return turn.speaker
+        return best_speaker
+
     async def _wait_for_pending_work_to_drain(self) -> None:
         while self._pending:
             await asyncio.sleep(0.01)
@@ -424,6 +586,7 @@ class TranscriptionService:
     def _discard_pipeline_request_state(self, request_id: str) -> None:
         self._discard_request_state(request_id)
         self._discard_request_state(f"{request_id}:transcribe")
+        self._discard_request_state(f"{request_id}:align")
         self._discard_request_state(f"{request_id}:diarize")
 
     async def _restore_resident_model(self, previous_spec: ModelSpec | None) -> None:
@@ -460,6 +623,9 @@ class TranscriptionService:
         message = str(exc)
         return any(marker in message for marker in (
             "Unsupported job_kind",
+            "Alignment job requires",
+            "Unsupported alignment runtime",
+            "Unknown alignment alias",
             "Diarization job requires",
             "Unsupported diarization runtime",
             "Unknown diarization alias",

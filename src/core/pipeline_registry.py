@@ -7,6 +7,7 @@ from src.core.base_engine import EngineCapabilities
 class PipelineProfile:
     alias: str
     transcription_alias: str
+    alignment_alias: str | None
     diarization_alias: str
     description: str
     capabilities: EngineCapabilities
@@ -17,6 +18,7 @@ _REGISTRY: dict[str, PipelineProfile] = {
     "qwen3-sortformer": PipelineProfile(
         alias="qwen3-sortformer",
         transcription_alias="qwen3-asr",
+        alignment_alias="qwen3-forced-aligner",
         diarization_alias="sortformer-diar",
         description=(
             "Experimental Qwen3-ASR plus Sortformer speaker-separation pipeline. "

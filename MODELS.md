@@ -17,7 +17,7 @@
 
 | Alias | Components | Requestable | Notes |
 |-------|------------|:-----------:|-------|
-| `qwen3-sortformer` | `qwen3-asr` + `qwen3-forced-aligner` + `sortformer-diar` | Experimental | Target Apple-native batch speaker-separation pipeline. Do not treat the current two-stage ASR+Sortformer path as production speaker labeling. |
+| `qwen3-sortformer` | `qwen3-asr` + `qwen3-forced-aligner` + `sortformer-diar` | ❌ discovery-only | Apple-native batch speaker-separation pipeline under validation. Three-stage orchestration exists in unit-tested code, but the profile must stay non-requestable until real-model E2E passes. |
 
 ---
 
@@ -71,8 +71,10 @@ The project registers models by runtime contract, not by vendor name.
 `qwen3-sortformer` is not just "Qwen3-ASR segments plus Sortformer." Local E2E
 testing showed Qwen3-ASR emits chunk-level segments for the tested English
 samples, which is too coarse for truthful speaker-labeled transcript output.
-The production direction is a three-stage pipeline: Qwen3-ASR text,
-Qwen3-ForcedAligner word timestamps, and Sortformer speaker turns.
+The implementation direction is now a three-stage pipeline: Qwen3-ASR text,
+Qwen3-ForcedAligner word timestamps, and Sortformer speaker turns. Keep the
+profile discovery-only until the three-stage path is validated against real
+audio fixtures with real MLX runtimes.
 
 ---
 

@@ -20,6 +20,7 @@ from multiprocessing.reduction import ForkingPickler
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
+    from src.core.alignment_port import AlignmentPort
     from src.core.base_engine import ASREngine
     from src.core.diarization_port import DiarizationPort
 
@@ -33,8 +34,9 @@ class WorkerJob:
     uid: str
     temp_file_path: str
     params: dict[str, Any]
-    job_kind: Literal["transcribe", "diarize"] = field(default="transcribe")
+    job_kind: Literal["transcribe", "align", "diarize"] = field(default="transcribe")
     requested_model_spec_alias: str | None = field(default=None)
+    requested_aligner_alias: str | None = field(default=None)
     requested_diarizer_alias: str | None = field(default=None)
 
 
@@ -55,6 +57,17 @@ def create_diarizer(alias: str) -> "DiarizationPort":
     if spec.runtime == "mlx":
         return MlxSortformerDiarizer(model_id=spec.model_id)
     raise ValueError(f"Unsupported diarization runtime: {spec.runtime}")
+
+
+def create_aligner(alias: str) -> "AlignmentPort":
+    """Construct an aligner from the registry alias."""
+    from src.core.alignment_registry import lookup_aligner  # noqa: PLC0415
+    from src.core.mlx_qwen_forced_aligner import MlxQwenForcedAligner  # noqa: PLC0415
+
+    spec = lookup_aligner(alias)
+    if spec.runtime == "mlx":
+        return MlxQwenForcedAligner(model_id=spec.model_id)
+    raise ValueError(f"Unsupported alignment runtime: {spec.runtime}")
 
 
 def _sync_put(q: Queue, item: Any) -> None:
@@ -82,6 +95,14 @@ def _release_diarizers(diarizers: dict[str, "DiarizationPort"]) -> None:
             logger.warning("diarizer.release() failed during worker cleanup for %s", alias, exc_info=True)
 
 
+def _release_aligners(aligners: dict[str, "AlignmentPort"]) -> None:
+    for alias, aligner in aligners.items():
+        try:
+            aligner.release()
+        except Exception:
+            logger.warning("aligner.release() failed during worker cleanup for %s", alias, exc_info=True)
+
+
 def _get_or_create_diarizer(
     diarizers: dict[str, "DiarizationPort"],
     alias: str,
@@ -92,6 +113,18 @@ def _get_or_create_diarizer(
         diarizer.load()
         diarizers[alias] = diarizer
     return diarizer
+
+
+def _get_or_create_aligner(
+    aligners: dict[str, "AlignmentPort"],
+    alias: str,
+) -> "AlignmentPort":
+    aligner = aligners.get(alias)
+    if aligner is None:
+        aligner = create_aligner(alias)
+        aligner.load()
+        aligners[alias] = aligner
+    return aligner
 
 
 def run_worker(
@@ -127,6 +160,7 @@ def run_worker(
     _sync_put(result_queue, ("READY", None))
 
     get_timeout: float | None = idle_timeout if idle_timeout > 0 else None
+    aligners: dict[str, AlignmentPort] = {}
     diarizers: dict[str, DiarizationPort] = {}
 
     try:
@@ -157,6 +191,22 @@ def run_worker(
                             raise ValueError("Diarization job requires requested_diarizer_alias")
                         diarizer = _get_or_create_diarizer(diarizers, alias)
                         result = diarizer.diarize_file(job.temp_file_path)
+                    elif job.job_kind == "align":
+                        alias = job.requested_aligner_alias
+                        if not alias:
+                            raise ValueError("Alignment job requires requested_aligner_alias")
+                        text = job.params.get("text")
+                        if not isinstance(text, str) or not text.strip():
+                            raise ValueError("Alignment job requires non-empty text")
+                        language = job.params.get("language", "English")
+                        if not isinstance(language, str):
+                            raise ValueError("Alignment job language must be a string")
+                        aligner = _get_or_create_aligner(aligners, alias)
+                        result = aligner.align_file(
+                            job.temp_file_path,
+                            text=text,
+                            language=language,
+                        )
                     elif job.job_kind == "transcribe":
                         result = engine.transcribe_file(
                             job.temp_file_path,
@@ -172,6 +222,8 @@ def run_worker(
                     logger.exception("%s failed for job %s", job.job_kind.title(), job.uid)
                     _sync_put(result_queue, ("ERROR", job.uid, str(exc)))
         finally:
+            _release_aligners(aligners)
             _release_diarizers(diarizers)
     finally:
+        aligners.clear()
         diarizers.clear()
