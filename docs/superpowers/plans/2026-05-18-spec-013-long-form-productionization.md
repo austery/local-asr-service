@@ -622,128 +622,7 @@ git commit -m "feat: add chunked forced-alignment orchestration"
 
 ---
 
-### Task 6: Route Long-Form Pipeline Through Chunked Path
-
-**Files:**
-- Modify: `src/services/transcription.py`
-- Test: `tests/unit/test_service.py`
-
-- [ ] **Step 1: Write failing test for long-form routing**
-
-Append to `tests/unit/test_service.py`:
-
-```python
-@pytest.mark.asyncio
-async def test_long_form_pipeline_should_use_chunked_alignment_path(funasr_spec):
-    from src.core.pipeline_registry import lookup_profile
-
-    svc = _setup_service(funasr_spec)
-    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
-    transcript = {"text": "hello world", "segments": None, "duration": 1800.0, "language": "en"}
-
-    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
-        return transcript
-
-    async def fake_align_chunks(**kwargs):
-        return [AlignedWord(text="hello", start=10.0, end=10.5), AlignedWord(text="world", start=900.0, end=900.5)]
-
-    async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
-        return [SpeakerTurn(speaker="Speaker 0", start=0.0, end=1800.0)]
-
-    svc._transcribe_with_alias = fake_transcribe
-    svc._align_chunks_with_alias = AsyncMock(side_effect=fake_align_chunks)
-    svc._diarize_with_alias = fake_diarize
-    svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
-    svc._restore_resident_model = AsyncMock()
-
-    result = await svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req", profile)
-
-    assert svc._align_chunks_with_alias.await_count == 1
-    assert result["segments"] == [
-        {"id": 0, "speaker": "Speaker 0", "start": 10.0, "end": 900.5, "text": "hello world"}
-    ]
-```
-
-- [ ] **Step 2: Run the test to verify RED**
-
-Run:
-
-```bash
-uv run python -m pytest tests/unit/test_service.py -q -k long_form_pipeline
-```
-
-Expected: fails because `_run_decoupled_pipeline` always calls single-file `_align_with_alias`.
-
-- [ ] **Step 3: Implement minimal long-form routing**
-
-Add constants near the top of `src/services/transcription.py`:
-
-```python
-PIPELINE_ALIGN_CHUNK_SECONDS = 300.0
-PIPELINE_ALIGN_OVERLAP_SECONDS = 15.0
-```
-
-Add import:
-
-```python
-from src.adapters.pipeline_chunking import build_chunk_plan
-```
-
-Inside `_run_decoupled_pipeline`, replace the single alignment call with:
-
-```python
-                if profile.alignment_alias is not None:
-                    duration = transcript_result.get("duration")
-                    if isinstance(duration, int | float) and duration > PIPELINE_ALIGN_CHUNK_SECONDS:
-                        windows = build_chunk_plan(
-                            duration_seconds=float(duration),
-                            chunk_seconds=PIPELINE_ALIGN_CHUNK_SECONDS,
-                            overlap_seconds=PIPELINE_ALIGN_OVERLAP_SECONDS,
-                        )
-                        chunk_paths = [temp_file_path for _ in windows]
-                        chunk_texts = [transcript_text for _ in windows]
-                        aligned_words = await self._align_chunks_with_alias(
-                            chunk_paths=chunk_paths,
-                            chunk_texts=chunk_texts,
-                            windows=windows,
-                            language=self._resolve_alignment_language(params, transcript_result),
-                            request_id=request_id,
-                            alias=profile.alignment_alias,
-                            pipeline_reserved=True,
-                        )
-                    else:
-                        aligned_words = await self._align_with_alias(
-                            temp_file_path,
-                            transcript_text,
-                            self._resolve_alignment_language(params, transcript_result),
-                            request_id,
-                            profile.alignment_alias,
-                            pipeline_reserved=True,
-                        )
-```
-
-This is intentionally minimal and should be refined in Task 7 to extract real audio chunks and per-chunk text. The test locks routing only.
-
-- [ ] **Step 4: Verify GREEN**
-
-Run:
-
-```bash
-uv run python -m pytest tests/unit/test_service.py -q -k long_form_pipeline
-```
-
-Expected: test passes.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/services/transcription.py tests/unit/test_service.py
-git commit -m "feat: route long-form pipeline through chunked alignment"
-```
-
----
-
-### Task 7: Add Real Audio Chunk Extraction and Per-Chunk Text Strategy
+### Task 6: Add Real Audio Chunk Extraction in Service
 
 **Files:**
 - Modify: `src/services/transcription.py`
@@ -812,34 +691,17 @@ Ensure `__init__` has an audio chunker instance:
 
 If constructing `AudioChunkingService()` in tests triggers ffmpeg checks, patch `_check_ffmpeg_availability` in the affected tests or lazily instantiate the chunker in `_get_audio_chunker()`.
 
-- [ ] **Step 4: Add a conservative per-chunk text strategy**
-
-For the first productionization pass, do not attempt semantic text slicing without word timestamps. Use the whole transcript for each chunk only as a temporary bridge if E2E proves acceptable; otherwise replace with per-chunk ASR in Task 8.
-
-Add a method:
-
-```python
-    def _build_alignment_texts_for_chunks(
-        self,
-        transcript_text: str,
-        windows: list[ChunkWindow],
-    ) -> list[str]:
-        return [transcript_text for _ in windows]
-```
-
-This method is intentionally isolated so Task 8 can replace it with per-chunk ASR output without changing the rest of the pipeline.
-
-- [ ] **Step 5: Verify GREEN**
+- [ ] **Step 4: Verify GREEN**
 
 Run:
 
 ```bash
-uv run python -m pytest tests/unit/test_service.py -q -k "extract_chunk_files or long_form_pipeline"
+uv run python -m pytest tests/unit/test_service.py -q -k extract_chunk_files
 ```
 
 Expected: tests pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/services/transcription.py tests/unit/test_service.py
@@ -848,7 +710,7 @@ git commit -m "feat: extract pipeline audio chunks for long-form alignment"
 
 ---
 
-### Task 8: Replace Whole-Transcript Chunk Alignment With Per-Chunk ASR Text
+### Task 7: Add Per-Chunk ASR Text
 
 **Files:**
 - Modify: `src/services/transcription.py`
@@ -931,25 +793,154 @@ Add method to `TranscriptionService`:
         return texts
 ```
 
-- [ ] **Step 4: Wire long-form path to chunk ASR**
-
-In the long-form branch of `_run_decoupled_pipeline`, use `_transcribe_chunks_with_alias(...)` to produce `chunk_texts` before `_align_chunks_with_alias(...)`.
-
-- [ ] **Step 5: Verify GREEN**
+- [ ] **Step 4: Verify GREEN**
 
 Run:
 
 ```bash
-uv run python -m pytest tests/unit/test_service.py -q -k "transcribe_each_chunk or long_form_pipeline"
+uv run python -m pytest tests/unit/test_service.py -q -k transcribe_each_chunk
 ```
 
 Expected: tests pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/services/transcription.py tests/unit/test_service.py
 git commit -m "feat: align long-form chunks with per-chunk qwen transcripts"
+```
+
+---
+
+### Task 8: Route Long-Form Pipeline Through Real Chunked ASR and Alignment
+
+**Files:**
+- Modify: `src/services/transcription.py`
+- Test: `tests/unit/test_service.py`
+
+- [ ] **Step 1: Write failing test for long-form routing**
+
+Append to `tests/unit/test_service.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunks(funasr_spec, tmp_path):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    transcript = {"text": "full text", "segments": None, "duration": 600.0, "language": "en"}
+
+    extracted_windows: list[ChunkWindow] = []
+
+    def fake_extract_chunks(temp_file_path, temp_dir, windows):
+        extracted_windows.extend(windows)
+        return [str(tmp_path / f"chunk_{window.index:03d}.wav") for window in windows]
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
+        return transcript
+
+    async def fake_transcribe_chunks(**kwargs):
+        return [f"text {index}" for index, _path in enumerate(kwargs["chunk_paths"])]
+
+    async def fake_align_chunks(**kwargs):
+        return [AlignedWord(text="hello", start=10.0, end=10.5)]
+
+    async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
+        return [SpeakerTurn(speaker="Speaker 0", start=0.0, end=600.0)]
+
+    svc._extract_pipeline_chunks = fake_extract_chunks
+    svc._transcribe_with_alias = fake_transcribe
+    svc._transcribe_chunks_with_alias = AsyncMock(side_effect=fake_transcribe_chunks)
+    svc._align_chunks_with_alias = AsyncMock(side_effect=fake_align_chunks)
+    svc._diarize_with_alias = fake_diarize
+    svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
+    svc._restore_resident_model = AsyncMock()
+
+    result = await svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req", profile)
+
+    assert extracted_windows
+    assert svc._transcribe_chunks_with_alias.await_count == 1
+    assert svc._align_chunks_with_alias.await_count == 1
+    assert result["segments"] == [
+        {"id": 0, "speaker": "Speaker 0", "start": 10.0, "end": 10.5, "text": "hello"}
+    ]
+```
+
+- [ ] **Step 2: Run the test to verify RED**
+
+Run:
+
+```bash
+uv run python -m pytest tests/unit/test_service.py -q -k long_form_pipeline
+```
+
+Expected: fails because `_run_decoupled_pipeline` still uses single-file alignment for long audio.
+
+- [ ] **Step 3: Implement long-form routing with real chunks**
+
+Add constants near the top of `src/services/transcription.py`:
+
+```python
+PIPELINE_ALIGN_CHUNK_SECONDS = 300.0
+PIPELINE_ALIGN_OVERLAP_SECONDS = 15.0
+```
+
+Add import:
+
+```python
+from src.adapters.pipeline_chunking import build_chunk_plan
+```
+
+Inside `_run_decoupled_pipeline`, use this branch when `duration > PIPELINE_ALIGN_CHUNK_SECONDS`:
+
+```python
+                        windows = build_chunk_plan(
+                            duration_seconds=float(duration),
+                            chunk_seconds=PIPELINE_ALIGN_CHUNK_SECONDS,
+                            overlap_seconds=PIPELINE_ALIGN_OVERLAP_SECONDS,
+                        )
+                        temp_dir = tempfile.mkdtemp(prefix="asr_pipeline_chunks_")
+                        try:
+                            chunk_paths = self._extract_pipeline_chunks(temp_file_path, temp_dir, windows)
+                            chunk_texts = await self._transcribe_chunks_with_alias(
+                                chunk_paths=chunk_paths,
+                                windows=windows,
+                                params=params,
+                                request_id=request_id,
+                                alias=profile.transcription_alias,
+                                pipeline_reserved=True,
+                            )
+                            aligned_words = await self._align_chunks_with_alias(
+                                chunk_paths=chunk_paths,
+                                chunk_texts=chunk_texts,
+                                windows=windows,
+                                language=self._resolve_alignment_language(params, transcript_result),
+                                request_id=request_id,
+                                alias=profile.alignment_alias,
+                                pipeline_reserved=True,
+                            )
+                        finally:
+                            shutil.rmtree(temp_dir, ignore_errors=True)
+```
+
+Do not pass the original full audio path into `_align_chunks_with_alias` for long-form audio.
+
+- [ ] **Step 4: Verify GREEN**
+
+Run:
+
+```bash
+uv run python -m pytest tests/unit/test_service.py -q -k long_form_pipeline
+```
+
+Expected: test passes.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/services/transcription.py tests/unit/test_service.py
+git commit -m "feat: route long-form pipeline through real chunks"
 ```
 
 ---
