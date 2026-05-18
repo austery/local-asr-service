@@ -11,7 +11,11 @@ class _SortformerRuntime(Protocol):
         *,
         threshold: float,
         verbose: bool,
-    ) -> list[RuntimeDiarizationSegment]: ...
+    ) -> "_RuntimeDiarizationOutput": ...
+
+
+class _RuntimeDiarizationOutput(Protocol):
+    segments: list[RuntimeDiarizationSegment]
 
 
 def _load_sortformer_runtime(model_id: str) -> _SortformerRuntime:
@@ -40,8 +44,8 @@ class MlxSortformerDiarizer(DiarizationPort):
         if self._runtime is None:
             raise RuntimeError("Diarizer not loaded. Call load() first.")
 
-        segments = self._runtime.generate(file_path, threshold=0.5, verbose=False)
-        return [self._to_speaker_turn(segment) for segment in segments]
+        output = self._runtime.generate(file_path, threshold=0.5, verbose=False)
+        return [self._to_speaker_turn(segment) for segment in output.segments]
 
     def release(self) -> None:
         self._runtime = None
