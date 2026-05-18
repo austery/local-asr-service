@@ -14,7 +14,9 @@ from src.adapters.audio_chunking import AudioChunkingService
 from src.adapters.pipeline_chunking import (
     ChunkWindow,
     build_chunk_plan,
+    offset_turns_to_global_timeline,
     offset_words_to_global_timeline,
+    validate_aligned_word_quality,
 )
 from src.adapters.segment_alignment import align_speakers
 from src.core.alignment_port import AlignedWord
@@ -392,6 +394,31 @@ class TranscriptionService:
             paths.append(chunker.extract_pipeline_chunk(temp_file_path, output_path, window))
         return paths
 
+    async def _diarize_chunks_with_alias(
+        self,
+        *,
+        chunk_paths: list[str],
+        windows: list[ChunkWindow],
+        request_id: str,
+        alias: str,
+        pipeline_reserved: bool,
+    ) -> list[SpeakerTurn]:
+        if len(chunk_paths) != len(windows):
+            raise ValueError("chunk_paths and windows must have the same length")
+
+        # SPEC-013: local Sortformer labels are chunk-local. Public enablement
+        # requires validated cross-chunk speaker reconciliation.
+        merged: list[SpeakerTurn] = []
+        for chunk_path, window in zip(chunk_paths, windows, strict=True):
+            turns = await self._diarize_with_alias(
+                chunk_path,
+                f"{request_id}:chunk-{window.index}",
+                alias,
+                pipeline_reserved=pipeline_reserved,
+            )
+            merged.extend(offset_turns_to_global_timeline(turns, window))
+        return merged
+
     async def _diarize_with_alias(
         self,
         temp_file_path: str,
@@ -454,6 +481,7 @@ class TranscriptionService:
         async with self._pipeline_lock:
             await self._wait_for_pending_work_to_drain()
             previous_spec = self._current_model_spec
+            pipeline_temp_dir: str | None = None
             try:
                 target_spec = self._lookup_model_spec(profile.transcription_alias)
                 if self._current_model_spec != target_spec:
@@ -479,6 +507,8 @@ class TranscriptionService:
                     return transcript_result
 
                 aligned_words: list[AlignedWord] | None = None
+                pipeline_chunk_paths: list[str] | None = None
+                pipeline_windows: list[ChunkWindow] | None = None
                 if profile.alignment_alias is not None:
                     alignment_language = self._resolve_alignment_language(params, transcript_result)
                     duration = transcript_result.get("duration")
@@ -492,28 +522,31 @@ class TranscriptionService:
                             chunk_seconds=PIPELINE_ALIGN_CHUNK_SECONDS,
                             overlap_seconds=PIPELINE_ALIGN_OVERLAP_SECONDS,
                         )
-                        temp_dir = tempfile.mkdtemp(prefix="asr_pipeline_chunks_")
-                        try:
-                            chunk_paths = self._extract_pipeline_chunks(temp_file_path, temp_dir, windows)
-                            chunk_texts = await self._transcribe_chunks_with_alias(
-                                chunk_paths=chunk_paths,
-                                windows=windows,
-                                params=params,
-                                request_id=request_id,
-                                alias=profile.transcription_alias,
-                                pipeline_reserved=True,
-                            )
-                            aligned_words = await self._align_chunks_with_alias(
-                                chunk_paths=chunk_paths,
-                                chunk_texts=chunk_texts,
-                                windows=windows,
-                                language=alignment_language,
-                                request_id=request_id,
-                                alias=profile.alignment_alias,
-                                pipeline_reserved=True,
-                            )
-                        finally:
-                            shutil.rmtree(temp_dir, ignore_errors=True)
+                        pipeline_temp_dir = tempfile.mkdtemp(prefix="asr_pipeline_chunks_")
+                        chunk_paths = self._extract_pipeline_chunks(
+                            temp_file_path,
+                            pipeline_temp_dir,
+                            windows,
+                        )
+                        pipeline_chunk_paths = chunk_paths
+                        pipeline_windows = windows
+                        chunk_texts = await self._transcribe_chunks_with_alias(
+                            chunk_paths=chunk_paths,
+                            windows=windows,
+                            params=params,
+                            request_id=request_id,
+                            alias=profile.transcription_alias,
+                            pipeline_reserved=True,
+                        )
+                        aligned_words = await self._align_chunks_with_alias(
+                            chunk_paths=chunk_paths,
+                            chunk_texts=chunk_texts,
+                            windows=windows,
+                            language=alignment_language,
+                            request_id=request_id,
+                            alias=profile.alignment_alias,
+                            pipeline_reserved=True,
+                        )
                     else:
                         aligned_words = await self._align_with_alias(
                             temp_file_path,
@@ -524,13 +557,33 @@ class TranscriptionService:
                             pipeline_reserved=True,
                         )
 
+                if aligned_words is not None:
+                    duration_for_quality = transcript_result.get("duration")
+                    if (
+                        isinstance(duration_for_quality, int | float)
+                        and not isinstance(duration_for_quality, bool)
+                    ):
+                        validate_aligned_word_quality(
+                            aligned_words,
+                            expected_duration_seconds=float(duration_for_quality),
+                        )
+
                 try:
-                    speaker_turns = await self._diarize_with_alias(
-                        temp_file_path,
-                        request_id,
-                        profile.diarization_alias,
-                        pipeline_reserved=True,
-                    )
+                    if pipeline_chunk_paths is not None and pipeline_windows is not None:
+                        speaker_turns = await self._diarize_chunks_with_alias(
+                            chunk_paths=pipeline_chunk_paths,
+                            windows=pipeline_windows,
+                            request_id=request_id,
+                            alias=profile.diarization_alias,
+                            pipeline_reserved=True,
+                        )
+                    else:
+                        speaker_turns = await self._diarize_with_alias(
+                            temp_file_path,
+                            request_id,
+                            profile.diarization_alias,
+                            pipeline_reserved=True,
+                        )
                 except Exception as exc:
                     if self._is_worker_lifecycle_error(exc):
                         raise
@@ -575,6 +628,8 @@ class TranscriptionService:
 
                 return {**transcript_result, "segments": aligned_segments}
             finally:
+                if pipeline_temp_dir is not None:
+                    shutil.rmtree(pipeline_temp_dir, ignore_errors=True)
                 await self._restore_resident_model(previous_spec)
 
     @staticmethod

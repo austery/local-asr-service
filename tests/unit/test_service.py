@@ -360,7 +360,11 @@ async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunk
         assert temp_file_path == "audio.wav"
         assert temp_dir
         extracted_windows.extend(windows)
-        return [str(tmp_path / f"chunk_{window.index:03d}.wav") for window in windows]
+        paths = [os.path.join(temp_dir, f"chunk_{window.index:03d}.wav") for window in windows]
+        for path in paths:
+            with open(path, "wb") as handle:
+                handle.write(b"chunk")
+        return paths
 
     async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
         assert temp_file_path == "audio.wav"
@@ -373,7 +377,9 @@ async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunk
         assert kwargs["chunk_texts"] == ["text 0", "text 1", "text 2"]
         return [AlignedWord(text="hello", start=10.0, end=10.5)]
 
-    async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
+    async def fake_diarize_chunks(**kwargs):
+        assert len(kwargs["chunk_paths"]) == 3
+        assert all(os.path.exists(path) for path in kwargs["chunk_paths"])
         return [SpeakerTurn(speaker="Speaker 0", start=0.0, end=600.0)]
 
     svc._extract_pipeline_chunks = fake_extract_chunks
@@ -381,7 +387,8 @@ async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunk
     svc._align_with_alias = AsyncMock(side_effect=AssertionError("must not use single-file align"))
     svc._transcribe_chunks_with_alias = AsyncMock(side_effect=fake_transcribe_chunks)
     svc._align_chunks_with_alias = AsyncMock(side_effect=fake_align_chunks)
-    svc._diarize_with_alias = fake_diarize
+    svc._diarize_with_alias = AsyncMock(side_effect=AssertionError("must not use single-file diarize"))
+    svc._diarize_chunks_with_alias = AsyncMock(side_effect=fake_diarize_chunks)
     svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
     svc._restore_resident_model = AsyncMock()
 
@@ -390,9 +397,85 @@ async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunk
     assert extracted_windows
     assert svc._transcribe_chunks_with_alias.await_count == 1
     assert svc._align_chunks_with_alias.await_count == 1
+    assert svc._diarize_chunks_with_alias.await_count == 1
     assert result["segments"] == [
         {"id": 0, "speaker": "Speaker 0", "start": 10.0, "end": 10.5, "text": "hello"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_chunked_diarization_should_offset_turns_and_drop_overlap(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    windows = [
+        ChunkWindow(index=0, start=0.0, end=300.0, emit_start=0.0, emit_end=285.0),
+        ChunkWindow(index=1, start=270.0, end=600.0, emit_start=285.0, emit_end=600.0),
+    ]
+
+    async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
+        if temp_file_path.endswith("chunk_000.wav"):
+            return [SpeakerTurn(speaker="Speaker 0", start=10.0, end=20.0)]
+        return [
+            SpeakerTurn(speaker="Speaker 0", start=1.0, end=2.0),
+            SpeakerTurn(speaker="Speaker 1", start=20.0, end=30.0),
+        ]
+
+    svc._diarize_with_alias = fake_diarize
+
+    result = await svc._diarize_chunks_with_alias(
+        chunk_paths=["/tmp/chunk_000.wav", "/tmp/chunk_001.wav"],
+        windows=windows,
+        request_id="req",
+        alias="sortformer-diar",
+        pipeline_reserved=True,
+    )
+
+    assert result == [
+        SpeakerTurn(speaker="Speaker 0", start=10.0, end=20.0),
+        SpeakerTurn(speaker="Speaker 1", start=290.0, end=300.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_should_fail_loudly_when_alignment_quality_gate_fails(funasr_spec, tmp_path):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    collapsed = [AlignedWord(text=f"w{i}", start=245.04, end=245.04) for i in range(12)]
+
+    def fake_extract_chunks(temp_file_path, temp_dir, windows):
+        paths = [os.path.join(temp_dir, f"chunk_{window.index:03d}.wav") for window in windows]
+        for path in paths:
+            with open(path, "wb") as handle:
+                handle.write(b"chunk")
+        return paths
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
+        return {
+            "text": " ".join(word.text for word in collapsed),
+            "segments": None,
+            "duration": 600.0,
+            "language": "en",
+        }
+
+    async def fake_transcribe_chunks(**kwargs):
+        return [" ".join(word.text for word in collapsed)]
+
+    async def fake_align_chunks(**kwargs):
+        return collapsed
+
+    svc._extract_pipeline_chunks = fake_extract_chunks
+    svc._transcribe_with_alias = fake_transcribe
+    svc._transcribe_chunks_with_alias = AsyncMock(side_effect=fake_transcribe_chunks)
+    svc._align_chunks_with_alias = AsyncMock(side_effect=fake_align_chunks)
+    svc._diarize_chunks_with_alias = AsyncMock(
+        side_effect=AssertionError("must not diarize failed alignment")
+    )
+    svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
+    svc._restore_resident_model = AsyncMock()
+
+    with pytest.raises(ValueError, match="alignment quality gate failed"):
+        await svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req", profile)
 
 
 @pytest.mark.asyncio

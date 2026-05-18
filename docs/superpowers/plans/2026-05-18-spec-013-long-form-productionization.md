@@ -951,7 +951,7 @@ git commit -m "feat: route long-form pipeline through real chunks"
 - Modify: `src/services/transcription.py`
 - Test: `tests/unit/test_service.py`
 
-- [ ] **Step 1: Write failing test for chunked diarization offsets**
+- [x] **Step 1: Write failing test for chunked diarization offsets**
 
 Append to `tests/unit/test_service.py`:
 
@@ -988,7 +988,7 @@ async def test_chunked_diarization_should_offset_turns_and_drop_overlap(funasr_s
     ]
 ```
 
-- [ ] **Step 2: Run the test to verify RED**
+- [x] **Step 2: Run the test to verify RED**
 
 Run:
 
@@ -998,7 +998,7 @@ uv run python -m pytest tests/unit/test_service.py -q -k chunked_diarization
 
 Expected: fails because `_diarize_chunks_with_alias` does not exist.
 
-- [ ] **Step 3: Implement chunk diarization helper**
+- [x] **Step 3: Implement chunk diarization helper**
 
 Add import:
 
@@ -1033,7 +1033,7 @@ Add method:
         return merged
 ```
 
-- [ ] **Step 4: Add conservative speaker reconciliation note in code**
+- [x] **Step 4: Add conservative speaker reconciliation note in code**
 
 For this task, keep local speaker labels as returned per chunk after offset filtering. Do not claim stable cross-chunk identity yet. Add this explicit implementation note above the helper:
 
@@ -1042,7 +1042,7 @@ For this task, keep local speaker labels as returned per chunk after offset filt
         # requires validated cross-chunk speaker reconciliation.
 ```
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run:
 
@@ -1068,7 +1068,7 @@ git commit -m "feat: add chunked diarization timeline stitching"
 - Test: `tests/unit/test_service.py`
 - Test: `tests/integration/test_model_api.py`
 
-- [ ] **Step 1: Write failing service test for tail collapse**
+- [x] **Step 1: Write failing service test for tail collapse**
 
 Append to `tests/unit/test_service.py`:
 
@@ -1096,7 +1096,7 @@ async def test_pipeline_should_fail_loudly_when_alignment_quality_gate_fails(fun
         await svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req", profile)
 ```
 
-- [ ] **Step 2: Run the test to verify RED**
+- [x] **Step 2: Run the test to verify RED**
 
 Run:
 
@@ -1106,7 +1106,7 @@ uv run python -m pytest tests/unit/test_service.py -q -k quality_gate
 
 Expected: fails because pipeline does not call `validate_aligned_word_quality`.
 
-- [ ] **Step 3: Implement gate call**
+- [x] **Step 3: Implement gate call**
 
 Add import:
 
@@ -1126,7 +1126,7 @@ Before diarization in `_run_decoupled_pipeline`, after aligned words are produce
                         )
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
