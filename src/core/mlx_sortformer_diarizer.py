@@ -1,7 +1,7 @@
 from importlib import import_module
-from typing import Protocol
+from typing import Protocol, cast
 
-from src.core.diarization_port import DiarizationPort, SpeakerTurn
+from src.core.diarization_port import DiarizationPort, RuntimeDiarizationSegment, SpeakerTurn
 
 
 class _SortformerRuntime(Protocol):
@@ -11,7 +11,7 @@ class _SortformerRuntime(Protocol):
         *,
         threshold: float,
         verbose: bool,
-    ) -> list[object]: ...
+    ) -> list[RuntimeDiarizationSegment]: ...
 
 
 def _load_sortformer_runtime(model_id: str) -> _SortformerRuntime:
@@ -19,15 +19,16 @@ def _load_sortformer_runtime(model_id: str) -> _SortformerRuntime:
     load = getattr(vad_module, "load")
     return load(model_id)
 
-
-def _segment_field(segment: object, field: str) -> object:
-    if isinstance(segment, dict):
-        return segment[field]
-    return getattr(segment, field)
+def _require_runtime_segment(segment: object) -> RuntimeDiarizationSegment:
+    if not isinstance(segment, RuntimeDiarizationSegment):
+        raise TypeError(
+            "Runtime diarization segment must expose speaker, start, and end attributes."
+        )
+    return cast(RuntimeDiarizationSegment, segment)
 
 
 class MlxSortformerDiarizer(DiarizationPort):
-    def __init__(self, model_id: str = "mlx-community/diar-sortformer-4spk-v1") -> None:
+    def __init__(self, model_id: str = "mlx-community/diar_sortformer_4spk-v1-fp16") -> None:
         self.model_id = model_id
         self._runtime: _SortformerRuntime | None = None
 
@@ -45,12 +46,10 @@ class MlxSortformerDiarizer(DiarizationPort):
     def release(self) -> None:
         self._runtime = None
 
-    def _to_speaker_turn(self, segment: object) -> SpeakerTurn:
-        speaker = _segment_field(segment, "speaker")
-        start = _segment_field(segment, "start")
-        end = _segment_field(segment, "end")
+    def _to_speaker_turn(self, segment: RuntimeDiarizationSegment | object) -> SpeakerTurn:
+        runtime_segment = _require_runtime_segment(segment)
         return SpeakerTurn(
-            speaker=f"Speaker {speaker}",
-            start=float(start),
-            end=float(end),
+            speaker=f"Speaker {runtime_segment.speaker}",
+            start=float(runtime_segment.start),
+            end=float(runtime_segment.end),
         )

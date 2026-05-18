@@ -17,7 +17,7 @@ _REGISTRY: dict[str, DiarizationSpec] = {
     "sortformer-diar": DiarizationSpec(
         alias="sortformer-diar",
         runtime="mlx",
-        model_id="mlx-community/diar-sortformer-4spk-v1",
+        model_id="mlx-community/diar_sortformer_4spk-v1-fp16",
         description="Sortformer diarization via mlx-audio VAD runtime on Apple MLX.",
     )
 }

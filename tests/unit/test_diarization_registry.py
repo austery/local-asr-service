@@ -8,7 +8,7 @@ def test_lookup_diarizer_should_resolve_builtin_sortformer_alias() -> None:
 
     assert spec.alias == "sortformer-diar"
     assert spec.runtime == "mlx"
-    assert spec.model_id == "mlx-community/diar-sortformer-4spk-v1"
+    assert spec.model_id == "mlx-community/diar_sortformer_4spk-v1-fp16"
     assert "Sortformer" in spec.description
 
 
