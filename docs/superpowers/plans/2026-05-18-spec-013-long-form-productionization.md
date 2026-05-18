@@ -1152,7 +1152,7 @@ git commit -m "feat: fail loud on collapsed long-form alignment"
 - Modify: `docs/SPEC-013-Production-Decoupled-Diarization-Pipeline.md`
 - Modify after probe success only: `src/core/pipeline_registry.py`, `MODELS.md`, `tests/integration/test_model_api.py`
 
-- [ ] **Step 1: Add probe script**
+- [x] **Step 1: Add probe script**
 
 Create `scripts/probe_qwen3_sortformer_longform.py`:
 
@@ -1201,7 +1201,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Keep profile gated**
+- [x] **Step 2: Keep profile gated**
 
 Verify `src/core/pipeline_registry.py` still contains:
 

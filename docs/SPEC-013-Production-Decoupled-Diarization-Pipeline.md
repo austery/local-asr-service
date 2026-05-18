@@ -201,12 +201,12 @@ from word timestamps and leaves the service in a correct post-request state.
 
 ### Phase 4: Long-Form Chunked Pipeline (5h Production Gate)
 
-- [ ] design a shared chunk plan (time windows + overlap + absolute offsets)
-- [ ] chunk ASR execution with deterministic global offset mapping
-- [ ] chunk forced alignment per ASR chunk and stitch aligned words globally
-- [ ] chunk diarization and merge speaker turns into a global timeline
+- [x] design a shared chunk plan (time windows + overlap + absolute offsets)
+- [x] chunk ASR execution with deterministic global offset mapping
+- [x] chunk forced alignment per ASR chunk and stitch aligned words globally
+- [x] chunk diarization and merge speaker turns into a global timeline
 - [ ] add cross-chunk speaker reconciliation rules
-- [ ] enforce quality guardrails (no tail timestamp collapse, monotonic timeline)
+- [x] enforce quality guardrails (no tail timestamp collapse, monotonic timeline)
 - [ ] validate one 5-hour batch sample end-to-end under real runtime
 
 **Acceptance**: the pipeline can process a 5-hour sample with chunked ASR +
@@ -241,6 +241,11 @@ The current branch implements the non-public three-stage code path:
 - `model_worker` supports explicit `transcribe`, `align`, and `diarize` job kinds.
 - `TranscriptionService` runs Qwen3-ASR text, forced alignment, Sortformer turns,
   then groups adjacent aligned words by speaker.
+- Long-form requests now use real extracted audio chunks for per-chunk ASR,
+  per-chunk forced alignment, and per-chunk diarization before stitching back to
+  a global timeline.
+- Alignment quality gates fail loudly on non-monotonic words or severe tail
+  timestamp collapse.
 - `qwen3-sortformer` remains `requestable=False`; public API calls still return
   501 until real-model E2E validates the path.
 
@@ -268,6 +273,7 @@ The current branch implements the non-public three-stage code path:
 | 2026-05-18 | 📝 重新切分中 (Rescoping) | E2E showed two-stage Qwen3-ASR + Sortformer is too coarse; rescope to Qwen3-ASR + Qwen3-ForcedAligner + Sortformer |
 | 2026-05-18 | 🟡 实现中 (Implementation) | Added forced-alignment port, worker align job, and unit-tested three-stage orchestration; profile remains discovery-only pending real-model E2E |
 | 2026-05-18 | 🟡 实现中 (Long-form planning) | Added 5-hour production gate with chunked ASR/align/diarization and timestamp-collapse prevention requirements |
+| 2026-05-18 | 🟡 实现中 (Chunked implementation) | Added real chunk extraction, per-chunk ASR/alignment/diarization stitching, and alignment quality gates; still blocked on real-runtime probe and speaker reconciliation |
 
 ## 10. Related
 
