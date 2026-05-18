@@ -109,6 +109,9 @@ service owns orchestration and OpenAI-compatible response shaping.
 - define the worker-side forced-alignment job contract, or a combined pipeline job
 - implement a dedicated diarization execution path
 - orchestrate serial ASR, forced alignment, then diarization execution
+- add long-form chunk planning for ASR, forced alignment, and diarization
+- stitch chunk-level outputs into one global timeline with deterministic offsets
+- support truthful 5-hour offline batch processing as the production gate
 - group aligned words into speaker-labeled transcript segments
 - make resident-model restore deterministic for pipeline requests
 - add integration and failure-mode coverage
@@ -150,6 +153,14 @@ Additional intake from 2026-05-18 E2E debugging:
   `mlx-community/Qwen3-ForcedAligner-0.6B-8bit`
 - word midpoint assignment against Sortformer turns produced plausible
   speaker-labeled text segments on the 60s English sample
+- 10min sample alignment currently collapses near tail (max ~245s) when
+  force-aligning full audio in one pass
+- the current `AudioChunkingService` only applies in `MlxAudioEngine` ASR path
+  and only when audio exceeds `MAX_AUDIO_DURATION_MINUTES` (default 50), so
+  forced alignment currently receives unchunked long files
+- forced-align prompt length for long-form input can exceed model context
+  (`max_position_embeddings=8192`), so long-form production requires explicit
+  chunk-and-stitch orchestration in the service layer
 
 ## 6. Implementation Phases
 
@@ -188,7 +199,21 @@ and return typed results.
 **Acceptance**: pipeline execution produces speaker-labeled transcript segments
 from word timestamps and leaves the service in a correct post-request state.
 
-### Phase 4: Public Enablement
+### Phase 4: Long-Form Chunked Pipeline (5h Production Gate)
+
+- [ ] design a shared chunk plan (time windows + overlap + absolute offsets)
+- [ ] chunk ASR execution with deterministic global offset mapping
+- [ ] chunk forced alignment per ASR chunk and stitch aligned words globally
+- [ ] chunk diarization and merge speaker turns into a global timeline
+- [ ] add cross-chunk speaker reconciliation rules
+- [ ] enforce quality guardrails (no tail timestamp collapse, monotonic timeline)
+- [ ] validate one 5-hour batch sample end-to-end under real runtime
+
+**Acceptance**: the pipeline can process a 5-hour sample with chunked ASR +
+forced alignment + diarization and produce globally coherent speaker-labeled
+segments without tail timestamp collapse.
+
+### Phase 5: Public Enablement
 
 - [ ] enable requestable pipeline profiles only after integration and real-model E2E coverage passes
 - [ ] return real speaker-labeled output on success in real-model E2E
@@ -204,6 +229,8 @@ from word timestamps and leaves the service in a correct post-request state.
 - [ ] AC-3: resident-model restoration is validated under real pipeline requests
 - [ ] AC-4: requestable pipeline profiles return real speaker-labeled results or fail clearly
 - [x] AC-5: unit and integration tests cover orchestration and failure modes
+- [ ] AC-6: long-form chunked pipeline supports truthful 5-hour batch requests
+- [ ] AC-7: no timestamp-tail collapse in final aligned words for long-form English
 
 ## 7.1 Current Implementation Status
 
@@ -223,11 +250,14 @@ The current branch implements the non-public three-stage code path:
 |-------------|-------------|--------|
 | `src/workers/model_worker.py` | Modify | Add diarization plus forced-alignment job support, or one composite pipeline job |
 | `src/services/transcription.py` | Modify | Implement three-stage orchestration and deterministic restore |
+| `src/adapters/audio_chunking.py` | Modify | Expose reusable chunk plan for pipeline orchestration |
+| `src/adapters/segment_alignment.py` | Modify | Support chunk-aware global timeline and speaker reconciliation |
 | `src/core/diarization_port.py` | Modify / confirm | Lock runtime contract |
 | `src/core/alignment_port.py` | Add | Lock forced-alignment word timestamp contract |
 | `src/core/pipeline_registry.py` | Modify | Enable only truthful requestable profiles |
 | `src/api/routes.py` | Modify | Public pipeline enablement |
 | `tests/unit/test_service.py` | Modify | Orchestration semantics |
+| `tests/unit/test_worker.py` | Modify | Chunked job contract and failure behavior |
 | `tests/integration/*` | Modify | End-to-end pipeline behavior |
 
 ## 9. Status History
@@ -237,6 +267,7 @@ The current branch implements the non-public three-stage code path:
 | 2026-05-17 | 🔵 待办 (Backlog) | Created as the production follow-up gated by SPEC-012 |
 | 2026-05-18 | 📝 重新切分中 (Rescoping) | E2E showed two-stage Qwen3-ASR + Sortformer is too coarse; rescope to Qwen3-ASR + Qwen3-ForcedAligner + Sortformer |
 | 2026-05-18 | 🟡 实现中 (Implementation) | Added forced-alignment port, worker align job, and unit-tested three-stage orchestration; profile remains discovery-only pending real-model E2E |
+| 2026-05-18 | 🟡 实现中 (Long-form planning) | Added 5-hour production gate with chunked ASR/align/diarization and timestamp-collapse prevention requirements |
 
 ## 10. Related
 
