@@ -402,7 +402,7 @@ git commit -m "feat: add long-form alignment quality gates"
 - Modify: `src/adapters/audio_chunking.py`
 - Test: `tests/unit/test_audio_chunking.py`
 
-- [ ] **Step 1: Write failing tests for pipeline chunk extraction**
+- [x] **Step 1: Write failing tests for pipeline chunk extraction**
 
 Append to `tests/unit/test_audio_chunking.py`:
 
@@ -426,7 +426,7 @@ def test_extract_pipeline_chunk_should_use_ffmpeg_with_window(service, mock_ffmp
     assert str(output) in command
 ```
 
-- [ ] **Step 2: Run the test to verify RED**
+- [x] **Step 2: Run the test to verify RED**
 
 Run:
 
@@ -436,7 +436,7 @@ uv run python -m pytest tests/unit/test_audio_chunking.py -q -k extract_pipeline
 
 Expected: fails because `extract_pipeline_chunk` does not exist.
 
-- [ ] **Step 3: Implement extraction wrapper**
+- [x] **Step 3: Implement extraction wrapper**
 
 Add to `AudioChunkingService` in `src/adapters/audio_chunking.py`:
 
@@ -485,7 +485,7 @@ Add to `AudioChunkingService` in `src/adapters/audio_chunking.py`:
         return output_path
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 

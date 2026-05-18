@@ -9,17 +9,16 @@
 - 切分点对齐算法
 - Fallback 重叠切片
 """
-import struct
 import wave
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, call
-from pathlib import Path
 
 from src.adapters.audio_chunking import (
     AudioChunkingService,
-    AudioNormalizationResult,
     SilenceInterval,
 )
+from src.adapters.pipeline_chunking import ChunkWindow
 
 
 @pytest.fixture
@@ -114,6 +113,26 @@ class TestProcessAudio:
 
         assert len(chunks) == 1
         assert chunks[0] == str(wav_file)
+
+    def test_extract_pipeline_chunk_should_use_ffmpeg_with_window(
+        self,
+        service,
+        mock_ffmpeg,
+        tmp_path,
+    ):
+        source = tmp_path / "source.wav"
+        source.write_bytes(b"fake wav")
+        output = tmp_path / "chunk_000.wav"
+        window = ChunkWindow(index=0, start=10.0, end=20.0, emit_start=10.0, emit_end=20.0)
+
+        service.extract_pipeline_chunk(str(source), str(output), window)
+
+        command = mock_ffmpeg.call_args_list[-1][0][0]
+        assert command[:4] == ["ffmpeg", "-i", str(source), "-ss"]
+        assert command[4] == "10.0"
+        assert "-to" in command
+        assert "20.0" in command
+        assert str(output) in command
 
 
 class TestSilenceDetection:
