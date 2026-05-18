@@ -10,6 +10,7 @@ from typing import Literal, TypedDict
 
 from fastapi import UploadFile
 
+from src.adapters.pipeline_chunking import ChunkWindow, offset_words_to_global_timeline
 from src.adapters.segment_alignment import align_speakers
 from src.core.alignment_port import AlignedWord
 from src.core.base_engine import EngineCapabilities
@@ -306,6 +307,35 @@ class TranscriptionService:
         if not isinstance(result, list) or not all(isinstance(item, AlignedWord) for item in result):
             raise TypeError("Expected alignment result as list[AlignedWord]")
         return result
+
+    async def _align_chunks_with_alias(
+        self,
+        *,
+        chunk_paths: list[str],
+        chunk_texts: list[str],
+        windows: list[ChunkWindow],
+        language: str,
+        request_id: str,
+        alias: str,
+        pipeline_reserved: bool,
+    ) -> list[AlignedWord]:
+        if not (len(chunk_paths) == len(chunk_texts) == len(windows)):
+            raise ValueError("chunk_paths, chunk_texts, and windows must have the same length")
+
+        merged: list[AlignedWord] = []
+        for chunk_path, chunk_text, window in zip(chunk_paths, chunk_texts, windows, strict=True):
+            if not chunk_text.strip():
+                continue
+            words = await self._align_with_alias(
+                chunk_path,
+                chunk_text,
+                language,
+                f"{request_id}:chunk-{window.index}",
+                alias,
+                pipeline_reserved=pipeline_reserved,
+            )
+            merged.extend(offset_words_to_global_timeline(words, window))
+        return merged
 
     async def _diarize_with_alias(
         self,

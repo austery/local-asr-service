@@ -510,7 +510,7 @@ git commit -m "feat: expose audio chunk extraction for pipeline orchestration"
 - Modify: `src/services/transcription.py`
 - Test: `tests/unit/test_service.py`
 
-- [ ] **Step 1: Write failing tests for chunked alignment offsets**
+- [x] **Step 1: Write failing tests for chunked alignment offsets**
 
 Append to `tests/unit/test_service.py`:
 
@@ -552,7 +552,7 @@ async def test_chunked_alignment_should_apply_offsets_and_drop_overlap(funasr_sp
     ]
 ```
 
-- [ ] **Step 2: Run the test to verify RED**
+- [x] **Step 2: Run the test to verify RED**
 
 Run:
 
@@ -562,7 +562,7 @@ uv run python -m pytest tests/unit/test_service.py -q -k chunked_alignment
 
 Expected: fails because `_align_chunks_with_alias` does not exist.
 
-- [ ] **Step 3: Implement chunked alignment helper**
+- [x] **Step 3: Implement chunked alignment helper**
 
 Add imports in `src/services/transcription.py`:
 
@@ -603,7 +603,7 @@ Add method to `TranscriptionService`:
         return merged
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 

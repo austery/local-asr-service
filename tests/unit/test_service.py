@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import UploadFile
 
+from src.adapters.pipeline_chunking import ChunkWindow
 from src.core.alignment_port import AlignedWord
 from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import lookup
@@ -254,6 +255,40 @@ async def test_decoupled_pipeline_should_align_words_to_speaker_turns(funasr_spe
         {"id": 1, "speaker": "Speaker B", "start": 0.6, "end": 1.0, "text": "world"},
     ]
     svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
+
+
+@pytest.mark.asyncio
+async def test_chunked_alignment_should_apply_offsets_and_drop_overlap(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    windows = [
+        ChunkWindow(index=0, start=0.0, end=900.0, emit_start=0.0, emit_end=885.0),
+        ChunkWindow(index=1, start=870.0, end=1800.0, emit_start=885.0, emit_end=1800.0),
+    ]
+
+    async def fake_align(temp_file_path, text, language, request_id, alias, pipeline_reserved=False):
+        if temp_file_path.endswith("chunk_000.wav"):
+            return [AlignedWord(text="first", start=10.0, end=11.0)]
+        return [
+            AlignedWord(text="overlap", start=1.0, end=2.0),
+            AlignedWord(text="second", start=20.0, end=21.0),
+        ]
+
+    svc._align_with_alias = fake_align
+
+    result = await svc._align_chunks_with_alias(
+        chunk_paths=["/tmp/chunk_000.wav", "/tmp/chunk_001.wav"],
+        chunk_texts=["first", "overlap second"],
+        windows=windows,
+        language="English",
+        request_id="req",
+        alias="qwen3-forced-aligner",
+        pipeline_reserved=True,
+    )
+
+    assert result == [
+        AlignedWord(text="first", start=10.0, end=11.0),
+        AlignedWord(text="second", start=890.0, end=891.0),
+    ]
 
 
 @pytest.mark.asyncio
