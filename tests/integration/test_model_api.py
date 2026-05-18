@@ -7,6 +7,7 @@ by unit tests.
 """
 
 from io import BytesIO
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from src.core.base_engine import EngineCapabilities
 from src.core.model_registry import lookup as real_lookup
+from src.core.pipeline_registry import lookup_profile
 from src.main import app
 from src.services.transcription import TranscriptionService
 
@@ -131,6 +133,33 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
 
     assert response.status_code == 400
     assert "Unknown model" in response.json()["detail"]
+
+
+def test_should_return_501_for_non_requestable_pipeline_profile() -> None:
+    qwen_spec = real_lookup("qwen3-asr")
+    mock_service = _make_mock_service(
+        qwen_spec.capabilities,
+        {"text": "unused", "segments": None, "duration": 1.0},
+        current_model_spec=qwen_spec,
+    )
+    non_requestable_profile = replace(lookup_profile("qwen3-sortformer"), requestable=False)
+
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        patch("src.api.routes.lookup_profile", return_value=non_requestable_profile),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"model": "qwen3-sortformer"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 501
+    assert "not enabled" in response.json()["detail"]
+    mock_service.submit.assert_not_called()
+    mock_service.submit_pipeline.assert_not_awaited()
 
 
 def test_should_submit_requestable_pipeline_profile() -> None:

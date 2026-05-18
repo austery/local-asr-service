@@ -17,7 +17,7 @@
 
 | Alias | Components | Requestable | Notes |
 |-------|------------|:-----------:|-------|
-| `qwen3-sortformer` | `qwen3-asr` + `sortformer-diar` | ✅ | Requestable worker-backed pipeline that combines Qwen3-ASR transcription with Sortformer diarization |
+| `qwen3-sortformer` | `qwen3-asr` + `sortformer-diar` | ✅ | Requestable decoupled Qwen3-ASR + MLX Sortformer pipeline; subject to Apple Silicon memory limits and current Sortformer threshold defaults |
 
 ---
 
@@ -60,7 +60,9 @@ The project registers models by runtime contract, not by vendor name.
 | Chinese/English quality-first single-speaker audio | `qwen3-asr` | MLX-native Qwen3-ASR with explicit language prompt forwarding |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
 | Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
-| Apple-native multi-speaker pipeline | `qwen3-sortformer` | Requestable Qwen3-ASR + Sortformer pipeline when you want MLX-backed ASR plus diarization |
+| Apple-native multi-speaker pipeline | `qwen3-sortformer` | Requestable Qwen3-ASR + Sortformer pipeline when you want MLX-backed ASR plus diarization, with current memory/threshold caveats |
+
+`qwen3-sortformer` is a requestable decoupled pipeline profile backed by Qwen3-ASR transcription plus MLX Sortformer diarization. It remains subject to Apple Silicon memory limits and the current Sortformer threshold defaults.
 | Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
 
 ---

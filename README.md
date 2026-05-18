@@ -39,7 +39,7 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 | Mandarin multi-speaker podcast / meeting | `paraformer` (default) | `uv run python -m src.main` |
 | Chinese/English quality-first transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
 | Bulk speed-first tags / language detection | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
-| Apple-native multi-speaker pipeline | `qwen3-sortformer` | Requestable Qwen3-ASR + Sortformer diarization pipeline |
+| Apple-native multi-speaker pipeline | `qwen3-sortformer` | Requestable Qwen3-ASR + Sortformer diarization pipeline; subject to Apple Silicon memory limits and current Sortformer threshold defaults |
 
 ## API & Web UI
 
@@ -97,7 +97,9 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `paraformer` | FunASR | FunASR/PyTorch MPS path; Mandarin-focused with CAM++ diarization |
 | `qwen3-asr` | MLX | mlx-audio/MLX Metal path; Chinese/English quality-first ASR |
 | `sensevoice-small` | FunASR | FunASR/PyTorch MPS path; speed-first language/emotion tags |
-| `qwen3-sortformer` | Pipeline | Requestable Qwen3-ASR + Sortformer profile with worker-backed diarization |
+| `qwen3-sortformer` | Pipeline | Requestable decoupled Qwen3-ASR + MLX Sortformer pipeline; subject to Apple Silicon memory limits and current Sortformer threshold defaults |
+
+`qwen3-sortformer` is a requestable decoupled pipeline profile backed by Qwen3-ASR transcription plus MLX Sortformer diarization. It remains subject to Apple Silicon memory limits and the current Sortformer threshold defaults.
 
 ### Query models
 
