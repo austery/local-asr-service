@@ -2,7 +2,12 @@ from collections.abc import Iterable, Sequence
 from importlib import import_module
 from typing import Protocol, cast, runtime_checkable
 
-from src.core.alignment_port import AlignedWord, AlignmentPort, RuntimeAlignmentItem
+from src.core.alignment_port import (
+    AlignedWord,
+    AlignmentPort,
+    RuntimeAlignmentItem,
+    normalize_alignment_language,
+)
 
 
 class _QwenForcedAlignerRuntime(Protocol):
@@ -36,42 +41,6 @@ def _iter_runtime_items(output: object) -> Iterable[object]:
     raise TypeError("Runtime alignment output must be iterable or expose an items sequence.")
 
 
-def _normalize_qwen_alignment_language(language: str) -> str:
-    normalized = language.strip()
-    if not normalized:
-        return "English"
-
-    aliases = {
-        "auto": "English",
-        "en": "English",
-        "eng": "English",
-        "english": "English",
-        "zh": "Chinese",
-        "cn": "Chinese",
-        "zho": "Chinese",
-        "chinese": "Chinese",
-        "yue": "Cantonese",
-        "cantonese": "Cantonese",
-        "ja": "Japanese",
-        "japanese": "Japanese",
-        "ko": "Korean",
-        "korean": "Korean",
-        "de": "German",
-        "german": "German",
-        "es": "Spanish",
-        "spanish": "Spanish",
-        "fr": "French",
-        "french": "French",
-        "it": "Italian",
-        "italian": "Italian",
-        "pt": "Portuguese",
-        "portuguese": "Portuguese",
-        "ru": "Russian",
-        "russian": "Russian",
-    }
-    return aliases.get(normalized.lower(), normalized)
-
-
 class MlxQwenForcedAligner(AlignmentPort):
     def __init__(self, model_id: str = "mlx-community/Qwen3-ForcedAligner-0.6B-8bit") -> None:
         self.model_id = model_id
@@ -88,7 +57,7 @@ class MlxQwenForcedAligner(AlignmentPort):
         output = self._runtime.generate(
             file_path,
             text=text,
-            language=_normalize_qwen_alignment_language(language),
+            language=normalize_alignment_language(language),
         )
         return [self._to_aligned_word(item) for item in _iter_runtime_items(output)]
 

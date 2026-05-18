@@ -91,14 +91,35 @@ def offset_turns_to_global_timeline(
     turns: list[SpeakerTurn],
     window: ChunkWindow,
 ) -> list[SpeakerTurn]:
+    global_turns = [
+        SpeakerTurn(
+            speaker=turn.speaker,
+            start=round(window.start + turn.start, 3),
+            end=round(window.start + turn.end, 3),
+        )
+        for turn in turns
+    ]
+    return clip_turns_to_emit_window(global_turns, window)
+
+
+def clip_turns_to_emit_window(
+    turns: list[SpeakerTurn],
+    window: ChunkWindow,
+) -> list[SpeakerTurn]:
     result: list[SpeakerTurn] = []
     for turn in turns:
-        global_start = max(window.emit_start, round(window.start + turn.start, 3))
-        global_end = min(window.emit_end, round(window.start + turn.end, 3))
-        if global_end <= global_start:
+        clipped_start = max(window.emit_start, turn.start)
+        clipped_end = min(window.emit_end, turn.end)
+        if clipped_end <= clipped_start:
             continue
-        if _is_midpoint_in_emit_window(global_start, global_end, window):
-            result.append(SpeakerTurn(speaker=turn.speaker, start=global_start, end=global_end))
+        if _is_midpoint_in_emit_window(clipped_start, clipped_end, window):
+            result.append(
+                SpeakerTurn(
+                    speaker=turn.speaker,
+                    start=round(clipped_start, 3),
+                    end=round(clipped_end, 3),
+                )
+            )
     return result
 
 

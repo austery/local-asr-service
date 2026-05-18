@@ -31,3 +31,39 @@ class AlignmentPort(Protocol):
     def align_file(self, file_path: str, *, text: str, language: str) -> list[AlignedWord]: ...
 
     def release(self) -> None: ...
+
+
+def normalize_alignment_language(language: str) -> str:
+    normalized = language.strip()
+    if not normalized:
+        return "English"
+
+    aliases = {
+        "auto": "English",
+        "en": "English",
+        "eng": "English",
+        "english": "English",
+        "zh": "Chinese",
+        "cn": "Chinese",
+        "zho": "Chinese",
+        "chinese": "Chinese",
+        "yue": "Cantonese",
+        "cantonese": "Cantonese",
+        "ja": "Japanese",
+        "japanese": "Japanese",
+        "ko": "Korean",
+        "korean": "Korean",
+        "de": "German",
+        "german": "German",
+        "es": "Spanish",
+        "spanish": "Spanish",
+        "fr": "French",
+        "french": "French",
+        "it": "Italian",
+        "italian": "Italian",
+        "pt": "Portuguese",
+        "portuguese": "Portuguese",
+        "ru": "Russian",
+        "russian": "Russian",
+    }
+    return aliases.get(normalized.lower(), normalized)

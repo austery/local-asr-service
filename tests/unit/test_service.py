@@ -8,6 +8,7 @@ import logging
 import multiprocessing
 import os
 import queue as _stdlib_queue
+import shutil
 import tempfile as _tempfile
 from contextlib import suppress
 from dataclasses import replace
@@ -829,6 +830,20 @@ async def test_pipeline_pending_drain_times_out_instead_of_waiting_forever(funas
         await svc._wait_for_pending_work_to_drain(timeout_seconds=0.01)
 
     assert "stuck-request" in svc._pending
+
+
+@pytest.mark.asyncio
+async def test_pipeline_temp_dir_cleanup_should_run_off_event_loop(funasr_spec):
+    svc = _setup_service(funasr_spec)
+
+    with patch("src.services.transcription.asyncio.to_thread", new_callable=AsyncMock) as to_thread:
+        await svc._remove_pipeline_temp_dir("/tmp/asr_pipeline_chunks")
+
+    to_thread.assert_awaited_once_with(
+        shutil.rmtree,
+        "/tmp/asr_pipeline_chunks",
+        ignore_errors=True,
+    )
 
 
 @pytest.mark.asyncio

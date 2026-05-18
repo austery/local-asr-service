@@ -1429,10 +1429,10 @@ Decision:
 
 ## Final Verification Sweep
 
-- [ ] Run lint on touched files:
+- [ ] Run lint on the full SPEC-013 touched surface:
 
 ```bash
-uv run ruff check src/adapters/pipeline_chunking.py src/adapters/audio_chunking.py src/services/transcription.py tests/unit/test_pipeline_chunking.py tests/unit/test_audio_chunking.py tests/unit/test_service.py tests/integration/test_model_api.py scripts/probe_qwen3_sortformer_longform.py
+uv run ruff check src/adapters/pipeline_chunking.py src/adapters/audio_chunking.py src/core/alignment_port.py src/core/alignment_registry.py src/core/mlx_qwen_forced_aligner.py src/core/diarization_port.py src/core/diarization_registry.py src/core/mlx_sortformer_diarizer.py src/services/transcription.py src/workers/model_worker.py tests/unit/test_pipeline_chunking.py tests/unit/test_audio_chunking.py tests/unit/test_mlx_qwen_forced_aligner.py tests/unit/test_mlx_sortformer_diarizer.py tests/unit/test_service.py tests/unit/test_worker.py tests/integration/test_model_api.py scripts/probe_qwen3_sortformer_longform.py
 ```
 
 - [ ] Run unit + integration tests:

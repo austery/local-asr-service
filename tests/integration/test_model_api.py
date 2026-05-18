@@ -196,7 +196,7 @@ def test_should_submit_pipeline_profile_when_explicitly_requestable() -> None:
             "segments": [{"text": "hello", "start": 0.0, "end": 1.0, "speaker": "Speaker A"}],
             "duration": 1.0,
         },
-            current_model_spec=qwen_spec,
+        current_model_spec=qwen_spec,
     )
     requestable_profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
 

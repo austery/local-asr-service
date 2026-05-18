@@ -14,13 +14,13 @@ from src.adapters.audio_chunking import AudioChunkingService
 from src.adapters.pipeline_chunking import (
     ChunkWindow,
     build_chunk_plan,
-    offset_turns_to_global_timeline,
+    clip_turns_to_emit_window,
     offset_words_to_global_timeline,
     reconcile_chunk_speaker_labels,
     validate_aligned_word_quality,
 )
 from src.adapters.segment_alignment import align_speakers
-from src.core.alignment_port import AlignedWord
+from src.core.alignment_port import AlignedWord, normalize_alignment_language
 from src.core.base_engine import EngineCapabilities
 from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import ModelSpec
@@ -438,7 +438,7 @@ class TranscriptionService:
 
             chunk_turns_global: list[SpeakerTurn] = []
             for turn in turns:
-                global_start = max(window.start, round(window.start + turn.start, 3))
+                global_start = round(window.start + turn.start, 3)
                 global_end = min(window.end, round(window.start + turn.end, 3))
                 if global_end <= global_start:
                     continue
@@ -458,15 +458,7 @@ class TranscriptionService:
                     overlap_end=window.emit_start,
                 )
 
-            remapped_local_turns = [
-                SpeakerTurn(
-                    speaker=turn.speaker,
-                    start=turn.start - window.start,
-                    end=turn.end - window.start,
-                )
-                for turn in chunk_turns_global
-            ]
-            merged.extend(offset_turns_to_global_timeline(remapped_local_turns, window))
+            merged.extend(clip_turns_to_emit_window(chunk_turns_global, window))
         return merged
 
     async def _diarize_with_alias(
@@ -673,7 +665,7 @@ class TranscriptionService:
                 return {**transcript_result, "segments": aligned_segments}
             finally:
                 if pipeline_temp_dir is not None:
-                    shutil.rmtree(pipeline_temp_dir, ignore_errors=True)
+                    await self._remove_pipeline_temp_dir(pipeline_temp_dir)
                 await self._restore_resident_model(previous_spec)
 
     @staticmethod
@@ -689,45 +681,13 @@ class TranscriptionService:
     ) -> str:
         language = params.get("language")
         if isinstance(language, str) and language.strip().lower() != "auto":
-            return TranscriptionService._normalize_alignment_language(language)
+            return normalize_alignment_language(language)
 
         detected_language = transcript_result.get("language")
         if isinstance(detected_language, str) and detected_language.strip().lower() != "auto":
-            return TranscriptionService._normalize_alignment_language(detected_language)
+            return normalize_alignment_language(detected_language)
 
         return "English"
-
-    @staticmethod
-    def _normalize_alignment_language(language: str) -> str:
-        aliases = {
-            "en": "English",
-            "eng": "English",
-            "english": "English",
-            "zh": "Chinese",
-            "cn": "Chinese",
-            "zho": "Chinese",
-            "chinese": "Chinese",
-            "yue": "Cantonese",
-            "cantonese": "Cantonese",
-            "ja": "Japanese",
-            "japanese": "Japanese",
-            "ko": "Korean",
-            "korean": "Korean",
-            "de": "German",
-            "german": "German",
-            "es": "Spanish",
-            "spanish": "Spanish",
-            "fr": "French",
-            "french": "French",
-            "it": "Italian",
-            "italian": "Italian",
-            "pt": "Portuguese",
-            "portuguese": "Portuguese",
-            "ru": "Russian",
-            "russian": "Russian",
-        }
-        stripped = language.strip()
-        return aliases.get(stripped.lower(), stripped or "English")
 
     @staticmethod
     def _align_words_to_speaker_segments(
@@ -805,6 +765,9 @@ class TranscriptionService:
                     f"Timed out waiting for pending worker jobs to drain: {pending_ids}"
                 )
             await asyncio.sleep(min(PIPELINE_PENDING_DRAIN_POLL_SECONDS, remaining))
+
+    async def _remove_pipeline_temp_dir(self, temp_dir: str) -> None:
+        await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
 
     def _discard_request_state(self, request_id: str) -> None:
         future = self._pending.pop(request_id, None)

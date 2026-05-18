@@ -272,6 +272,9 @@ enablement. The remaining gaps are:
    ASR engine. This is acceptable while the profile is discovery-only, but
    production enablement should evaluate a lighter worker mode or split worker
    topology to reduce peak Apple Silicon UMA pressure.
+8. Worker contract errors are still classified in the service from worker error
+   messages. Before public enablement, the IPC boundary should carry a typed
+   contract-error signal instead of relying on message text.
 
 Immediate implementation priority:
 

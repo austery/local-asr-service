@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.core.alignment_port import AlignedWord
+from src.core.alignment_port import AlignedWord, normalize_alignment_language
 from src.core.mlx_qwen_forced_aligner import MlxQwenForcedAligner
 
 
@@ -16,6 +16,24 @@ class _RuntimeItem:
 class _RuntimeResult:
     def __init__(self, items: list[_RuntimeItem]) -> None:
         self.items = items
+
+
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        ("", "English"),
+        ("auto", "English"),
+        ("en", "English"),
+        ("french", "French"),
+        ("zh", "Chinese"),
+        ("CustomLang", "CustomLang"),
+    ],
+)
+def test_normalize_alignment_language_should_share_qwen_language_aliases(
+    language: str,
+    expected: str,
+) -> None:
+    assert normalize_alignment_language(language) == expected
 
 
 def test_align_file_should_require_load_first() -> None:

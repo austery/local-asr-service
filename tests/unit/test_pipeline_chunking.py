@@ -3,6 +3,7 @@ import pytest
 from src.adapters.pipeline_chunking import (
     ChunkWindow,
     build_chunk_plan,
+    clip_turns_to_emit_window,
     offset_turns_to_global_timeline,
     offset_words_to_global_timeline,
     reconcile_chunk_speaker_labels,
@@ -68,6 +69,22 @@ def test_offset_turns_should_apply_chunk_start_and_clip_to_emit_window() -> None
     assert result == [
         SpeakerTurn(speaker="Speaker 0", start=900.0, end=905.0),
         SpeakerTurn(speaker="Speaker 1", start=905.0, end=925.0),
+    ]
+
+
+def test_clip_turns_to_emit_window_should_clip_global_turns_without_reoffset() -> None:
+    window = ChunkWindow(index=1, start=270.0, end=600.0, emit_start=285.0, emit_end=600.0)
+    turns = [
+        SpeakerTurn(speaker="Speaker 0", start=271.0, end=272.0),
+        SpeakerTurn(speaker="Speaker 1", start=280.0, end=290.0),
+        SpeakerTurn(speaker="Speaker 2", start=590.0, end=605.0),
+    ]
+
+    result = clip_turns_to_emit_window(turns, window)
+
+    assert result == [
+        SpeakerTurn(speaker="Speaker 1", start=285.0, end=290.0),
+        SpeakerTurn(speaker="Speaker 2", start=590.0, end=600.0),
     ]
 
 
