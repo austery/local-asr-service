@@ -36,6 +36,11 @@ def test_normalize_alignment_language_should_share_qwen_language_aliases(
     assert normalize_alignment_language(language) == expected
 
 
+def test_aligned_word_should_reject_negative_start() -> None:
+    with pytest.raises(ValueError, match="start"):
+        AlignedWord(text="hello", start=-0.1, end=0.5)
+
+
 def test_align_file_should_require_load_first() -> None:
     aligner = MlxQwenForcedAligner()
 
@@ -118,3 +123,21 @@ def test_align_file_should_raise_when_runtime_item_shape_is_invalid(
 
     with pytest.raises(TypeError, match="text, start_time, and end_time attributes"):
         aligner.align_file("sample.wav", text="bad", language="English")
+
+
+def test_align_file_should_reject_primitive_runtime_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = MagicMock()
+    runtime.generate.return_value = "alignment failed"
+
+    monkeypatch.setattr(
+        "src.core.mlx_qwen_forced_aligner._load_qwen_forced_aligner_runtime",
+        lambda _model_id: runtime,
+    )
+
+    aligner = MlxQwenForcedAligner()
+    aligner.load()
+
+    with pytest.raises(TypeError, match="not 'str'"):
+        aligner.align_file("sample.wav", text="hello", language="English")

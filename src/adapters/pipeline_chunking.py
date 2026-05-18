@@ -12,6 +12,20 @@ class ChunkWindow:
     emit_start: float
     emit_end: float
 
+    def __post_init__(self) -> None:
+        if self.index < 0:
+            raise ValueError(f"index ({self.index}) must be non-negative")
+        if self.start < 0.0:
+            raise ValueError(f"start ({self.start}) must be non-negative")
+        if self.emit_start < self.start:
+            raise ValueError(f"emit_start ({self.emit_start}) must be >= start ({self.start})")
+        if self.emit_end <= self.emit_start:
+            raise ValueError(
+                f"emit_end ({self.emit_end}) must be > emit_start ({self.emit_start})"
+            )
+        if self.end < self.emit_end:
+            raise ValueError(f"end ({self.end}) must be >= emit_end ({self.emit_end})")
+
     @property
     def duration(self) -> float:
         return self.end - self.start

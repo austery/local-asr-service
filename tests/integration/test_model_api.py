@@ -17,7 +17,7 @@ from src.core.base_engine import EngineCapabilities
 from src.core.model_registry import lookup as real_lookup
 from src.core.pipeline_registry import lookup_profile
 from src.main import app
-from src.services.transcription import TranscriptionService
+from src.services.transcription import PipelineQualityError, TranscriptionService
 
 
 def _make_mock_service(
@@ -216,6 +216,34 @@ def test_should_submit_pipeline_profile_when_explicitly_requestable() -> None:
     assert response.json()["model"] == "qwen3-sortformer"
     mock_service.submit.assert_not_called()
     mock_service.submit_pipeline.assert_awaited_once()
+
+
+def test_should_return_422_when_pipeline_quality_gate_fails() -> None:
+    qwen_spec = real_lookup("qwen3-asr")
+    mock_service = _make_mock_service(
+        qwen_spec.capabilities,
+        {"text": "unused", "segments": None, "duration": 1.0},
+        current_model_spec=qwen_spec,
+    )
+    mock_service.submit_pipeline = AsyncMock(
+        side_effect=PipelineQualityError("alignment quality gate failed: tail timestamp collapse")
+    )
+    requestable_profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        patch("src.api.routes.lookup_profile", return_value=requestable_profile),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"model": "qwen3-sortformer", "output_format": "json"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 422
+    assert "alignment quality gate failed" in response.json()["detail"]
 
 
 # MA-5

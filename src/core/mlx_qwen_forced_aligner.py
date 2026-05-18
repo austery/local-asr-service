@@ -36,6 +36,10 @@ def _require_runtime_item(item: object) -> RuntimeAlignmentItem:
 def _iter_runtime_items(output: object) -> Iterable[object]:
     if isinstance(output, _RuntimeAlignmentResult):
         return output.items
+    if isinstance(output, (str, bytes, bytearray)):
+        raise TypeError(
+            f"Runtime alignment output must be a sequence of items, not {type(output).__name__!r}"
+        )
     if isinstance(output, Iterable):
         return output
     raise TypeError("Runtime alignment output must be iterable or expose an items sequence.")

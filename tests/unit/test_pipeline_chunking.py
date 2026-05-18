@@ -43,6 +43,19 @@ def test_build_chunk_plan_should_reject_invalid_overlap() -> None:
         build_chunk_plan(duration_seconds=120.0, chunk_seconds=60.0, overlap_seconds=60.0)
 
 
+def test_chunk_window_should_reject_invalid_ranges() -> None:
+    with pytest.raises(ValueError, match="index"):
+        ChunkWindow(index=-1, start=0.0, end=60.0, emit_start=0.0, emit_end=60.0)
+    with pytest.raises(ValueError, match="start"):
+        ChunkWindow(index=0, start=-1.0, end=60.0, emit_start=0.0, emit_end=60.0)
+    with pytest.raises(ValueError, match="emit_start"):
+        ChunkWindow(index=0, start=10.0, end=60.0, emit_start=5.0, emit_end=60.0)
+    with pytest.raises(ValueError, match="emit_end"):
+        ChunkWindow(index=0, start=0.0, end=60.0, emit_start=30.0, emit_end=30.0)
+    with pytest.raises(ValueError, match="end"):
+        ChunkWindow(index=0, start=0.0, end=50.0, emit_start=0.0, emit_end=60.0)
+
+
 def test_offset_words_should_apply_chunk_start_and_drop_overlap_duplicates() -> None:
     window = ChunkWindow(index=1, start=885.0, end=1800.0, emit_start=900.0, emit_end=1785.0)
     words = [

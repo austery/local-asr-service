@@ -81,3 +81,23 @@ def test_diarize_file_should_raise_when_runtime_segment_shape_is_invalid(
 
     with pytest.raises(TypeError, match="speaker, start, and end attributes"):
         diarizer.diarize_file("sample.wav")
+
+
+def test_diarize_file_should_raise_when_runtime_speaker_type_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = MagicMock()
+    runtime.generate.return_value = _RuntimeOutput(
+        [_RuntimeSegment(speaker={"bad": "shape"}, start=0.0, end=1.25)]
+    )
+
+    monkeypatch.setattr(
+        "src.core.mlx_sortformer_diarizer._load_sortformer_runtime",
+        lambda _model_id: runtime,
+    )
+
+    diarizer = MlxSortformerDiarizer()
+    diarizer.load()
+
+    with pytest.raises(TypeError, match="speaker must be int or str"):
+        diarizer.diarize_file("sample.wav")

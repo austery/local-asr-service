@@ -23,7 +23,7 @@ from src.core.alignment_port import AlignedWord
 from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import lookup
 from src.core.pipeline_registry import PipelineProfile
-from src.services.transcription import TranscriptionService
+from src.services.transcription import TranscriptionService, WorkerRemoteError
 
 
 @pytest.fixture
@@ -175,6 +175,27 @@ class TestTranscriptionService:
                 )
         finally:
             await _stop_service(svc)
+
+    async def test_worker_error_handling_preserves_remote_exception_type(self, funasr_spec):
+        svc = _setup_service(funasr_spec)
+        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
+
+        async def deliver() -> None:
+            await asyncio.sleep(0.05)
+            svc._result_queue.put(("ERROR", "req-typed", "ValueError", "bad job shape"))
+
+        asyncio.create_task(deliver())
+        try:
+            with pytest.raises(WorkerRemoteError) as exc_info:
+                await asyncio.wait_for(
+                    svc.submit(_make_upload(), {}, request_id="req-typed"),
+                    timeout=5.0,
+                )
+        finally:
+            await _stop_service(svc)
+
+        assert exc_info.value.exc_type_name == "ValueError"
+        assert "bad job shape" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -520,7 +541,7 @@ async def test_pipeline_should_fail_loudly_when_alignment_quality_gate_fails(fun
 
 
 @pytest.mark.asyncio
-async def test_decoupled_pipeline_alignment_failure_returns_transcript_and_restores_model(funasr_spec):
+async def test_segment_alignment_failure_returns_transcript_and_restores_model(funasr_spec):
     svc = _setup_service(funasr_spec)
     profile = _legacy_segment_pipeline_profile(requestable=True)
     transcript = {"text": "hello world", "segments": [{"text": "hello", "start": 0.0, "end": 1.0}]}
@@ -547,6 +568,32 @@ async def test_decoupled_pipeline_alignment_failure_returns_transcript_and_resto
         )
 
     assert result == transcript
+    svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
+
+
+@pytest.mark.asyncio
+async def test_forced_alignment_failure_propagates_and_restores_model(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
+        assert pipeline_reserved is True
+        return {"text": "hello world", "segments": None, "duration": 1.0}
+
+    async def fake_align(temp_file_path, text, language, request_id, alias, pipeline_reserved=False):
+        assert pipeline_reserved is True
+        raise RuntimeError("forced align failed")
+
+    svc._transcribe_with_alias = fake_transcribe
+    svc._align_with_alias = fake_align
+    svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
+    svc._restore_resident_model = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="forced align failed"):
+        await svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req-pipeline", profile)
+
     svc._restore_resident_model.assert_awaited_once_with(funasr_spec)
 
 
@@ -724,6 +771,36 @@ async def test_diarize_with_alias_should_submit_diarization_job(funasr_spec):
 
 
 @pytest.mark.asyncio
+async def test_align_with_alias_should_submit_alignment_job(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
+
+    async def deliver() -> None:
+        await asyncio.sleep(0.05)
+        svc._result_queue.put(
+            ("RESULT", "req-pipeline:align", [AlignedWord(text="hello", start=0.0, end=0.5)])
+        )
+
+    asyncio.create_task(deliver())
+    try:
+        result = await svc._align_with_alias(
+            "audio.wav",
+            "hello",
+            "English",
+            "req-pipeline",
+            "qwen3-forced-aligner",
+        )
+        job = svc._job_queue.get(timeout=1.0)
+    finally:
+        await _stop_service(svc)
+
+    assert result == [AlignedWord(text="hello", start=0.0, end=0.5)]
+    assert job.job_kind == "align"
+    assert job.requested_aligner_alias == "qwen3-forced-aligner"
+    assert job.params == {"text": "hello", "language": "English"}
+
+
+@pytest.mark.asyncio
 async def test_decoupled_pipeline_restore_failure_is_propagated(funasr_spec):
     from src.core.pipeline_registry import lookup_profile
 
@@ -830,6 +907,29 @@ async def test_pipeline_pending_drain_times_out_instead_of_waiting_forever(funas
         await svc._wait_for_pending_work_to_drain(timeout_seconds=0.01)
 
     assert "stuck-request" in svc._pending
+
+
+@pytest.mark.asyncio
+async def test_discard_pipeline_request_state_should_remove_chunk_subrequests(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    loop = asyncio.get_running_loop()
+    request_ids = [
+        "req",
+        "req:transcribe",
+        "req:align",
+        "req:diarize",
+        "req:chunk-0:transcribe",
+        "req:chunk-0:align",
+        "req:chunk-0:diarize",
+    ]
+    for request_id in request_ids:
+        svc._pending[request_id] = loop.create_future()
+    svc._pending["other:chunk-0:align"] = loop.create_future()
+
+    svc._discard_pipeline_request_state("req")
+
+    assert all(request_id not in svc._pending for request_id in request_ids)
+    assert "other:chunk-0:align" in svc._pending
 
 
 @pytest.mark.asyncio

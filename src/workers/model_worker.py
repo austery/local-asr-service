@@ -6,7 +6,7 @@ Queues using a simple IPC protocol:
   ("READY", None)          — engine loaded, ready for jobs
   ("LOAD_ERROR", str)      — engine.load() failed; process exits with code 1
   ("RESULT", uid, result)  — job succeeded
-  ("ERROR", uid, str)      — job raised an exception
+  ("ERROR", uid, exc_type, str) — job raised an exception
   ("IDLE_EXIT", None)      — idle timeout reached; process exits with code 0
 """
 import logging
@@ -205,7 +205,7 @@ def run_worker(
                     _put_result(result_queue, ("RESULT", job.uid, result))
                 except Exception as exc:
                     logger.exception("%s failed for job %s", job.job_kind.title(), job.uid)
-                    _put_result(result_queue, ("ERROR", job.uid, str(exc)))
+                    _put_result(result_queue, ("ERROR", job.uid, type(exc).__name__, str(exc)))
         finally:
             _release_aligners(aligners)
             _release_diarizers(diarizers)

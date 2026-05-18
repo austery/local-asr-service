@@ -14,6 +14,8 @@ class AlignedWord:
             raise ValueError("Aligned word text cannot be empty")
         if not math.isfinite(self.start) or not math.isfinite(self.end):
             raise ValueError("Aligned word timestamps must be finite")
+        if self.start < 0.0:
+            raise ValueError(f"Invalid interval: start ({self.start}) must be >= 0")
         if self.end < self.start:
             raise ValueError(f"Invalid interval: end ({self.end}) must be >= start ({self.start})")
 

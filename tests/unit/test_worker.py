@@ -143,7 +143,8 @@ class TestRunWorker:
         err_msg = _get_result(result_q)
         assert err_msg[0] == "ERROR"
         assert err_msg[1] == "fail-1"
-        assert "GPU crash" in err_msg[2]
+        assert err_msg[2] == "RuntimeError"
+        assert "GPU crash" in err_msg[3]
 
     def test_idle_exit_when_timeout_reached(self):
         """Worker puts IDLE_EXIT and releases engine when queue.get() times out."""
@@ -263,7 +264,8 @@ class TestRunWorker:
         err_msg = _get_result(result_q)
         assert err_msg[0] == "ERROR"
         assert err_msg[1] == "diarize-fail"
-        assert "diarizer crashed" in err_msg[2]
+        assert err_msg[2] == "RuntimeError"
+        assert "diarizer crashed" in err_msg[3]
 
     def test_puts_error_on_unsupported_job_kind(self):
         """Worker rejects unknown job kinds instead of falling through to transcription."""
@@ -286,7 +288,8 @@ class TestRunWorker:
         err_msg = _get_result(result_q)
         assert err_msg[0] == "ERROR"
         assert err_msg[1] == "bad-kind"
-        assert "Unsupported job_kind" in err_msg[2]
+        assert err_msg[2] == "ValueError"
+        assert "Unsupported job_kind" in err_msg[3]
         mock_engine.transcribe_file.assert_not_called()
 
     def test_puts_error_when_diarize_job_is_missing_alias(self):
@@ -310,4 +313,5 @@ class TestRunWorker:
         err_msg = _get_result(result_q)
         assert err_msg[0] == "ERROR"
         assert err_msg[1] == "missing-alias"
-        assert "requested_diarizer_alias" in err_msg[2]
+        assert err_msg[2] == "ValueError"
+        assert "requested_diarizer_alias" in err_msg[3]

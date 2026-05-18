@@ -40,6 +40,7 @@ WorkerStartupMessage = tuple[Literal["READY"], None] | tuple[Literal["LOAD_ERROR
 WorkerResultMessage = (
     tuple[Literal["RESULT"], str, object]
     | tuple[Literal["ERROR"], str, str]
+    | tuple[Literal["ERROR"], str, str, str]
     | tuple[Literal["IDLE_EXIT"], None]
 )
 WorkerMessage = WorkerStartupMessage | WorkerResultMessage
@@ -47,6 +48,18 @@ PIPELINE_ALIGN_CHUNK_SECONDS = 300.0
 PIPELINE_ALIGN_OVERLAP_SECONDS = 15.0
 PIPELINE_PENDING_DRAIN_TIMEOUT_SECONDS = 30.0
 PIPELINE_PENDING_DRAIN_POLL_SECONDS = 0.01
+
+
+class PipelineQualityError(ValueError):
+    """Pipeline produced structurally invalid alignment output."""
+
+
+class WorkerRemoteError(RuntimeError):
+    """Exception raised by the worker process and reconstructed in the parent."""
+
+    def __init__(self, exc_type_name: str, message: str) -> None:
+        super().__init__(message)
+        self.exc_type_name = exc_type_name
 
 
 class TranscriptionService:
@@ -401,6 +414,8 @@ class TranscriptionService:
         self,
         temp_file_path: str,
         transcript_result: TranscriptionResultDict,
+        *,
+        request_id: str,
     ) -> float | None:
         duration = transcript_result.get("duration")
         if isinstance(duration, int | float) and not isinstance(duration, bool):
@@ -410,8 +425,11 @@ class TranscriptionService:
             return self._get_audio_chunker().get_audio_duration(temp_file_path)
         except Exception as exc:
             self.logger.warning(
-                "Could not resolve audio duration for pipeline chunking; falling back to short-form path: %s",
+                "[%s] Could not resolve audio duration for pipeline chunking from %s; falling back to short-form path: %s",
+                request_id,
+                temp_file_path,
                 exc,
+                exc_info=True,
             )
             return None
 
@@ -551,7 +569,11 @@ class TranscriptionService:
                 aligned_words: list[AlignedWord] | None = None
                 pipeline_chunk_paths: list[str] | None = None
                 pipeline_windows: list[ChunkWindow] | None = None
-                pipeline_duration = self._resolve_pipeline_duration(temp_file_path, transcript_result)
+                pipeline_duration = self._resolve_pipeline_duration(
+                    temp_file_path,
+                    transcript_result,
+                    request_id=request_id,
+                )
                 if profile.alignment_alias is not None:
                     alignment_language = self._resolve_alignment_language(params, transcript_result)
                     if (
@@ -599,10 +621,13 @@ class TranscriptionService:
                         )
 
                 if aligned_words is not None and pipeline_duration is not None:
-                    validate_aligned_word_quality(
-                        aligned_words,
-                        expected_duration_seconds=pipeline_duration,
-                    )
+                    try:
+                        validate_aligned_word_quality(
+                            aligned_words,
+                            expected_duration_seconds=pipeline_duration,
+                        )
+                    except ValueError as exc:
+                        raise PipelineQualityError(str(exc)) from exc
 
                 try:
                     if pipeline_chunk_paths is not None and pipeline_windows is not None:
@@ -625,11 +650,14 @@ class TranscriptionService:
                         raise
                     if self._is_diarization_contract_error(exc):
                         raise
+                    if isinstance(exc, MemoryError | OSError | TimeoutError):
+                        raise
                     self.logger.warning(
                         "[%s] Decoupled pipeline diarization failed for profile %s; returning transcript-only result: %s",
                         request_id,
                         profile.alias,
                         exc,
+                        exc_info=True,
                     )
                     return transcript_result
 
@@ -782,6 +810,9 @@ class TranscriptionService:
         self._discard_request_state(f"{request_id}:transcribe")
         self._discard_request_state(f"{request_id}:align")
         self._discard_request_state(f"{request_id}:diarize")
+        for uid in list(self._pending):
+            if uid.startswith(f"{request_id}:chunk-"):
+                self._discard_request_state(uid)
 
     async def _restore_resident_model(self, previous_spec: ModelSpec | None) -> None:
         async with self._spawn_lock:
@@ -812,6 +843,9 @@ class TranscriptionService:
     def _is_diarization_contract_error(exc: Exception) -> bool:
         if isinstance(exc, (NotImplementedError, TypeError, KeyError)):
             return True
+        contract_type_names = {"KeyError", "NotImplementedError", "TypeError", "ValueError"}
+        if isinstance(exc, WorkerRemoteError):
+            return exc.exc_type_name in contract_type_names
         if not isinstance(exc, RuntimeError):
             return False
         message = str(exc)
@@ -848,7 +882,7 @@ class TranscriptionService:
                     old_q.close()
                     old_q.join_thread()
                 except Exception:
-                    pass
+                    self.logger.warning("Failed to close stale worker queue during respawn", exc_info=True)
 
         self._job_queue = multiprocessing.Queue()
         self._result_queue = multiprocessing.Queue()
@@ -1011,7 +1045,10 @@ class TranscriptionService:
                 if msg_type == "RESULT":
                     self._resolve_future(msg[1], result=msg[2])
                 elif msg_type == "ERROR":
-                    self._resolve_future(msg[1], error=RuntimeError(msg[2]))
+                    if len(msg) == 4:
+                        self._resolve_future(msg[1], error=WorkerRemoteError(msg[2], msg[3]))
+                    else:
+                        self._resolve_future(msg[1], error=RuntimeError(msg[2]))
                 elif msg_type == "IDLE_EXIT":
                     self.logger.info("💤 Worker exited due to idle timeout — memory reclaimed by OS")
                     if self._worker:

@@ -66,6 +66,10 @@ class MlxSortformerDiarizer(DiarizationPort):
 
     def _to_speaker_turn(self, segment: RuntimeDiarizationSegment | object) -> SpeakerTurn:
         runtime_segment = _require_runtime_segment(segment)
+        if not isinstance(runtime_segment.speaker, int | str):
+            raise TypeError(
+                f"speaker must be int or str, got {type(runtime_segment.speaker).__name__}"
+            )
         return SpeakerTurn(
             speaker=f"Speaker {runtime_segment.speaker}",
             start=float(runtime_segment.start),

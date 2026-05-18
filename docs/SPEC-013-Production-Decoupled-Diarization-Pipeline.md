@@ -272,9 +272,9 @@ enablement. The remaining gaps are:
    ASR engine. This is acceptable while the profile is discovery-only, but
    production enablement should evaluate a lighter worker mode or split worker
    topology to reduce peak Apple Silicon UMA pressure.
-8. Worker contract errors are still classified in the service from worker error
-   messages. Before public enablement, the IPC boundary should carry a typed
-   contract-error signal instead of relying on message text.
+8. Worker-originated errors now preserve the remote exception type in the IPC
+   tuple, but public enablement still needs real-runtime restore and long-form
+   validation before exposing the profile.
 
 Immediate implementation priority:
 
@@ -311,6 +311,7 @@ Immediate implementation priority:
 | 2026-05-18 | 🟡 实现中 (Gap alignment) | Added explicit remaining blockers and prioritized lightweight cross-chunk speaker reconciliation before public enablement |
 | 2026-05-18 | 🟡 实现中 (Reconciliation probe) | Added overlap-based speaker label reconciliation and reran 10-minute probe; speaker-consistency gap remains open |
 | 2026-05-18 | 🟡 实现中 (Sortformer tuning) | Tuned Sortformer runtime parameters; Blair 10-minute probe now reaches ~596.76s max end with `Unknown` reduced from ~275.44s to ~17.41s |
+| 2026-05-18 | 🟡 实现中 (Review hardening) | Added chunk sub-request cleanup, typed worker errors, pipeline quality 422 responses, and stricter runtime contract validation |
 
 ## 10. Related
 

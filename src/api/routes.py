@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from src.config import MAX_UPLOAD_SIZE_MB
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
 from src.core.pipeline_registry import PipelineProfile, list_all_profiles, lookup_profile
+from src.services.transcription import PipelineQualityError
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +357,10 @@ async def create_transcription(
                 model=response_model,
                 segments=None,
             )
+
+    except PipelineQualityError as e:
+        logger.warning(f"[{request_id}] Pipeline quality gate failed: {e}", exc_info=True)
+        raise HTTPException(status_code=422, detail=str(e)) from None
 
     except RuntimeError as e:
         if "Queue is full" in str(e):
