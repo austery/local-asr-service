@@ -17,7 +17,7 @@
 
 | Alias | Components | Requestable | Notes |
 |-------|------------|:-----------:|-------|
-| `qwen3-sortformer` | `qwen3-asr` + `sortformer-diar` | ✅ | Requestable decoupled Qwen3-ASR + MLX Sortformer pipeline; subject to Apple Silicon memory limits and current Sortformer threshold defaults |
+| `qwen3-sortformer` | `qwen3-asr` + `qwen3-forced-aligner` + `sortformer-diar` | Experimental | Target Apple-native batch speaker-separation pipeline. Do not treat the current two-stage ASR+Sortformer path as production speaker labeling. |
 
 ---
 
@@ -28,6 +28,10 @@ The project registers models by runtime contract, not by vendor name.
 - Same runtime API means registry-only: for example, a future Qwen3-ASR model that still works with `mlx_audio.stt.utils.load_model()` and `generate_transcription()` should only need a new `ModelSpec`.
 - Different runtime API means a new engine adapter: for example, the independent `parakeet-mlx` package uses `from_pretrained(...).transcribe(...)`, so it should not be hidden inside `MlxAudioEngine` unless an adapter normalizes that contract.
 - Same Apple Silicon backend does not imply the same engine: MLX Metal, PyTorch MPS, CoreML/ANE, and CPU have different lifecycle and output contracts.
+- The service should wrap proven upstream runtime capabilities rather than
+  reimplementing model internals. For Qwen3 speaker separation, that means
+  reusing `mlx-audio` Qwen3-ASR, Qwen3-ForcedAligner, and Sortformer contracts
+  instead of inventing local timestamp or diarization model logic.
 
 ---
 
@@ -58,12 +62,17 @@ The project registers models by runtime contract, not by vendor name.
 |----------|------------------|--------|
 | Mandarin long-form podcast (20-60min) | `paraformer` | Best verified long-audio RTF, CAM++ diarization |
 | Chinese/English quality-first single-speaker audio | `qwen3-asr` | MLX-native Qwen3-ASR with explicit language prompt forwarding |
+| Spokenly local dictation fallback | `qwen3-asr` | Best current local path for low-latency single-speaker voice input through an OpenAI-compatible endpoint |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
 | Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
-| Apple-native multi-speaker pipeline | `qwen3-sortformer` | Requestable Qwen3-ASR + Sortformer pipeline when you want MLX-backed ASR plus diarization, with current memory/threshold caveats |
+| Apple-native multi-speaker batch pipeline | `qwen3-sortformer` | Target design requires Qwen3-ASR text + Qwen3-ForcedAligner word timestamps + Sortformer speaker turns |
 | Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
 
-`qwen3-sortformer` is a requestable decoupled pipeline profile backed by Qwen3-ASR transcription plus MLX Sortformer diarization. It remains subject to Apple Silicon memory limits and the current Sortformer threshold defaults.
+`qwen3-sortformer` is not just "Qwen3-ASR segments plus Sortformer." Local E2E
+testing showed Qwen3-ASR emits chunk-level segments for the tested English
+samples, which is too coarse for truthful speaker-labeled transcript output.
+The production direction is a three-stage pipeline: Qwen3-ASR text,
+Qwen3-ForcedAligner word timestamps, and Sortformer speaker turns.
 
 ---
 

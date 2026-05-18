@@ -11,7 +11,7 @@ def test_should_resolve_qwen3_sortformer_profile() -> None:
     assert profile.diarization_alias == "sortformer-diar"
     assert profile.capabilities.timestamp is True
     assert profile.capabilities.diarization is True
-    assert profile.requestable is True
+    assert profile.requestable is False
 
 
 def test_should_list_profiles_sorted_by_alias() -> None:
