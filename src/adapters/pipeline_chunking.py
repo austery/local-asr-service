@@ -102,6 +102,65 @@ def offset_turns_to_global_timeline(
     return result
 
 
+def reconcile_chunk_speaker_labels(
+    *,
+    existing_turns: list[SpeakerTurn],
+    chunk_turns: list[SpeakerTurn],
+    overlap_start: float,
+    overlap_end: float,
+) -> list[SpeakerTurn]:
+    if overlap_end <= overlap_start or not existing_turns or not chunk_turns:
+        return chunk_turns
+
+    scores: dict[str, dict[str, float]] = {}
+    for chunk_turn in chunk_turns:
+        for existing_turn in existing_turns:
+            segment_start = max(
+                chunk_turn.start,
+                existing_turn.start,
+                overlap_start,
+            )
+            segment_end = min(
+                chunk_turn.end,
+                existing_turn.end,
+                overlap_end,
+            )
+            if segment_end <= segment_start:
+                continue
+            per_speaker_scores = scores.setdefault(chunk_turn.speaker, {})
+            per_speaker_scores[existing_turn.speaker] = per_speaker_scores.get(
+                existing_turn.speaker,
+                0.0,
+            ) + (segment_end - segment_start)
+
+    candidates = [
+        (score, chunk_speaker, existing_speaker)
+        for chunk_speaker, existing_scores in scores.items()
+        for existing_speaker, score in existing_scores.items()
+    ]
+    candidates.sort(reverse=True, key=lambda item: item[0])
+
+    remap: dict[str, str] = {}
+    used_existing: set[str] = set()
+    for _score, chunk_speaker, existing_speaker in candidates:
+        if chunk_speaker in remap or existing_speaker in used_existing:
+            continue
+        remap[chunk_speaker] = existing_speaker
+        used_existing.add(existing_speaker)
+
+    if not remap:
+        return chunk_turns
+
+    return [
+        SpeakerTurn(
+            speaker=remap.get(turn.speaker, turn.speaker),
+            start=turn.start,
+            end=turn.end,
+        )
+        for turn in chunk_turns
+    ]
+
+
 def validate_aligned_word_quality(
     words: list[AlignedWord],
     *,

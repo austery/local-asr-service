@@ -5,6 +5,7 @@ from src.adapters.pipeline_chunking import (
     build_chunk_plan,
     offset_turns_to_global_timeline,
     offset_words_to_global_timeline,
+    reconcile_chunk_speaker_labels,
     validate_aligned_word_quality,
 )
 from src.core.alignment_port import AlignedWord
@@ -101,3 +102,28 @@ def test_validate_aligned_word_quality_should_accept_short_valid_alignment() -> 
     ]
 
     validate_aligned_word_quality(words, expected_duration_seconds=1.2)
+
+
+def test_reconcile_chunk_speaker_labels_should_remap_swapped_labels_by_overlap() -> None:
+    existing = [
+        SpeakerTurn(speaker="Speaker 1", start=270.0, end=277.5),
+        SpeakerTurn(speaker="Speaker 0", start=277.5, end=285.0),
+    ]
+    chunk_turns = [
+        SpeakerTurn(speaker="Speaker 0", start=270.0, end=277.5),
+        SpeakerTurn(speaker="Speaker 1", start=277.5, end=285.0),
+        SpeakerTurn(speaker="Speaker 1", start=285.0, end=305.0),
+    ]
+
+    result = reconcile_chunk_speaker_labels(
+        existing_turns=existing,
+        chunk_turns=chunk_turns,
+        overlap_start=270.0,
+        overlap_end=285.0,
+    )
+
+    assert result == [
+        SpeakerTurn(speaker="Speaker 1", start=270.0, end=277.5),
+        SpeakerTurn(speaker="Speaker 0", start=277.5, end=285.0),
+        SpeakerTurn(speaker="Speaker 0", start=285.0, end=305.0),
+    ]

@@ -54,7 +54,13 @@ def test_diarize_file_should_map_attribute_segments_to_speaker_turns(
         SpeakerTurn(speaker="Speaker 0", start=0.0, end=1.25),
         SpeakerTurn(speaker="Speaker 1", start=1.25, end=2.5),
     ]
-    runtime.generate.assert_called_once_with("sample.wav", threshold=0.5, verbose=False)
+    runtime.generate.assert_called_once_with(
+        "sample.wav",
+        threshold=0.35,
+        min_duration=0.2,
+        merge_gap=0.3,
+        verbose=False,
+    )
 
 
 def test_diarize_file_should_raise_when_runtime_segment_shape_is_invalid(

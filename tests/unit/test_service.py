@@ -439,6 +439,43 @@ async def test_chunked_diarization_should_offset_turns_and_drop_overlap(funasr_s
 
 
 @pytest.mark.asyncio
+async def test_chunked_diarization_reconcile_should_keep_speaker_identity_across_chunks(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    windows = [
+        ChunkWindow(index=0, start=0.0, end=300.0, emit_start=0.0, emit_end=285.0),
+        ChunkWindow(index=1, start=270.0, end=600.0, emit_start=285.0, emit_end=600.0),
+    ]
+
+    async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
+        if temp_file_path.endswith("chunk_000.wav"):
+            return [
+                SpeakerTurn(speaker="Speaker 1", start=270.0, end=277.5),
+                SpeakerTurn(speaker="Speaker 0", start=277.5, end=285.0),
+            ]
+        return [
+            SpeakerTurn(speaker="Speaker 0", start=0.0, end=7.5),
+            SpeakerTurn(speaker="Speaker 1", start=7.5, end=15.0),
+            SpeakerTurn(speaker="Speaker 1", start=15.0, end=35.0),
+        ]
+
+    svc._diarize_with_alias = fake_diarize
+
+    result = await svc._diarize_chunks_with_alias(
+        chunk_paths=["/tmp/chunk_000.wav", "/tmp/chunk_001.wav"],
+        windows=windows,
+        request_id="req",
+        alias="sortformer-diar",
+        pipeline_reserved=True,
+    )
+
+    assert result == [
+        SpeakerTurn(speaker="Speaker 1", start=270.0, end=277.5),
+        SpeakerTurn(speaker="Speaker 0", start=277.5, end=285.0),
+        SpeakerTurn(speaker="Speaker 0", start=285.0, end=305.0),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_pipeline_should_fail_loudly_when_alignment_quality_gate_fails(funasr_spec, tmp_path):
     from src.core.pipeline_registry import lookup_profile
 

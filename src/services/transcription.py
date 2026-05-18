@@ -16,6 +16,7 @@ from src.adapters.pipeline_chunking import (
     build_chunk_plan,
     offset_turns_to_global_timeline,
     offset_words_to_global_timeline,
+    reconcile_chunk_speaker_labels,
     validate_aligned_word_quality,
 )
 from src.adapters.segment_alignment import align_speakers
@@ -424,8 +425,6 @@ class TranscriptionService:
         if len(chunk_paths) != len(windows):
             raise ValueError("chunk_paths and windows must have the same length")
 
-        # SPEC-013: local Sortformer labels are chunk-local. Public enablement
-        # requires validated cross-chunk speaker reconciliation.
         merged: list[SpeakerTurn] = []
         for chunk_path, window in zip(chunk_paths, windows, strict=True):
             turns = await self._diarize_with_alias(
@@ -434,7 +433,38 @@ class TranscriptionService:
                 alias,
                 pipeline_reserved=pipeline_reserved,
             )
-            merged.extend(offset_turns_to_global_timeline(turns, window))
+
+            chunk_turns_global: list[SpeakerTurn] = []
+            for turn in turns:
+                global_start = max(window.start, round(window.start + turn.start, 3))
+                global_end = min(window.end, round(window.start + turn.end, 3))
+                if global_end <= global_start:
+                    continue
+                chunk_turns_global.append(
+                    SpeakerTurn(
+                        speaker=turn.speaker,
+                        start=global_start,
+                        end=global_end,
+                    )
+                )
+
+            if merged and chunk_turns_global and window.emit_start > window.start:
+                chunk_turns_global = reconcile_chunk_speaker_labels(
+                    existing_turns=merged,
+                    chunk_turns=chunk_turns_global,
+                    overlap_start=window.start,
+                    overlap_end=window.emit_start,
+                )
+
+            remapped_local_turns = [
+                SpeakerTurn(
+                    speaker=turn.speaker,
+                    start=turn.start - window.start,
+                    end=turn.end - window.start,
+                )
+                for turn in chunk_turns_global
+            ]
+            merged.extend(offset_turns_to_global_timeline(remapped_local_turns, window))
         return merged
 
     async def _diarize_with_alias(

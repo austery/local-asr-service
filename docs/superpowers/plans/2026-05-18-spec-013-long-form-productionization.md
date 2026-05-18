@@ -1269,6 +1269,164 @@ git commit -m "feat: enable qwen3 sortformer after long-form probe"
 
 ---
 
+### Task 12: Lightweight Cross-Chunk Speaker Reconciliation (Priority)
+
+**Files:**
+- Modify: `src/adapters/pipeline_chunking.py`
+- Modify: `src/services/transcription.py`
+- Test: `tests/unit/test_pipeline_chunking.py`
+- Test: `tests/unit/test_service.py`
+
+- [x] **Step 1: Write a failing unit test for overlap-based label remap**
+
+Append to `tests/unit/test_pipeline_chunking.py`:
+
+```python
+def test_reconcile_chunk_speaker_labels_should_remap_swapped_labels_by_overlap() -> None:
+    existing = [
+        SpeakerTurn(speaker="Speaker 1", start=270.0, end=277.5),
+        SpeakerTurn(speaker="Speaker 0", start=277.5, end=285.0),
+    ]
+    chunk_turns = [
+        SpeakerTurn(speaker="Speaker 0", start=270.0, end=277.5),
+        SpeakerTurn(speaker="Speaker 1", start=277.5, end=285.0),
+        SpeakerTurn(speaker="Speaker 1", start=285.0, end=305.0),
+    ]
+
+    result = reconcile_chunk_speaker_labels(
+        existing_turns=existing,
+        chunk_turns=chunk_turns,
+        overlap_start=270.0,
+        overlap_end=285.0,
+    )
+
+    assert result == [
+        SpeakerTurn(speaker="Speaker 1", start=270.0, end=277.5),
+        SpeakerTurn(speaker="Speaker 0", start=277.5, end=285.0),
+        SpeakerTurn(speaker="Speaker 0", start=285.0, end=305.0),
+    ]
+```
+
+- [x] **Step 2: Verify RED**
+
+Run:
+
+```bash
+uv run python -m pytest tests/unit/test_pipeline_chunking.py -q -k reconcile_chunk_speaker_labels
+```
+
+Expected: fails because helper does not exist.
+
+- [x] **Step 3: Implement minimal reconciliation helper**
+
+Add to `src/adapters/pipeline_chunking.py`:
+
+```python
+def reconcile_chunk_speaker_labels(
+    *,
+    existing_turns: list[SpeakerTurn],
+    chunk_turns: list[SpeakerTurn],
+    overlap_start: float,
+    overlap_end: float,
+) -> list[SpeakerTurn]:
+    ...
+```
+
+Implementation rule:
+- compute overlap scores between `(chunk_speaker, existing_speaker)` only inside overlap window,
+- greedily assign one chunk speaker to one existing speaker by highest overlap,
+- remap the full chunk turn list using that mapping,
+- keep unmatched speakers unchanged.
+
+- [x] **Step 4: Add failing service-level orchestration test**
+
+Append to `tests/unit/test_service.py` a test where:
+- chunk 0 emits overlap turns as `Speaker 1` then `Speaker 0`,
+- chunk 1 swaps labels in the overlap but should emit post-overlap turn as `Speaker 0` after remap.
+
+- [x] **Step 5: Verify RED (service)**
+
+Run:
+
+```bash
+uv run python -m pytest tests/unit/test_service.py -q -k chunked_diarization_reconcile
+```
+
+Expected: fails because `_diarize_chunks_with_alias` only offsets turns without remap.
+
+- [x] **Step 6: Implement minimal service wiring**
+
+In `src/services/transcription.py`:
+- build chunk-global turns for current chunk,
+- call `reconcile_chunk_speaker_labels(...)` against already-merged turns using current overlap window,
+- then apply emit-window clipping and append to merged result.
+
+- [x] **Step 7: Verify GREEN**
+
+Run:
+
+```bash
+uv run python -m pytest tests/unit/test_pipeline_chunking.py tests/unit/test_service.py -q -k "reconcile_chunk_speaker_labels or chunked_diarization_reconcile"
+```
+
+Expected: both new tests pass.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/adapters/pipeline_chunking.py src/services/transcription.py tests/unit/test_pipeline_chunking.py tests/unit/test_service.py
+git commit -m "feat: add lightweight cross-chunk speaker reconciliation"
+```
+
+---
+
+### Task 13: Sortformer Runtime Parameter Tuning
+
+**Files:**
+- Modify: `src/core/mlx_sortformer_diarizer.py`
+- Test: `tests/unit/test_mlx_sortformer_diarizer.py`
+
+- [x] **Step 1: Add a unit test that locks runtime generation parameters**
+
+The diarizer test now verifies that Sortformer is called with explicit
+`threshold`, `min_duration`, and `merge_gap` values.
+
+- [x] **Step 2: Tune Sortformer for lower `Unknown` coverage**
+
+Runtime parameters:
+
+```python
+SORTFORMER_THRESHOLD = 0.35
+SORTFORMER_MIN_DURATION = 0.2
+SORTFORMER_MERGE_GAP = 0.3
+```
+
+10-minute Blair probe result:
+
+| Probe | Segments | Max end | Zero-duration segments | `Unknown` duration |
+|-------|----------|---------|------------------------|--------------------|
+| Baseline | 15 | ~596.76s | 2 | ~275.44s |
+| Overlap reconciliation only | 15 | ~596.76s | 2 | ~275.44s |
+| Word-level fallback experiment | 2 | ~596.76s | 0 | ~513.96s |
+| Sortformer tuned | 73 | ~596.76s | 5 | ~17.41s |
+
+60-second two-speaker regression check:
+
+- unchanged after tuning,
+- 4 speaker-labeled segments,
+- 2 speakers detected,
+- max end remains 60.0s.
+
+Decision:
+
+- Keep overlap reconciliation plus Sortformer parameter tuning.
+- Do not keep the word-level fallback experiment; it regressed the real
+  10-minute probe by increasing `Unknown` coverage.
+- Keep `qwen3-sortformer` non-requestable until restore semantics and 5-hour
+  validation pass.
+
+---
+
 ## Final Verification Sweep
 
 - [ ] Run lint on touched files:

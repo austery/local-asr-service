@@ -249,6 +249,33 @@ The current branch implements the non-public three-stage code path:
 - `qwen3-sortformer` remains `requestable=False`; public API calls still return
   501 until real-model E2E validates the path.
 
+## 7.2 Current Gaps (2026-05-18 Reality Check)
+
+The current branch is functional but not yet production-truthful for public
+enablement. The remaining gaps are:
+
+1. Cross-chunk speaker identity now has a lightweight overlap-based remap, but
+   this only reconciles adjacent chunks when speakers are present in the overlap.
+   It does not yet solve long-gap same-speaker returns.
+2. 10-minute real-runtime output reaches full timeline coverage. After tuning
+   Sortformer runtime parameters, `Unknown` coverage on the Blair 10-minute probe
+   dropped from ~275.44s to ~17.41s while max timeline coverage stayed at
+   ~596.76s.
+3. Word-to-speaker assignment still falls back to `Unknown` when overlap or
+   midpoint matching misses a speaker turn boundary.
+4. AC-3/AC-4/AC-6/AC-7 remain open and are the true public-release blockers.
+5. `qwen3-sortformer` must remain discovery-only until real-runtime restore
+   stability and speaker-consistency criteria are met.
+6. 5-hour long-form validation has not run yet. Public enablement still requires
+   truthful long-form evidence, not just the 10-minute probe.
+
+Immediate implementation priority:
+
+- validate restore semantics under real pipeline requests,
+- run a 5-hour long-form probe,
+- decide whether overlap-based remapping is sufficient or whether a selective
+  embedding fallback is necessary for speaker identity stability.
+
 ## 8. Affected Areas
 
 | File / Area | Change Type | Intent |
@@ -274,6 +301,9 @@ The current branch implements the non-public three-stage code path:
 | 2026-05-18 | 🟡 实现中 (Implementation) | Added forced-alignment port, worker align job, and unit-tested three-stage orchestration; profile remains discovery-only pending real-model E2E |
 | 2026-05-18 | 🟡 实现中 (Long-form planning) | Added 5-hour production gate with chunked ASR/align/diarization and timestamp-collapse prevention requirements |
 | 2026-05-18 | 🟡 实现中 (Chunked implementation) | Added real chunk extraction, per-chunk ASR/alignment/diarization stitching, and alignment quality gates; still blocked on real-runtime probe and speaker reconciliation |
+| 2026-05-18 | 🟡 实现中 (Gap alignment) | Added explicit remaining blockers and prioritized lightweight cross-chunk speaker reconciliation before public enablement |
+| 2026-05-18 | 🟡 实现中 (Reconciliation probe) | Added overlap-based speaker label reconciliation and reran 10-minute probe; speaker-consistency gap remains open |
+| 2026-05-18 | 🟡 实现中 (Sortformer tuning) | Tuned Sortformer runtime parameters; Blair 10-minute probe now reaches ~596.76s max end with `Unknown` reduced from ~275.44s to ~17.41s |
 
 ## 10. Related
 

@@ -10,6 +10,8 @@ class _SortformerRuntime(Protocol):
         audio: str,
         *,
         threshold: float,
+        min_duration: float,
+        merge_gap: float,
         verbose: bool,
     ) -> "_RuntimeDiarizationOutput": ...
 
@@ -20,7 +22,7 @@ class _RuntimeDiarizationOutput(Protocol):
 
 def _load_sortformer_runtime(model_id: str) -> _SortformerRuntime:
     vad_module = import_module("mlx_audio.vad")
-    load = getattr(vad_module, "load")
+    load = vad_module.load
     return load(model_id)
 
 def _require_runtime_segment(segment: object) -> RuntimeDiarizationSegment:
@@ -29,6 +31,11 @@ def _require_runtime_segment(segment: object) -> RuntimeDiarizationSegment:
             "Runtime diarization segment must expose speaker, start, and end attributes."
         )
     return cast(RuntimeDiarizationSegment, segment)
+
+
+SORTFORMER_THRESHOLD = 0.35
+SORTFORMER_MIN_DURATION = 0.2
+SORTFORMER_MERGE_GAP = 0.3
 
 
 class MlxSortformerDiarizer(DiarizationPort):
@@ -44,7 +51,13 @@ class MlxSortformerDiarizer(DiarizationPort):
         if self._runtime is None:
             raise RuntimeError("Diarizer not loaded. Call load() first.")
 
-        output = self._runtime.generate(file_path, threshold=0.5, verbose=False)
+        output = self._runtime.generate(
+            file_path,
+            threshold=SORTFORMER_THRESHOLD,
+            min_duration=SORTFORMER_MIN_DURATION,
+            merge_gap=SORTFORMER_MERGE_GAP,
+            verbose=False,
+        )
         return [self._to_speaker_turn(segment) for segment in output.segments]
 
     def release(self) -> None:
