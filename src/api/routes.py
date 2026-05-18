@@ -191,8 +191,8 @@ async def create_transcription(
 
     file.file.seek(0)
 
-    # 3. Resolve model/pipeline aliases. Pipeline profiles are discovery-only
-    # until their runtime dependencies and resource profile are validated.
+    # 3. Resolve model/pipeline aliases. Some pipeline profiles may remain
+    # discoverable but not requestable while their runtime contract is validated.
     resolved_profile = _resolve_pipeline_profile(model)
     if resolved_profile is not None and not resolved_profile.requestable:
         raise HTTPException(

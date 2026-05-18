@@ -61,9 +61,9 @@ The project registers models by runtime contract, not by vendor name.
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
 | Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
 | Apple-native multi-speaker pipeline | `qwen3-sortformer` | Requestable Qwen3-ASR + Sortformer pipeline when you want MLX-backed ASR plus diarization, with current memory/threshold caveats |
+| Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
 
 `qwen3-sortformer` is a requestable decoupled pipeline profile backed by Qwen3-ASR transcription plus MLX Sortformer diarization. It remains subject to Apple Silicon memory limits and the current Sortformer threshold defaults.
-| Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
 
 ---
 
