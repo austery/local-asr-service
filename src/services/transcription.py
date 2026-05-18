@@ -394,6 +394,24 @@ class TranscriptionService:
             paths.append(chunker.extract_pipeline_chunk(temp_file_path, output_path, window))
         return paths
 
+    def _resolve_pipeline_duration(
+        self,
+        temp_file_path: str,
+        transcript_result: TranscriptionResultDict,
+    ) -> float | None:
+        duration = transcript_result.get("duration")
+        if isinstance(duration, int | float) and not isinstance(duration, bool):
+            return float(duration)
+
+        try:
+            return self._get_audio_chunker().get_audio_duration(temp_file_path)
+        except Exception as exc:
+            self.logger.warning(
+                "Could not resolve audio duration for pipeline chunking; falling back to short-form path: %s",
+                exc,
+            )
+            return None
+
     async def _diarize_chunks_with_alias(
         self,
         *,
@@ -509,16 +527,15 @@ class TranscriptionService:
                 aligned_words: list[AlignedWord] | None = None
                 pipeline_chunk_paths: list[str] | None = None
                 pipeline_windows: list[ChunkWindow] | None = None
+                pipeline_duration = self._resolve_pipeline_duration(temp_file_path, transcript_result)
                 if profile.alignment_alias is not None:
                     alignment_language = self._resolve_alignment_language(params, transcript_result)
-                    duration = transcript_result.get("duration")
                     if (
-                        isinstance(duration, int | float)
-                        and not isinstance(duration, bool)
-                        and float(duration) > PIPELINE_ALIGN_CHUNK_SECONDS
+                        pipeline_duration is not None
+                        and pipeline_duration > PIPELINE_ALIGN_CHUNK_SECONDS
                     ):
                         windows = build_chunk_plan(
-                            duration_seconds=float(duration),
+                            duration_seconds=pipeline_duration,
                             chunk_seconds=PIPELINE_ALIGN_CHUNK_SECONDS,
                             overlap_seconds=PIPELINE_ALIGN_OVERLAP_SECONDS,
                         )
@@ -557,16 +574,11 @@ class TranscriptionService:
                             pipeline_reserved=True,
                         )
 
-                if aligned_words is not None:
-                    duration_for_quality = transcript_result.get("duration")
-                    if (
-                        isinstance(duration_for_quality, int | float)
-                        and not isinstance(duration_for_quality, bool)
-                    ):
-                        validate_aligned_word_quality(
-                            aligned_words,
-                            expected_duration_seconds=float(duration_for_quality),
-                        )
+                if aligned_words is not None and pipeline_duration is not None:
+                    validate_aligned_word_quality(
+                        aligned_words,
+                        expected_duration_seconds=pipeline_duration,
+                    )
 
                 try:
                     if pipeline_chunk_paths is not None and pipeline_windows is not None:

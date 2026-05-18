@@ -353,8 +353,11 @@ async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunk
 
     svc = _setup_service(funasr_spec)
     profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
-    transcript = {"text": "full text", "segments": None, "duration": 600.0, "language": "en"}
+    transcript = {"text": "full text", "segments": None, "language": "en"}
     extracted_windows: list[ChunkWindow] = []
+    fake_chunker = MagicMock()
+    fake_chunker.get_audio_duration.return_value = 600.0
+    svc._audio_chunker = fake_chunker
 
     def fake_extract_chunks(temp_file_path, temp_dir, windows):
         assert temp_file_path == "audio.wav"
