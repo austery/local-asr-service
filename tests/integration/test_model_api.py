@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 
 from src.core.base_engine import EngineCapabilities
 from src.core.model_registry import lookup as real_lookup
-from src.core.pipeline_registry import PipelineProfile
 from src.main import app
 from src.services.transcription import TranscriptionService
 
@@ -89,7 +88,7 @@ def test_should_return_model_list_on_get_models(client) -> None:
 
 
 
-def test_models_endpoint_should_include_non_requestable_pipeline_profiles(client) -> None:
+def test_models_endpoint_should_include_requestable_pipeline_profiles(client) -> None:
     response = client.get("/v1/models")
 
     assert response.status_code == 200
@@ -97,7 +96,7 @@ def test_models_endpoint_should_include_non_requestable_pipeline_profiles(client
     models = {item["alias"]: item for item in body["models"]}
     assert "qwen3-sortformer" in models
     assert models["qwen3-sortformer"]["capabilities"]["diarization"] is True
-    assert models["qwen3-sortformer"]["requestable"] is False
+    assert models["qwen3-sortformer"]["requestable"] is True
 
 
 # MA-2
@@ -134,27 +133,8 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
     assert "Unknown model" in response.json()["detail"]
 
 
-def test_should_return_501_for_non_requestable_pipeline_profile(client) -> None:
-    response = client.post(
-        "/v1/audio/transcriptions",
-        data={"model": "qwen3-sortformer"},
-        files={"file": _audio_file()},
-    )
-
-    assert response.status_code == 501
-    assert "not enabled" in response.json()["detail"]
-
-
 def test_should_submit_requestable_pipeline_profile() -> None:
     qwen_spec = real_lookup("qwen3-asr")
-    requestable_profile = PipelineProfile(
-        alias="qwen3-sortformer",
-        transcription_alias="qwen3-asr",
-        diarization_alias="sortformer-diar",
-        description="test requestable profile",
-        capabilities=EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
-        requestable=True,
-    )
     mock_service = _make_mock_service(
         qwen_spec.capabilities,
         {
@@ -168,7 +148,6 @@ def test_should_submit_requestable_pipeline_profile() -> None:
     with (
         patch("src.main.TranscriptionService", return_value=mock_service),
         patch("src.main.lookup", return_value=qwen_spec),
-        patch("src.api.routes.lookup_profile", return_value=requestable_profile),
         TestClient(app) as c,
     ):
         response = c.post(

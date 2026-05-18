@@ -19,11 +19,11 @@ _REGISTRY: dict[str, PipelineProfile] = {
         transcription_alias="qwen3-asr",
         diarization_alias="sortformer-diar",
         description=(
-            "Decoupled Qwen3-ASR transcription plus Sortformer diarization profile. "
-            "Discovery-only until Sortformer runtime validation passes."
+            "Worker-backed Qwen3-ASR transcription plus Sortformer diarization "
+            "pipeline for request-time multi-speaker transcription."
         ),
         capabilities=EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
-        requestable=False,
+        requestable=True,
     )
 }
 

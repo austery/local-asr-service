@@ -13,11 +13,11 @@
 | `sensevoice-small` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/SenseVoiceSmall` | ❌ | Fast language/emotion tags, no timestamps |
 | `qwen3-asr` | mlx-audio (`load_model` + `generate_transcription` on MLX Metal) | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | Chinese/English quality-first ASR; language prompts are normalized before inference |
 
-## Discovery-Only Pipeline Profiles
+## Pipeline Profiles
 
 | Alias | Components | Requestable | Notes |
 |-------|------------|:-----------:|-------|
-| `qwen3-sortformer` | `qwen3-asr` + `sortformer-diar` | ❌ | Exposed by `/v1/models` for discovery, but `POST /v1/audio/transcriptions` returns 501 until Sortformer runtime validation passes |
+| `qwen3-sortformer` | `qwen3-asr` + `sortformer-diar` | ✅ | Requestable worker-backed pipeline that combines Qwen3-ASR transcription with Sortformer diarization |
 
 ---
 
@@ -59,8 +59,8 @@ The project registers models by runtime contract, not by vendor name.
 | Mandarin long-form podcast (20-60min) | `paraformer` | Best verified long-audio RTF, CAM++ diarization |
 | Chinese/English quality-first single-speaker audio | `qwen3-asr` | MLX-native Qwen3-ASR with explicit language prompt forwarding |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
-| Multi-speaker meeting today | `paraformer` | Only requestable model with diarization |
-| Future MLX diarization pipeline | `qwen3-sortformer` | Discovery-only until Sortformer integration is validated |
+| Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
+| Apple-native multi-speaker pipeline | `qwen3-sortformer` | Requestable Qwen3-ASR + Sortformer pipeline when you want MLX-backed ASR plus diarization |
 | Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
 
 ---
