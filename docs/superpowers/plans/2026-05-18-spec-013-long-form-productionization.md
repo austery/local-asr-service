@@ -629,7 +629,7 @@ git commit -m "feat: add chunked forced-alignment orchestration"
 - Test: `tests/unit/test_service.py`
 - Test: `tests/unit/test_audio_chunking.py`
 
-- [ ] **Step 1: Write failing test for extracted chunk paths**
+- [x] **Step 1: Write failing test for extracted chunk paths**
 
 Append to `tests/unit/test_service.py`:
 
@@ -655,7 +655,7 @@ async def test_long_form_pipeline_should_extract_chunk_files_before_alignment(fu
     assert extracted == paths
 ```
 
-- [ ] **Step 2: Run the test to verify RED**
+- [x] **Step 2: Run the test to verify RED**
 
 Run:
 
@@ -665,7 +665,7 @@ uv run python -m pytest tests/unit/test_service.py -q -k extract_chunk_files
 
 Expected: fails because `_extract_pipeline_chunks` does not exist.
 
-- [ ] **Step 3: Implement extraction helper**
+- [x] **Step 3: Implement extraction helper**
 
 Add method to `TranscriptionService`:
 
@@ -691,7 +691,7 @@ Ensure `__init__` has an audio chunker instance:
 
 If constructing `AudioChunkingService()` in tests triggers ffmpeg checks, patch `_check_ffmpeg_availability` in the affected tests or lazily instantiate the chunker in `_get_audio_chunker()`.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
@@ -716,7 +716,7 @@ git commit -m "feat: extract pipeline audio chunks for long-form alignment"
 - Modify: `src/services/transcription.py`
 - Test: `tests/unit/test_service.py`
 
-- [ ] **Step 1: Write failing test for per-chunk ASR text**
+- [x] **Step 1: Write failing test for per-chunk ASR text**
 
 Append to `tests/unit/test_service.py`:
 
@@ -748,7 +748,7 @@ async def test_long_form_pipeline_should_align_each_chunk_with_its_own_transcrip
     assert result == ["chunk zero", "chunk one"]
 ```
 
-- [ ] **Step 2: Run the test to verify RED**
+- [x] **Step 2: Run the test to verify RED**
 
 Run:
 
@@ -758,7 +758,7 @@ uv run python -m pytest tests/unit/test_service.py -q -k transcribe_each_chunk
 
 Expected: fails because `_transcribe_chunks_with_alias` does not exist.
 
-- [ ] **Step 3: Implement chunk ASR helper**
+- [x] **Step 3: Implement chunk ASR helper**
 
 Add method to `TranscriptionService`:
 
@@ -793,7 +793,7 @@ Add method to `TranscriptionService`:
         return texts
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
@@ -818,7 +818,7 @@ git commit -m "feat: align long-form chunks with per-chunk qwen transcripts"
 - Modify: `src/services/transcription.py`
 - Test: `tests/unit/test_service.py`
 
-- [ ] **Step 1: Write failing test for long-form routing**
+- [x] **Step 1: Write failing test for long-form routing**
 
 Append to `tests/unit/test_service.py`:
 
@@ -867,7 +867,7 @@ async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunk
     ]
 ```
 
-- [ ] **Step 2: Run the test to verify RED**
+- [x] **Step 2: Run the test to verify RED**
 
 Run:
 
@@ -877,7 +877,7 @@ uv run python -m pytest tests/unit/test_service.py -q -k long_form_pipeline
 
 Expected: fails because `_run_decoupled_pipeline` still uses single-file alignment for long audio.
 
-- [ ] **Step 3: Implement long-form routing with real chunks**
+- [x] **Step 3: Implement long-form routing with real chunks**
 
 Add constants near the top of `src/services/transcription.py`:
 
@@ -926,7 +926,7 @@ Inside `_run_decoupled_pipeline`, use this branch when `duration > PIPELINE_ALIG
 
 Do not pass the original full audio path into `_align_chunks_with_alias` for long-form audio.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 

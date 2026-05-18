@@ -291,6 +291,110 @@ async def test_chunked_alignment_should_apply_offsets_and_drop_overlap(funasr_sp
     ]
 
 
+def test_long_form_pipeline_should_extract_chunk_files_before_alignment(funasr_spec, tmp_path):
+    svc = _setup_service(funasr_spec)
+    windows = [
+        ChunkWindow(index=0, start=0.0, end=300.0, emit_start=0.0, emit_end=285.0),
+        ChunkWindow(index=1, start=270.0, end=600.0, emit_start=285.0, emit_end=600.0),
+    ]
+    extracted: list[str] = []
+    fake_chunker = MagicMock()
+
+    def fake_extract(source_path, output_path, window):
+        assert source_path == "audio.wav"
+        extracted.append(output_path)
+        return output_path
+
+    fake_chunker.extract_pipeline_chunk.side_effect = fake_extract
+    svc._audio_chunker = fake_chunker
+
+    paths = svc._extract_pipeline_chunks("audio.wav", str(tmp_path), windows)
+
+    assert paths == [
+        str(tmp_path / "pipeline_chunk_000.wav"),
+        str(tmp_path / "pipeline_chunk_001.wav"),
+    ]
+    assert extracted == paths
+
+
+@pytest.mark.asyncio
+async def test_long_form_pipeline_should_transcribe_each_chunk_with_its_own_audio(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    windows = [
+        ChunkWindow(index=0, start=0.0, end=300.0, emit_start=0.0, emit_end=285.0),
+        ChunkWindow(index=1, start=270.0, end=600.0, emit_start=285.0, emit_end=600.0),
+    ]
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
+        assert params["output_format"] == "json"
+        assert alias == "qwen3-asr"
+        assert pipeline_reserved is True
+        if temp_file_path.endswith("chunk_000.wav"):
+            return {"text": "chunk zero", "segments": None, "duration": 300.0, "language": "en"}
+        return {"text": "chunk one", "segments": None, "duration": 330.0, "language": "en"}
+
+    svc._transcribe_with_alias = fake_transcribe
+
+    result = await svc._transcribe_chunks_with_alias(
+        chunk_paths=["/tmp/chunk_000.wav", "/tmp/chunk_001.wav"],
+        windows=windows,
+        params={"output_format": "json", "language": "en"},
+        request_id="req",
+        alias="qwen3-asr",
+        pipeline_reserved=True,
+    )
+
+    assert result == ["chunk zero", "chunk one"]
+
+
+@pytest.mark.asyncio
+async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunks(funasr_spec, tmp_path):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    transcript = {"text": "full text", "segments": None, "duration": 600.0, "language": "en"}
+    extracted_windows: list[ChunkWindow] = []
+
+    def fake_extract_chunks(temp_file_path, temp_dir, windows):
+        assert temp_file_path == "audio.wav"
+        assert temp_dir
+        extracted_windows.extend(windows)
+        return [str(tmp_path / f"chunk_{window.index:03d}.wav") for window in windows]
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
+        assert temp_file_path == "audio.wav"
+        return transcript
+
+    async def fake_transcribe_chunks(**kwargs):
+        return [f"text {index}" for index, _path in enumerate(kwargs["chunk_paths"])]
+
+    async def fake_align_chunks(**kwargs):
+        assert kwargs["chunk_texts"] == ["text 0", "text 1", "text 2"]
+        return [AlignedWord(text="hello", start=10.0, end=10.5)]
+
+    async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
+        return [SpeakerTurn(speaker="Speaker 0", start=0.0, end=600.0)]
+
+    svc._extract_pipeline_chunks = fake_extract_chunks
+    svc._transcribe_with_alias = fake_transcribe
+    svc._align_with_alias = AsyncMock(side_effect=AssertionError("must not use single-file align"))
+    svc._transcribe_chunks_with_alias = AsyncMock(side_effect=fake_transcribe_chunks)
+    svc._align_chunks_with_alias = AsyncMock(side_effect=fake_align_chunks)
+    svc._diarize_with_alias = fake_diarize
+    svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
+    svc._restore_resident_model = AsyncMock()
+
+    result = await svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req", profile)
+
+    assert extracted_windows
+    assert svc._transcribe_chunks_with_alias.await_count == 1
+    assert svc._align_chunks_with_alias.await_count == 1
+    assert result["segments"] == [
+        {"id": 0, "speaker": "Speaker 0", "start": 10.0, "end": 10.5, "text": "hello"}
+    ]
+
+
 @pytest.mark.asyncio
 async def test_decoupled_pipeline_alignment_failure_returns_transcript_and_restores_model(funasr_spec):
     svc = _setup_service(funasr_spec)
