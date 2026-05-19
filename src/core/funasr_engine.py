@@ -3,6 +3,8 @@ import logging
 import time
 from typing import Any
 
+import funasr.auto.auto_model as _auto_model
+import funasr.models.campplus.utils as _campplus_utils
 import torch
 from funasr import AutoModel
 
@@ -36,10 +38,6 @@ def _patched_distribute_spk(sentence_list: list, sd_time_list: list) -> list:
                 sentence_spk = spk
         d["spk"] = int(sentence_spk)
     return sentence_list
-
-
-import funasr.models.campplus.utils as _campplus_utils
-import funasr.auto.auto_model as _auto_model
 
 # Patch the source module attribute (guards against direct attribute-access call sites).
 _campplus_utils.distribute_spk = _patched_distribute_spk
@@ -261,12 +259,26 @@ class FunASREngine:
             {
                 "speaker": f"Speaker {info.get('spk', 0)}",
                 "text": info.get("text", ""),
-                "start": info.get("start", 0),  # 毫秒
-                "end": info.get("end", 0),  # 毫秒
+                "start": self._ms_to_seconds(info.get("start", 0)),
+                "end": self._ms_to_seconds(info.get("end", 0)),
             }
             for info in sentence_info
         ]
-        return {"text": text, "segments": segments}
+        duration = max(
+            (
+                segment["end"]
+                for segment in segments
+                if isinstance(segment.get("end"), int | float)
+            ),
+            default=0.0,
+        )
+        return {"text": text, "segments": segments, "duration": duration}
+
+    @staticmethod
+    def _ms_to_seconds(value: object) -> float:
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            return round(float(value) / 1000.0, 3)
+        return 0.0
 
     def _format_as_txt(self, sentence_info: list[dict], with_timestamp: bool) -> str:
         """

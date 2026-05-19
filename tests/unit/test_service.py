@@ -572,6 +572,59 @@ async def test_pipeline_should_validate_alignment_quality_without_duration(funas
 
 
 @pytest.mark.asyncio
+async def test_pipeline_should_return_resolved_duration_when_transcript_lacks_duration(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
+        return {"text": "hello world", "segments": None, "language": "en"}
+
+    async def fake_align(temp_file_path, text, language, request_id, alias, pipeline_reserved=False):
+        return [
+            AlignedWord(text="hello", start=0.0, end=0.5),
+            AlignedWord(text="world", start=0.6, end=1.0),
+        ]
+
+    async def fake_diarize(temp_file_path, request_id, alias, pipeline_reserved=False):
+        return [SpeakerTurn(speaker="Speaker A", start=0.0, end=1.0)]
+
+    svc._resolve_pipeline_duration = AsyncMock(return_value=123.45)
+    svc._transcribe_with_alias = fake_transcribe
+    svc._align_with_alias = fake_align
+    svc._diarize_with_alias = fake_diarize
+    svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
+    svc._restore_resident_model = AsyncMock()
+
+    result = await svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req", profile)
+
+    assert isinstance(result, dict)
+    assert result["duration"] == 123.45
+
+
+def test_align_words_to_speaker_segments_should_skip_zero_duration_words() -> None:
+    result = TranscriptionService._align_words_to_speaker_segments(
+        [
+            AlignedWord(text="hello", start=0.0, end=0.5),
+            AlignedWord(text="boundary", start=0.5, end=0.5),
+            AlignedWord(text="world", start=0.6, end=1.0),
+        ],
+        [SpeakerTurn(speaker="Speaker A", start=0.0, end=1.0)],
+    )
+
+    assert result == [
+        {
+            "id": 0,
+            "speaker": "Speaker A",
+            "start": 0.0,
+            "end": 1.0,
+            "text": "hello world",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_segment_alignment_failure_returns_transcript_and_restores_model(funasr_spec):
     svc = _setup_service(funasr_spec)
     profile = _legacy_segment_pipeline_profile(requestable=True)
@@ -993,6 +1046,25 @@ async def test_resolve_pipeline_duration_should_probe_duration_off_event_loop(fu
         )
 
     assert duration == 123.0
+    to_thread.assert_awaited_once_with(fake_chunker.get_audio_duration, "audio.wav")
+
+
+@pytest.mark.asyncio
+async def test_resolve_pipeline_duration_should_probe_when_transcript_duration_is_zero(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    fake_chunker = MagicMock()
+    fake_chunker.get_audio_duration.return_value = 3437.075
+    svc._audio_chunker = fake_chunker
+
+    with patch("src.services.transcription.asyncio.to_thread", new_callable=AsyncMock) as to_thread:
+        to_thread.return_value = 3437.075
+        duration = await svc._resolve_pipeline_duration(
+            "audio.wav",
+            {"text": "ok", "duration": 0.0},
+            request_id="req",
+        )
+
+    assert duration == 3437.075
     to_thread.assert_awaited_once_with(fake_chunker.get_audio_duration, "audio.wav")
 
 
