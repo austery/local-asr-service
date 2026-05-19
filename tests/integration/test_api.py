@@ -1,10 +1,11 @@
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+
 from src.core.base_engine import EngineCapabilities
 from src.main import app
 from src.services.transcription import TranscriptionService
-
 
 _PARAFORMER_RESULT = {
     "text": "Integration Test Result",

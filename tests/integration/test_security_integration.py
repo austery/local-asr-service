@@ -2,10 +2,12 @@
 Integration tests for security features (SPEC-006).
 Tests CORS configuration, file cleanup on errors, and end-to-end security flow.
 """
+from io import BytesIO
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
-from io import BytesIO
+
 from src.core.base_engine import EngineCapabilities
 
 
@@ -29,11 +31,13 @@ def _make_mock_service(submit_result: object = None) -> MagicMock:
 
 def create_test_app_with_cors(allowed_origins: str):
     """创建测试应用（指定 CORS 配置）"""
+    import uuid
     from contextlib import asynccontextmanager
+
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
+
     from src.api.routes import router as api_router
-    import uuid
 
     mock_service = _make_mock_service()
 
@@ -74,12 +78,12 @@ def create_test_app_with_cors(allowed_origins: str):
 
 class TestCORSConfiguration:
     """测试 CORS 配置"""
-    
+
     def test_cors_default_local_only(self):
         """测试默认 CORS 仅允许本地访问"""
         app = create_test_app_with_cors("http://localhost,http://127.0.0.1")
         client = TestClient(app)
-        
+
         # 模拟来自允许源的请求
         response = client.options(
             "/v1/audio/transcriptions",
@@ -88,17 +92,17 @@ class TestCORSConfiguration:
                 "Access-Control-Request-Method": "POST"
             }
         )
-        
+
         # 验证：允许访问
         assert response.status_code == 200
         assert "access-control-allow-origin" in response.headers
         assert response.headers["access-control-allow-origin"] == "http://localhost"
-    
+
     def test_cors_blocks_external_origin_by_default(self):
         """测试默认 CORS 阻止外部源访问"""
         app = create_test_app_with_cors("http://localhost,http://127.0.0.1")
         client = TestClient(app)
-        
+
         # 模拟来自外部源的请求
         response = client.options(
             "/v1/audio/transcriptions",
@@ -107,12 +111,12 @@ class TestCORSConfiguration:
                 "Access-Control-Request-Method": "POST"
             }
         )
-        
+
         # 验证：CORS 头不存在或不允许
         # (注意：FastAPI 的 CORSMiddleware 会返回 400 对于不允许的源)
         assert "access-control-allow-origin" not in response.headers or \
                response.headers.get("access-control-allow-origin") != "https://evil.com"
-    
+
     def test_cors_wildcard_allows_all_origins(self):
         """测试 CORS 通配符允许所有源"""
         app = create_test_app_with_cors("*")
@@ -150,8 +154,10 @@ class TestFileCleanupOnError:
         """
         import os
         import tempfile
-        from src.services.transcription import TranscriptionService
+
         from fastapi import UploadFile
+
+        from src.services.transcription import TranscriptionService
 
         service = TranscriptionService(
             engine_type="mlx", model_id="test-model", max_queue_size=10
@@ -182,7 +188,7 @@ class TestFileCleanupOnError:
 
 class TestRequestTracking:
     """测试请求追踪"""
-    
+
     def test_request_id_in_response_header(self):
         """测试响应头包含 X-Request-ID"""
         app = create_test_app_with_cors("*")
@@ -206,7 +212,7 @@ class TestRequestTracking:
 
 class TestEndToEndSecurityFlow:
     """端到端安全流程测试"""
-    
+
     def test_secure_request_lifecycle(self):
         """测试安全的完整请求生命周期"""
         app = create_test_app_with_cors("http://localhost")
@@ -239,13 +245,13 @@ class TestEndToEndSecurityFlow:
             response_data = response.json()
             assert "text" in response_data
             assert "duration" in response_data
-    
+
     def test_blocked_by_file_size_limit(self):
         """测试文件大小限制阻止请求"""
         with patch("src.api.routes.MAX_UPLOAD_SIZE_MB", 1):  # 设置为 1 MB
             app = create_test_app_with_cors("*")
             client = TestClient(app)
-            
+
             # 创建超大文件 (2 MB)
             large_content = b"a" * (2 * 1024 * 1024)
             files = {"file": ("large.wav", BytesIO(large_content), "audio/wav")}
@@ -255,19 +261,19 @@ class TestEndToEndSecurityFlow:
                 "response_format": "json",
                 "clean_tags": "true"
             }
-            
+
             # 发送请求
             response = client.post("/v1/audio/transcriptions", files=files, data=data)
-            
+
             # 验证：返回 413
             assert response.status_code == 413
             assert "File size exceeds" in response.json()["detail"]
-    
+
     def test_blocked_by_mime_type_validation(self):
         """测试 MIME 类型校验阻止请求"""
         app = create_test_app_with_cors("*")
         client = TestClient(app)
-        
+
         # 创建非音频文件
         files = {"file": ("test.png", BytesIO(b"fake image"), "image/png")}
         data = {
@@ -276,10 +282,10 @@ class TestEndToEndSecurityFlow:
             "response_format": "json",
             "clean_tags": "true"
         }
-        
+
         # 发送请求
         response = client.post("/v1/audio/transcriptions", files=files, data=data)
-        
+
         # 验证：返回 415
         assert response.status_code == 415
         assert "Unsupported file type" in response.json()["detail"]

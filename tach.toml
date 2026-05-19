@@ -1,0 +1,79 @@
+# local-asr-service Architecture Boundaries
+# Enforces clean architecture dependency rules.
+
+exclude = [
+  "**/__pycache__",
+  "tests/",
+  "benchmarks/",
+  "examples/",
+  ".venv/",
+  "docs/",
+]
+
+source_roots = ["."]
+exact = false
+ignore_type_checking_imports = true
+forbid_circular_dependencies = true
+
+# ── API: Entrypoint/HTTP layer, depends on services and core ──
+[[modules]]
+path = "src.api"
+depends_on = [
+  "src.services",
+  "src.core",
+  "src.config",
+]
+
+# ── Services: Task queue and orchestrator ──
+[[modules]]
+path = "src.services"
+depends_on = [
+  "src.core",
+  "src.core.alignment_port",
+  "src.core.diarization_port",
+  "src.adapters",
+  "src.workers",
+  "src.config",
+]
+
+# ── Workers: Subprocess model runner ──
+[[modules]]
+path = "src.workers"
+depends_on = [
+  "src.core",
+  "src.config",
+]
+
+# ── Core: Inference engines and registries ──
+[[modules]]
+path = "src.core"
+depends_on = [
+  "src.core.alignment_port",
+  "src.core.diarization_port",
+  "src.adapters",
+  "src.config",
+]
+
+# ── Core Ports: Protocol interfaces (No dependencies) ──
+[[modules]]
+path = "src.core.alignment_port"
+depends_on = []
+
+[[modules]]
+path = "src.core.diarization_port"
+depends_on = []
+
+# ── Adapters: Helper utilities for audio and text processing ──
+# Depends only on interfaces (ports) and config.
+[[modules]]
+path = "src.adapters"
+depends_on = [
+  "src.core.alignment_port",
+  "src.core.diarization_port",
+  "src.config",
+]
+
+# ── Config ──
+[[modules]]
+path = "src.config"
+depends_on = []
