@@ -2,20 +2,56 @@ import ast
 import re
 from pathlib import Path
 
-import pytest
-
 from src.core.model_registry import list_all as list_all_models
 from src.core.pipeline_registry import list_all_profiles
+
+ALLOWED_JOB_KINDS = ("transcribe", "align", "diarize")
+
+
+def _workspace_root() -> Path:
+    return Path(__file__).parent.parent.parent
+
+
+def _parse_python_file(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _literal_values(annotation: ast.expr | None) -> set[str]:
+    if not isinstance(annotation, ast.Subscript):
+        return set()
+    if not isinstance(annotation.value, ast.Name) or annotation.value.id != "Literal":
+        return set()
+
+    slice_node = annotation.slice
+    values = slice_node.elts if isinstance(slice_node, ast.Tuple) else [slice_node]
+    return {node.value for node in values if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+
+
+def _getenv_default_string(node: ast.AST, variable_name: str) -> str:
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == variable_name for target in child.targets):
+            continue
+        if (
+            isinstance(child.value, ast.Call)
+            and isinstance(child.value.func, ast.Attribute)
+            and child.value.func.attr == "getenv"
+            and len(child.value.args) >= 2
+            and isinstance(child.value.args[1], ast.Constant)
+            and isinstance(child.value.args[1].value, str)
+        ):
+            return child.value.args[1].value
+    raise AssertionError(f"Could not find string default for {variable_name} in config.py")
 
 
 def test_models_md_documents_all_aliases() -> None:
     """Verify that all model aliases and pipeline profiles in the registry are documented in MODELS.md."""
-    workspace_root = Path(__file__).parent.parent.parent
+    workspace_root = _workspace_root()
     models_md_path = workspace_root / "MODELS.md"
     assert models_md_path.exists(), "MODELS.md does not exist at project root"
 
-    with open(models_md_path, encoding="utf-8") as f:
-        content = f.read()
+    content = models_md_path.read_text(encoding="utf-8")
 
     # Find all inline code blocks like `alias` in MODELS.md
     documented_aliases = set(re.findall(r"`([^`\s]+)`", content))
@@ -41,12 +77,11 @@ def test_models_md_documents_all_aliases() -> None:
 
 def test_pipeline_profiles_declare_requestable_explicitly() -> None:
     """Ensure all PipelineProfile instances in pipeline_registry.py explicitly declare the 'requestable' field."""
-    workspace_root = Path(__file__).parent.parent.parent
+    workspace_root = _workspace_root()
     registry_path = workspace_root / "src" / "core" / "pipeline_registry.py"
     assert registry_path.exists(), "pipeline_registry.py does not exist"
 
-    with open(registry_path, encoding="utf-8") as f:
-        tree = ast.parse(f.read(), filename=str(registry_path))
+    tree = _parse_python_file(registry_path)
 
     calls = []
     for node in ast.walk(tree):
@@ -76,7 +111,7 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
 
     Any changes to this list must be accompanied by updates to fitness tests and architecture documents.
     """
-    workspace_root = Path(__file__).parent.parent.parent
+    workspace_root = _workspace_root()
 
     # Enforce src/core files
     core_dir = workspace_root / "src" / "core"
@@ -134,16 +169,28 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
     )
 
 
-def _check_function_def_job_kind(node: ast.FunctionDef, allowed_kinds: tuple[str, ...]) -> None:
+def _check_function_def_job_kind(
+    node: ast.AsyncFunctionDef | ast.FunctionDef,
+    allowed_kinds: tuple[str, ...],
+) -> None:
     if node.name not in ("_submit_worker_job", "_enqueue_worker_job"):
         return
     job_kind_idx = -1
+    job_kind_arg: ast.arg | None = None
     for idx, arg in enumerate(node.args.args):
         if arg.arg == "job_kind":
             job_kind_idx = idx
+            job_kind_arg = arg
             break
     if job_kind_idx == -1:
         return
+
+    literal_values = _literal_values(job_kind_arg.annotation if job_kind_arg else None)
+    assert literal_values == set(allowed_kinds), (
+        f"{node.name} job_kind annotation must be exactly Literal{allowed_kinds}; "
+        f"got {literal_values}."
+    )
+
     defaults_start_idx = len(node.args.args) - len(node.args.defaults)
     if job_kind_idx >= defaults_start_idx:
         default_node = node.args.defaults[job_kind_idx - defaults_start_idx]
@@ -186,7 +233,7 @@ def _check_call_job_kind(node: ast.Call, allowed_kinds: tuple[str, ...]) -> None
             # Legitimate parameter forwarding from _submit_worker_job to _enqueue_worker_job
             pass
         else:
-            pytest.fail(
+            raise AssertionError(
                 f"Non-constant/dynamic expression passed for job_kind to {func_name} "
                 f"at line {node.lineno}. The job_kind must be a compile-time string literal "
                 f"within {allowed_kinds} or direct parameter forwarding of 'job_kind'."
@@ -195,33 +242,40 @@ def _check_call_job_kind(node: ast.Call, allowed_kinds: tuple[str, ...]) -> None
 
 def test_transcription_service_job_domains() -> None:
     """Verify that the job kind domains in TranscriptionService are strictly limited to transcribe/align/diarize."""
-    workspace_root = Path(__file__).parent.parent.parent
+    workspace_root = _workspace_root()
     service_path = workspace_root / "src" / "services" / "transcription.py"
     assert service_path.exists(), "transcription.py does not exist"
 
-    with open(service_path, encoding="utf-8") as f:
-        tree = ast.parse(f.read(), filename=str(service_path))
-
-    allowed_kinds = ("transcribe", "align", "diarize")
+    tree = _parse_python_file(service_path)
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef):
-            _check_function_def_job_kind(node, allowed_kinds)
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            _check_function_def_job_kind(node, ALLOWED_JOB_KINDS)
         elif isinstance(node, ast.Call):
-            _check_call_job_kind(node, allowed_kinds)
+            _check_call_job_kind(node, ALLOWED_JOB_KINDS)
 
 
-def test_default_model_is_requestable_and_non_experimental() -> None:
-    """Verify that default model configurations resolve to valid, requestable models, not experimental pipelines."""
-    from src.config import FUNASR_MODEL_ID, MLX_MODEL_ID
-    from src.core.pipeline_registry import list_all_profiles
+def test_config_defaults_do_not_point_to_pipeline_profiles() -> None:
+    """Ensure config defaults stay on registered model runtimes, not opt-in pipeline profiles."""
+    workspace_root = _workspace_root()
+    config_path = workspace_root / "src" / "config.py"
+    assert config_path.exists(), "config.py does not exist"
 
-    experimental_profiles = {p.alias for p in list_all_profiles() if not p.requestable or "experimental" in p.description.lower()}
+    tree = _parse_python_file(config_path)
+    registered_models = {
+        value
+        for spec in list_all_models()
+        for value in (spec.alias, spec.model_id)
+    }
+    pipeline_aliases = {profile.alias for profile in list_all_profiles()}
 
-    # Core models are not pipeline profiles and must not point to experimental profiles
-    assert FUNASR_MODEL_ID not in experimental_profiles, (
-        f"Default FUNASR_MODEL_ID '{FUNASR_MODEL_ID}' is registered as an experimental/non-requestable pipeline profile."
-    )
-    assert MLX_MODEL_ID not in experimental_profiles, (
-        f"Default MLX_MODEL_ID '{MLX_MODEL_ID}' is registered as an experimental/non-requestable pipeline profile."
-    )
+    for variable_name in ("FUNASR_MODEL_ID", "MLX_MODEL_ID"):
+        default_model = _getenv_default_string(tree, variable_name)
+        assert default_model not in pipeline_aliases, (
+            f"{variable_name} defaults to pipeline profile '{default_model}'. "
+            "Default config must stay on a production model runtime, not an opt-in pipeline."
+        )
+        assert default_model in registered_models, (
+            f"{variable_name} default '{default_model}' is not a registered model alias/model_id. "
+            "Add it to model_registry.py before making it a config default."
+        )
