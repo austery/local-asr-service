@@ -1,15 +1,17 @@
-import pytest
-import os
-import wave
 import struct
+import wave
+
+import pytest
 from fastapi.testclient import TestClient
+
 from src.main import app
+
 
 # 这是一个 "慢速" 测试，因为它会真的加载模型
 # 我们可以用 pytest marker 来标记它
 @pytest.mark.e2e
 class TestEndToEnd:
-    
+
     @pytest.fixture(scope="class")
     def real_client(self):
         """
@@ -46,15 +48,15 @@ class TestEndToEnd:
                 "/v1/audio/transcriptions",
                 files={"file": ("silence.wav", f, "audio/wav")},
                 data={
-                    "language": "zh", 
+                    "language": "zh",
                     "output_format": "json"  # 显式请求 JSON 格式进行验证
                 }
             )
-        
+
         assert response.status_code == 200
         result = response.json()
 
-        
+
         # 对于静音文件，可能返回空文本且 duration=0.0。
         # 这里验证流程跑通与响应结构正确即可。
         assert "text" in result

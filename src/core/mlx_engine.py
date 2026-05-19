@@ -10,8 +10,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from mlx_audio.stt.generate import generate_transcription
-from mlx_audio.stt.utils import load_model
+try:
+    from mlx_audio.stt.generate import generate_transcription
+    from mlx_audio.stt.utils import load_model
+except ImportError:
+    generate_transcription = None  # type: ignore
+    load_model = None  # type: ignore
 
 from src.adapters.audio_chunking import AudioChunkingService
 from src.core.base_engine import EngineCapabilities

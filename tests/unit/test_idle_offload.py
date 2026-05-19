@@ -2,9 +2,8 @@
 Unit tests for TranscriptionService subprocess management (SPEC-009 v2).
 """
 import asyncio
-import queue as _stdlib_queue
 from io import BytesIO
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import UploadFile

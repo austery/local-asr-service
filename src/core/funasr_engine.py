@@ -344,8 +344,7 @@ class FunASREngine:
 
     def _ms_to_srt_time(self, ms: int) -> str:
         """将毫秒转换为 SRT 时间格式 (HH:MM:SS,mmm)"""
-        if ms < 0:
-            ms = 0
+        ms = max(ms, 0)
         hours = ms // 3600000
         minutes = (ms % 3600000) // 60000
         seconds = (ms % 60000) // 1000

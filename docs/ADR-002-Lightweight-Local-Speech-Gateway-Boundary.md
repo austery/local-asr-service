@@ -11,6 +11,7 @@ relatedSpecs:
   - SPEC-008
   - SPEC-009
   - SPEC-011
+  - SPEC-014
 tags:
   - project-boundary
   - local-asr
@@ -140,15 +141,15 @@ The watch process should answer one question: "Can upstream now do something tha
 
 ## Fitness Functions
 
-To keep the boundary from drifting again, add architecture fitness checks that are cheap to run in CI or locally:
+To keep the boundary from drifting again, we enforce architectural constraints automatically under [SPEC-014](file:///Users/leipeng/Documents/Projects/local-asr-service/docs/SPEC-014-Architecture-Fitness-Harness.md):
 
-- Pipeline profiles must declare `requestable` explicitly and must have documentation in `MODELS.md`.
-- No new model runtime adapter may be added without an ADR/SPEC reference.
-- No new speaker reconciliation, embedding, clustering, or diarization postprocessing module may be added without an ADR.
-- `TranscriptionService` should not gain new job domains beyond `transcribe`, `align`, and `diarize` without a boundary review.
-- Production aliases must map to one of the two real use cases: local voice-input fallback or data-pipeline transcription.
-
-These checks should be implemented as tests or lightweight static assertions before adding more model features.
+- **Module Dependencies**: Enforced via **Tach** (`tach.toml`). Dependencies flow strictly inward from API to Core/Adapters.
+- **Code Complexity**: Enforced via **Ruff** McCabe (`C901`) and Pylint complexity checks (`PLR0915`, `PLR0912`), limiting method length and cyclomatic complexity.
+- **Semantic Project Rules**: Verified via **pytest** assertions in `tests/unit/test_architecture_fitness.py`:
+  - Pipeline profiles must declare `requestable` explicitly and must have documentation in `MODELS.md`.
+  - No new model runtime adapter or diarization reconciliation module may be added without updating the allowed list.
+  - `TranscriptionService` job domains are restricted to `transcribe`, `align`, and `diarize`.
+  - The default model in `config.py` must not point to an experimental pipeline.
 
 ## Options Considered
 

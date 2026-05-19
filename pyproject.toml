@@ -30,6 +30,7 @@ dev = [
     "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
     "ruff>=0.15.1",
+    "tach>=0.34.0",
     "types-requests>=2.32.4.20260107",
 ]
 
@@ -46,6 +47,8 @@ select = [
     "UP",   # pyupgrade
     "B",    # flake8-bugbear
     "SIM",  # flake8-simplify
+    "C901", # McCabe complexity
+    "PLR",  # Pylint refactoring limits
 ]
 ignore = [
     "E501",   # line length (handled by formatter)
@@ -53,8 +56,62 @@ ignore = [
     "SIM108", # ternary operator (readability)
 ]
 
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-statements = 50
+max-branches = 12
+max-args = 5
+
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "PLR2004", # Magic values are standard in tests
+    "PLR0913", # Arguments count in tests / helper mocks
+    "PLR0915", # Statements count in complex tests
+    "C901",    # Test code cyclomatic complexity
+    "SIM117",  # Nested with statements in tests
+    "SIM105",  # try-except-pass in tests
+]
+"src/api/routes.py" = [
+    "C901",    # create_transcription complexity
+    "PLR0913", # too many arguments (7 > 5)
+    "PLR0912", # too many branches
+    "PLR0915", # too many statements
+]
+"src/services/transcription.py" = [
+    "C901",    # complex legacy orchestrator
+    "PLR0911", # too many return statements
+    "PLR0912", # too many branches
+    "PLR0913", # too many arguments in private methods
+    "PLR0915", # too many statements
+    "PLR2004", # magic numbers in IPC queue messages
+]
+"src/workers/model_worker.py" = [
+    "C901",    # subprocess run_worker loop complexity
+    "PLR0912", # too many branches
+    "PLR0915", # too many statements
+]
+"src/adapters/pipeline_chunking.py" = [
+    "PLR2004", # Magic numbers (60.0 threshold)
+]
+"src/adapters/audio_chunking.py" = [
+    "PLR0913", # too many arguments in __init__
+    "PLR2004", # magic value (2)
+]
+"benchmarks/**/*.py" = [
+    "PLR2004", # Magic values in benchmarks
+    "PLR0915", # Statements in run benchmark script
+    "C901",
+    "PLR0912",
+]
+"examples/**/*.py" = [
+    "PLR0915", # Statements in demo script
+    "C901",
+]
 
 [tool.mypy]
 python_version = "3.11"

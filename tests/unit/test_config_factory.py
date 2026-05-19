@@ -33,7 +33,8 @@ class TestConfig:
 class TestFactory:
     """测试 src/core/factory.py 工厂模块"""
 
-    def test_create_engines(self):
+    @patch("src.adapters.audio_chunking.subprocess.run")
+    def test_create_engines(self, mock_run):
         """测试引擎创建（不依赖环境变量reload）"""
         from src.core.funasr_engine import FunASREngine
         from src.core.mlx_engine import MlxAudioEngine
