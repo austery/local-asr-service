@@ -313,7 +313,8 @@ async def test_chunked_alignment_should_apply_offsets_and_drop_overlap(funasr_sp
     ]
 
 
-def test_long_form_pipeline_should_extract_chunk_files_before_alignment(funasr_spec, tmp_path):
+@pytest.mark.asyncio
+async def test_long_form_pipeline_should_extract_chunk_files_off_event_loop(funasr_spec, tmp_path):
     svc = _setup_service(funasr_spec)
     windows = [
         ChunkWindow(index=0, start=0.0, end=300.0, emit_start=0.0, emit_end=285.0),
@@ -330,13 +331,16 @@ def test_long_form_pipeline_should_extract_chunk_files_before_alignment(funasr_s
     fake_chunker.extract_pipeline_chunk.side_effect = fake_extract
     svc._audio_chunker = fake_chunker
 
-    paths = svc._extract_pipeline_chunks("audio.wav", str(tmp_path), windows)
+    with patch("src.services.transcription.asyncio.to_thread", new_callable=AsyncMock) as to_thread:
+        to_thread.side_effect = lambda func, *args: func(*args)
+        paths = await svc._extract_pipeline_chunks("audio.wav", str(tmp_path), windows)
 
     assert paths == [
         str(tmp_path / "pipeline_chunk_000.wav"),
         str(tmp_path / "pipeline_chunk_001.wav"),
     ]
     assert extracted == paths
+    assert to_thread.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -381,7 +385,7 @@ async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunk
     fake_chunker.get_audio_duration.return_value = 600.0
     svc._audio_chunker = fake_chunker
 
-    def fake_extract_chunks(temp_file_path, temp_dir, windows):
+    async def fake_extract_chunks(temp_file_path, temp_dir, windows):
         assert temp_file_path == "audio.wav"
         assert temp_dir
         extracted_windows.extend(windows)
@@ -505,7 +509,7 @@ async def test_pipeline_should_fail_loudly_when_alignment_quality_gate_fails(fun
     profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
     collapsed = [AlignedWord(text=f"w{i}", start=245.04, end=245.04) for i in range(12)]
 
-    def fake_extract_chunks(temp_file_path, temp_dir, windows):
+    async def fake_extract_chunks(temp_file_path, temp_dir, windows):
         paths = [os.path.join(temp_dir, f"chunk_{window.index:03d}.wav") for window in windows]
         for path in paths:
             with open(path, "wb") as handle:
@@ -537,6 +541,33 @@ async def test_pipeline_should_fail_loudly_when_alignment_quality_gate_fails(fun
     svc._restore_resident_model = AsyncMock()
 
     with pytest.raises(ValueError, match="alignment quality gate failed"):
+        await svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req", profile)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_should_validate_alignment_quality_without_duration(funasr_spec):
+    from src.core.pipeline_registry import lookup_profile
+
+    svc = _setup_service(funasr_spec)
+    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+
+    async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
+        return {"text": "hello world", "segments": None, "language": "en"}
+
+    async def fake_align(temp_file_path, text, language, request_id, alias, pipeline_reserved=False):
+        return [
+            AlignedWord(text="world", start=10.0, end=10.5),
+            AlignedWord(text="hello", start=9.0, end=9.5),
+        ]
+
+    svc._resolve_pipeline_duration = AsyncMock(return_value=None)
+    svc._transcribe_with_alias = fake_transcribe
+    svc._align_with_alias = fake_align
+    svc._diarize_with_alias = AsyncMock(side_effect=AssertionError("must not diarize failed alignment"))
+    svc._switch_worker = AsyncMock(side_effect=lambda spec: setattr(svc, "_current_model_spec", spec))
+    svc._restore_resident_model = AsyncMock()
+
+    with pytest.raises(ValueError, match="non-monotonic"):
         await svc._run_decoupled_pipeline("audio.wav", {"output_format": "json"}, "req", profile)
 
 
@@ -944,6 +975,25 @@ async def test_pipeline_temp_dir_cleanup_should_run_off_event_loop(funasr_spec):
         "/tmp/asr_pipeline_chunks",
         ignore_errors=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_resolve_pipeline_duration_should_probe_duration_off_event_loop(funasr_spec):
+    svc = _setup_service(funasr_spec)
+    fake_chunker = MagicMock()
+    fake_chunker.get_audio_duration.return_value = 123.0
+    svc._audio_chunker = fake_chunker
+
+    with patch("src.services.transcription.asyncio.to_thread", new_callable=AsyncMock) as to_thread:
+        to_thread.side_effect = lambda func, *args: func(*args)
+        duration = await svc._resolve_pipeline_duration(
+            "audio.wav",
+            {"text": "hello"},
+            request_id="req",
+        )
+
+    assert duration == 123.0
+    to_thread.assert_awaited_once_with(fake_chunker.get_audio_duration, "audio.wav")
 
 
 @pytest.mark.asyncio

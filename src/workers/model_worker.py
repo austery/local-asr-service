@@ -9,6 +9,8 @@ Queues using a simple IPC protocol:
   ("ERROR", uid, exc_type, str) — job raised an exception
   ("IDLE_EXIT", None)      — idle timeout reached; process exits with code 0
 """
+from __future__ import annotations
+
 import logging
 import queue
 import sys
@@ -37,7 +39,7 @@ class WorkerJob:
     requested_diarizer_alias: str | None = field(default=None)
 
 
-def create_engine(engine_type: str, model_id: str) -> "ASREngine":
+def create_engine(engine_type: str, model_id: str) -> ASREngine:
     """Thin wrapper around the factory; imported lazily to keep this module
     importable in the main process without triggering heavy ML framework loads."""
     from src.core.factory import _create_by_type  # noqa: PLC0415
@@ -45,7 +47,7 @@ def create_engine(engine_type: str, model_id: str) -> "ASREngine":
     return _create_by_type(engine_type, model_id)
 
 
-def create_diarizer(alias: str) -> "DiarizationPort":
+def create_diarizer(alias: str) -> DiarizationPort:
     """Construct a diarizer from the registry alias."""
     from src.core.diarization_registry import lookup_diarizer  # noqa: PLC0415
     from src.core.mlx_sortformer_diarizer import MlxSortformerDiarizer  # noqa: PLC0415
@@ -56,7 +58,7 @@ def create_diarizer(alias: str) -> "DiarizationPort":
     raise ValueError(f"Unsupported diarization runtime: {spec.runtime}")
 
 
-def create_aligner(alias: str) -> "AlignmentPort":
+def create_aligner(alias: str) -> AlignmentPort:
     """Construct an aligner from the registry alias."""
     from src.core.alignment_registry import lookup_aligner  # noqa: PLC0415
     from src.core.mlx_qwen_forced_aligner import MlxQwenForcedAligner  # noqa: PLC0415
@@ -72,7 +74,7 @@ def _put_result(q: Queue, item: Any) -> None:
     q.put(item)
 
 
-def _release_diarizers(diarizers: dict[str, "DiarizationPort"]) -> None:
+def _release_diarizers(diarizers: dict[str, DiarizationPort]) -> None:
     for alias, diarizer in diarizers.items():
         try:
             diarizer.release()
@@ -80,7 +82,7 @@ def _release_diarizers(diarizers: dict[str, "DiarizationPort"]) -> None:
             logger.warning("diarizer.release() failed during worker cleanup for %s", alias, exc_info=True)
 
 
-def _release_aligners(aligners: dict[str, "AlignmentPort"]) -> None:
+def _release_aligners(aligners: dict[str, AlignmentPort]) -> None:
     for alias, aligner in aligners.items():
         try:
             aligner.release()
@@ -89,9 +91,9 @@ def _release_aligners(aligners: dict[str, "AlignmentPort"]) -> None:
 
 
 def _get_or_create_diarizer(
-    diarizers: dict[str, "DiarizationPort"],
+    diarizers: dict[str, DiarizationPort],
     alias: str,
-) -> "DiarizationPort":
+) -> DiarizationPort:
     diarizer = diarizers.get(alias)
     if diarizer is None:
         diarizer = create_diarizer(alias)
@@ -101,9 +103,9 @@ def _get_or_create_diarizer(
 
 
 def _get_or_create_aligner(
-    aligners: dict[str, "AlignmentPort"],
+    aligners: dict[str, AlignmentPort],
     alias: str,
-) -> "AlignmentPort":
+) -> AlignmentPort:
     aligner = aligners.get(alias)
     if aligner is None:
         aligner = create_aligner(alias)
@@ -113,8 +115,8 @@ def _get_or_create_aligner(
 
 
 def run_worker(
-    job_queue: "Queue[WorkerJob | None]",
-    result_queue: "Queue[tuple[str, Any]]",
+    job_queue: Queue[WorkerJob | None],
+    result_queue: Queue[tuple[str, Any]],
     engine_type: str,
     model_id: str,
     idle_timeout: float,

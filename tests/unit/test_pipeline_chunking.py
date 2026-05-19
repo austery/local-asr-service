@@ -111,6 +111,16 @@ def test_validate_aligned_word_quality_should_reject_non_monotonic_words() -> No
         validate_aligned_word_quality(words, expected_duration_seconds=20.0)
 
 
+def test_validate_aligned_word_quality_should_check_monotonic_without_duration() -> None:
+    words = [
+        AlignedWord(text="first", start=10.0, end=11.0),
+        AlignedWord(text="second", start=9.0, end=9.5),
+    ]
+
+    with pytest.raises(ValueError, match="non-monotonic"):
+        validate_aligned_word_quality(words, expected_duration_seconds=None)
+
+
 def test_validate_aligned_word_quality_should_reject_tail_timestamp_collapse() -> None:
     words = [
         AlignedWord(text=f"w{i}", start=float(i), end=float(i) + 0.5)

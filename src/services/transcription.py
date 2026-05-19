@@ -397,7 +397,7 @@ class TranscriptionService:
             texts.append(text if isinstance(text, str) else "")
         return texts
 
-    def _extract_pipeline_chunks(
+    async def _extract_pipeline_chunks(
         self,
         temp_file_path: str,
         temp_dir: str,
@@ -407,10 +407,17 @@ class TranscriptionService:
         paths: list[str] = []
         for window in windows:
             output_path = os.path.join(temp_dir, f"pipeline_chunk_{window.index:03d}.wav")
-            paths.append(chunker.extract_pipeline_chunk(temp_file_path, output_path, window))
+            paths.append(
+                await asyncio.to_thread(
+                    chunker.extract_pipeline_chunk,
+                    temp_file_path,
+                    output_path,
+                    window,
+                )
+            )
         return paths
 
-    def _resolve_pipeline_duration(
+    async def _resolve_pipeline_duration(
         self,
         temp_file_path: str,
         transcript_result: TranscriptionResultDict,
@@ -422,7 +429,10 @@ class TranscriptionService:
             return float(duration)
 
         try:
-            return self._get_audio_chunker().get_audio_duration(temp_file_path)
+            return await asyncio.to_thread(
+                self._get_audio_chunker().get_audio_duration,
+                temp_file_path,
+            )
         except Exception as exc:
             self.logger.warning(
                 "[%s] Could not resolve audio duration for pipeline chunking from %s; falling back to short-form path: %s",
@@ -569,7 +579,7 @@ class TranscriptionService:
                 aligned_words: list[AlignedWord] | None = None
                 pipeline_chunk_paths: list[str] | None = None
                 pipeline_windows: list[ChunkWindow] | None = None
-                pipeline_duration = self._resolve_pipeline_duration(
+                pipeline_duration = await self._resolve_pipeline_duration(
                     temp_file_path,
                     transcript_result,
                     request_id=request_id,
@@ -586,7 +596,7 @@ class TranscriptionService:
                             overlap_seconds=PIPELINE_ALIGN_OVERLAP_SECONDS,
                         )
                         pipeline_temp_dir = tempfile.mkdtemp(prefix="asr_pipeline_chunks_")
-                        chunk_paths = self._extract_pipeline_chunks(
+                        chunk_paths = await self._extract_pipeline_chunks(
                             temp_file_path,
                             pipeline_temp_dir,
                             windows,
@@ -620,7 +630,7 @@ class TranscriptionService:
                             pipeline_reserved=True,
                         )
 
-                if aligned_words is not None and pipeline_duration is not None:
+                if aligned_words is not None:
                     try:
                         validate_aligned_word_quality(
                             aligned_words,

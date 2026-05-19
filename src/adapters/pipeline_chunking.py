@@ -199,7 +199,7 @@ def reconcile_chunk_speaker_labels(
 def validate_aligned_word_quality(
     words: list[AlignedWord],
     *,
-    expected_duration_seconds: float,
+    expected_duration_seconds: float | None,
     tail_word_count: int = 10,
 ) -> None:
     if not words:
@@ -211,7 +211,7 @@ def validate_aligned_word_quality(
             raise ValueError("alignment quality gate failed: non-monotonic aligned words")
         previous_start = word.start
 
-    if len(words) >= tail_word_count:
+    if expected_duration_seconds is not None and len(words) >= tail_word_count:
         tail = words[-tail_word_count:]
         tail_positions = {(word.start, word.end) for word in tail}
         if len(tail_positions) <= 2 and expected_duration_seconds - tail[-1].end > 60.0:
