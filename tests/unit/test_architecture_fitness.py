@@ -2,6 +2,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from src.core.model_registry import list_all as list_all_models
 from src.core.pipeline_registry import list_all_profiles
 
@@ -12,7 +14,7 @@ def test_models_md_documents_all_aliases() -> None:
     models_md_path = workspace_root / "MODELS.md"
     assert models_md_path.exists(), "MODELS.md does not exist at project root"
 
-    with open(models_md_path, "r", encoding="utf-8") as f:
+    with open(models_md_path, encoding="utf-8") as f:
         content = f.read()
 
     # Find all inline code blocks like `alias` in MODELS.md
@@ -43,7 +45,7 @@ def test_pipeline_profiles_declare_requestable_explicitly() -> None:
     registry_path = workspace_root / "src" / "core" / "pipeline_registry.py"
     assert registry_path.exists(), "pipeline_registry.py does not exist"
 
-    with open(registry_path, "r", encoding="utf-8") as f:
+    with open(registry_path, encoding="utf-8") as f:
         tree = ast.parse(f.read(), filename=str(registry_path))
 
     calls = []
@@ -124,11 +126,71 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
         f.name for f in adapters_dir.iterdir() if f.is_file() and not f.name.startswith(".")
     }
 
+    # Assert no undocumented helpers were added under adapters
     unexpected_adapters = current_adapters_files - allowed_adapters_files
     assert not unexpected_adapters, (
         f"Unexpected files found in src/adapters: {unexpected_adapters}. "
         f"To add a new processing helper, you must register it in this test."
     )
+
+
+def _check_function_def_job_kind(node: ast.FunctionDef, allowed_kinds: tuple[str, ...]) -> None:
+    if node.name not in ("_submit_worker_job", "_enqueue_worker_job"):
+        return
+    job_kind_idx = -1
+    for idx, arg in enumerate(node.args.args):
+        if arg.arg == "job_kind":
+            job_kind_idx = idx
+            break
+    if job_kind_idx == -1:
+        return
+    defaults_start_idx = len(node.args.args) - len(node.args.defaults)
+    if job_kind_idx >= defaults_start_idx:
+        default_node = node.args.defaults[job_kind_idx - defaults_start_idx]
+        if isinstance(default_node, ast.Constant):
+            assert default_node.value in allowed_kinds, (
+                f"Default value '{default_node.value}' for job_kind in {node.name} "
+                f"must be one of {allowed_kinds}."
+            )
+
+
+def _check_call_job_kind(node: ast.Call, allowed_kinds: tuple[str, ...]) -> None:
+    func_name = ""
+    if isinstance(node.func, ast.Attribute):
+        func_name = node.func.attr
+    elif isinstance(node.func, ast.Name):
+        func_name = node.func.id
+
+    if func_name not in ("_submit_worker_job", "_enqueue_worker_job"):
+        return
+
+    job_kind_node = None
+    for kw in node.keywords:
+        if kw.arg == "job_kind":
+            job_kind_node = kw.value
+            break
+
+    if job_kind_node is None:
+        idx = 5 if func_name == "_submit_worker_job" else 6
+        if len(node.args) > idx:
+            job_kind_node = node.args[idx]
+
+    if job_kind_node is not None:
+        if isinstance(job_kind_node, ast.Constant):
+            val = job_kind_node.value
+            assert val in allowed_kinds, (
+                f"Disallowed job_kind '{val}' passed to {func_name} at line {node.lineno}. "
+                f"Must be one of {allowed_kinds}."
+            )
+        elif isinstance(job_kind_node, ast.Name) and job_kind_node.id == "job_kind":
+            # Legitimate parameter forwarding from _submit_worker_job to _enqueue_worker_job
+            pass
+        else:
+            pytest.fail(
+                f"Non-constant/dynamic expression passed for job_kind to {func_name} "
+                f"at line {node.lineno}. The job_kind must be a compile-time string literal "
+                f"within {allowed_kinds} or direct parameter forwarding of 'job_kind'."
+            )
 
 
 def test_transcription_service_job_domains() -> None:
@@ -137,31 +199,29 @@ def test_transcription_service_job_domains() -> None:
     service_path = workspace_root / "src" / "services" / "transcription.py"
     assert service_path.exists(), "transcription.py does not exist"
 
-    with open(service_path, "r", encoding="utf-8") as f:
+    with open(service_path, encoding="utf-8") as f:
         tree = ast.parse(f.read(), filename=str(service_path))
 
-    # We want to scan the ast to find all methods or calls that parameterize job kind
-    # and check they only pass "transcribe", "align", or "diarize".
+    allowed_kinds = ("transcribe", "align", "diarize")
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            # Check calls to '_submit_worker_job' or '_enqueue_worker_job'
-            # and verify keyword/positional arguments for job_kind
-            func_name = ""
-            if isinstance(node.func, ast.Attribute):
-                func_name = node.func.attr
-            elif isinstance(node.func, ast.Name):
-                func_name = node.func.id
+        if isinstance(node, ast.FunctionDef):
+            _check_function_def_job_kind(node, allowed_kinds)
+        elif isinstance(node, ast.Call):
+            _check_call_job_kind(node, allowed_kinds)
 
-            if func_name in ("_submit_worker_job", "_enqueue_worker_job"):
-                # Find the job_kind argument
-                job_kind_val = None
-                # First check keywords
-                for kw in node.keywords:
-                    if kw.arg == "job_kind" and isinstance(kw.value, ast.Constant):
-                        job_kind_val = kw.value.value
 
-                if job_kind_val is not None:
-                    assert job_kind_val in ("transcribe", "align", "diarize"), (
-                        f"Disallowed job_kind '{job_kind_val}' passed to {func_name}. "
-                        f"Only 'transcribe', 'align', and 'diarize' are allowed."
-                    )
+def test_default_model_is_requestable_and_non_experimental() -> None:
+    """Verify that default model configurations resolve to valid, requestable models, not experimental pipelines."""
+    from src.config import FUNASR_MODEL_ID, MLX_MODEL_ID
+    from src.core.pipeline_registry import list_all_profiles
+
+    experimental_profiles = {p.alias for p in list_all_profiles() if not p.requestable or "experimental" in p.description.lower()}
+
+    # Core models are not pipeline profiles and must not point to experimental profiles
+    assert FUNASR_MODEL_ID not in experimental_profiles, (
+        f"Default FUNASR_MODEL_ID '{FUNASR_MODEL_ID}' is registered as an experimental/non-requestable pipeline profile."
+    )
+    assert MLX_MODEL_ID not in experimental_profiles, (
+        f"Default MLX_MODEL_ID '{MLX_MODEL_ID}' is registered as an experimental/non-requestable pipeline profile."
+    )
