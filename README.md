@@ -82,7 +82,7 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 | Chinese/English quality-first single-speaker transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
 | Mandarin multi-speaker podcast / meeting today | `paraformer` (default) | `uv run python -m src.main` |
 | Bulk speed-first tags / language detection | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
-| Apple-native multi-speaker batch pipeline | `qwen3-sortformer` | Experimental; target design is Qwen3-ASR text + Qwen3-ForcedAligner word timestamps + Sortformer speaker turns |
+| Apple-native English multi-speaker batch pipeline | `qwen3-sortformer` | Explicit opt-in batch path; Qwen3-ASR text + Qwen3-ForcedAligner word timestamps + Sortformer speaker turns |
 
 ## API & Web UI
 
@@ -140,13 +140,14 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `paraformer` | FunASR | FunASR/PyTorch MPS path; Mandarin-focused with CAM++ diarization |
 | `qwen3-asr` | MLX | mlx-audio/MLX Metal path; Chinese/English quality-first ASR |
 | `sensevoice-small` | FunASR | FunASR/PyTorch MPS path; speed-first language/emotion tags |
-| `qwen3-sortformer` | Pipeline | Experimental decoupled pipeline; current implementation is under validation and should not be treated as production speaker labeling |
+| `qwen3-sortformer` | Pipeline | Opt-in batch speaker-separation path for English long-form validation workloads |
 
-`qwen3-sortformer` is the Apple-native speaker-separation research path. Early
+`qwen3-sortformer` is the Apple-native speaker-separation batch path. Early
 end-to-end validation showed that Qwen3-ASR's native segments are chunk-level,
-not reliable sentence/word timestamps. Production speaker labeling should use a
+not reliable sentence/word timestamps. Speaker labeling therefore uses a
 three-stage pipeline: Qwen3-ASR transcript, Qwen3-ForcedAligner word timestamps,
-and Sortformer speaker turns.
+and Sortformer speaker turns. It is requestable only when explicitly selected
+with `model=qwen3-sortformer`; it is not the default dictation path.
 
 ### Query models
 

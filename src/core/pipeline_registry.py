@@ -22,11 +22,10 @@ _REGISTRY: dict[str, PipelineProfile] = {
         diarization_alias="sortformer-diar",
         description=(
             "Experimental Qwen3-ASR plus Sortformer speaker-separation pipeline. "
-            "Production enablement requires forced alignment between transcript text "
-            "and speaker turns."
+            "Requestable as an explicit opt-in batch path; not a default dictation model."
         ),
         capabilities=EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
-        requestable=False,
+        requestable=True,
     )
 }
 

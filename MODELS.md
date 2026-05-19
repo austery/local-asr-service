@@ -17,7 +17,7 @@
 
 | Alias | Components | Requestable | Notes |
 |-------|------------|:-----------:|-------|
-| `qwen3-sortformer` | `qwen3-asr` + `qwen3-forced-aligner` + `sortformer-diar` | ❌ discovery-only | Apple-native batch speaker-separation pipeline under validation. Three-stage orchestration exists in unit-tested code, but the profile must stay non-requestable until real-model E2E passes. |
+| `qwen3-sortformer` | `qwen3-asr` + `qwen3-forced-aligner` + `sortformer-diar` | ✅ opt-in batch | Apple-native batch speaker-separation pipeline for English long-form validation workloads. Requestable only when explicitly selected; not the default dictation path. |
 
 ---
 
@@ -65,16 +65,20 @@ The project registers models by runtime contract, not by vendor name.
 | Spokenly local dictation fallback | `qwen3-asr` | Best current local path for low-latency single-speaker voice input through an OpenAI-compatible endpoint |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
 | Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
-| Apple-native multi-speaker batch pipeline | `qwen3-sortformer` | Target design requires Qwen3-ASR text + Qwen3-ForcedAligner word timestamps + Sortformer speaker turns |
+| Apple-native English multi-speaker batch pipeline | `qwen3-sortformer` | Higher quality than Paraformer on the 57-minute English probe, with materially slower runtime |
 | Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
 
 `qwen3-sortformer` is not just "Qwen3-ASR segments plus Sortformer." Local E2E
 testing showed Qwen3-ASR emits chunk-level segments for the tested English
 samples, which is too coarse for truthful speaker-labeled transcript output.
-The implementation direction is now a three-stage pipeline: Qwen3-ASR text,
-Qwen3-ForcedAligner word timestamps, and Sortformer speaker turns. Keep the
-profile discovery-only until the three-stage path is validated against real
-audio fixtures with real MLX runtimes.
+The requestable path is therefore a three-stage pipeline: Qwen3-ASR text,
+Qwen3-ForcedAligner word timestamps, and Sortformer speaker turns.
+
+Production scope is intentionally narrow: callers must explicitly request
+`model=qwen3-sortformer`, and the profile is intended for batch English
+long-form validation workloads. It should not become the default dictation path,
+and this repo should not grow complex speaker embedding or diarization recovery
+logic unless the upstream runtimes expose it as a stable capability.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 specId: ADR-002
 title: Lightweight Local Speech Gateway Boundary
-status: 📝 草案 (Draft)
+status: ✅ 已完成 (Completed)
 creationDate: 2026-05-19
 lastUpdateDate: 2026-05-19
 deciders:
@@ -22,7 +22,7 @@ tags:
 # ADR-002: Lightweight Local Speech Gateway Boundary
 
 **Date**: 2026-05-19  
-**Status**: 📝 Draft  
+**Status**: ✅ Accepted  
 **Deciders**: User (AI-Assisted)
 
 ## Context
@@ -32,7 +32,7 @@ This project started as a local Apple Silicon ASR service with two practical job
 1. Provide a local transcription endpoint for personal data pipelines.
 2. Provide a local voice-input fallback when remote APIs are unavailable, too slow, or unsuitable.
 
-Recent work added dynamic model switching, idle subprocess offload, MLX Qwen3-ASR support, and a discovery-only `qwen3-sortformer` profile. A 57-minute English multi-speaker probe showed that the Qwen3 + Sortformer direction is promising for long-form data-pipeline use, but it is also slower and not yet stable enough to become a broad production feature.
+Recent work added dynamic model switching, idle subprocess offload, MLX Qwen3-ASR support, and the `qwen3-sortformer` pipeline profile. A 57-minute English multi-speaker probe showed that the Qwen3 + Sortformer direction is promising for long-form data-pipeline use: runtime was materially slower than Paraformer, but output quality was better for the English multi-speaker sample.
 
 The project is at risk of becoming a general speech model platform: adding more model adapters, custom diarization logic, embedding fallbacks, chunk reconciliation, Swift generation, and runtime-specific optimizations. That direction is technically interesting, but it expands maintenance cost beyond the project's original personal utility.
 
@@ -102,6 +102,54 @@ A model or pipeline can become requestable only when all conditions are true:
 
 Discovery-only aliases are allowed, but they must remain non-requestable until the above gate passes.
 
+## Scope Audit Findings
+
+The 2026-05-19 boundary review found that the project has started to approach the edge of the lightweight-gateway boundary, mainly through the `qwen3-sortformer` experiment:
+
+| Area | Finding | Decision |
+|------|---------|----------|
+| `TranscriptionService._run_decoupled_pipeline()` | The service now orchestrates ASR, chunking, forced alignment, diarization, speaker assignment, and resident-model restore. This is more than a simple HTTP gateway. | Keep only as a narrow opt-in batch path; do not generalize into a multi-model orchestration framework. |
+| `pipeline_chunking.reconcile_chunk_speaker_labels()` | The repo contains a small speaker-label reconciliation heuristic. This is the first step toward owning diarization postprocessing. | Keep the current minimal overlap-based logic, but do not add embedding fallback or complex speaker recovery unless upstream exposes it. |
+| Alignment quality gates | Local heuristics reject structurally invalid alignment output. | Keep as service safety checks, not as a growing quality-scoring system. |
+| Worker job kinds | The worker now hosts ASR, alignment, and diarization runtime objects. | Accept while it protects Apple Silicon memory boundaries; avoid adding VAD, embeddings, clustering, or TTS into this worker without a new ADR. |
+| Sortformer tuning constants | Local thresholds exist for the upstream runtime call. | Keep fixed constants; do not turn this repo into a Sortformer tuning harness. |
+
+The key conclusion: the current implementation is acceptable because it is still gated by explicit model selection and uses upstream runtimes, but further custom recovery logic would cross the project boundary.
+
+## Production Reachability
+
+`qwen3-sortformer` is allowed to become requestable as an explicit opt-in batch model:
+
+- Callers must pass `model=qwen3-sortformer`.
+- It must not become the default model.
+- It is positioned for English long-form, multi-speaker batch transcription, not low-latency dictation.
+- Slower runtime is acceptable for this use case because the 57-minute probe showed better English multi-speaker quality than Paraformer.
+- The service should fail closed on contract errors and quality-gate failures rather than silently inventing more recovery behavior.
+
+This is a product-level enablement, not a commitment to build a general diarization platform.
+
+## Upstream Watch Policy
+
+The project should periodically check upstream model/runtime progress, especially:
+
+- `mlx-audio` STT, Qwen3-ASR, Qwen3-ForcedAligner, and Sortformer runtime changes;
+- `speech-swift` native dictation, streaming ASR, CoreML/ANE, and diarization support;
+- FunASR / Paraformer / SenseVoice updates for speed, language coverage, and diarization stability.
+
+The watch process should answer one question: "Can upstream now do something that lets this repo delete code or keep a thinner adapter?" New upstream capabilities should first enter as probe scripts or dependency upgrades, not as immediate production aliases.
+
+## Fitness Functions
+
+To keep the boundary from drifting again, add architecture fitness checks that are cheap to run in CI or locally:
+
+- Pipeline profiles must declare `requestable` explicitly and must have documentation in `MODELS.md`.
+- No new model runtime adapter may be added without an ADR/SPEC reference.
+- No new speaker reconciliation, embedding, clustering, or diarization postprocessing module may be added without an ADR.
+- `TranscriptionService` should not gain new job domains beyond `transcribe`, `align`, and `diarize` without a boundary review.
+- Production aliases must map to one of the two real use cases: local voice-input fallback or data-pipeline transcription.
+
+These checks should be implemented as tests or lightweight static assertions before adding more model features.
+
 ## Options Considered
 
 | Option | Pros | Cons | Decision |
@@ -110,6 +158,7 @@ Discovery-only aliases are allowed, but they must remain non-requestable until t
 | Use only upstream tools directly and delete this service | Lowest maintenance; no adapter layer | Downstream personal services lose a stable OpenAI-compatible endpoint, queueing, idle offload, and response normalization | ❌ Rejected |
 | Keep this repo as a lightweight local speech gateway | Preserves personal pipeline utility while limiting scope; lets upstream projects own model runtime complexity | Requires discipline: new models must be gated and rejected when they do not fit | ✅ Chosen |
 | Move future voice-input work into Swift-native dependencies | Better fit for macOS/iOS latency, microphone, streaming, and UI integration | Separate codebase and dependency strategy; not a replacement for HTTP batch pipelines | ✅ Chosen for native voice-input path |
+| Make `qwen3-sortformer` requestable as an explicit batch model | Enables the better-quality English long-form path already validated by the 57-minute probe | Slower than Paraformer and close to the project's scope boundary | ✅ Chosen with strict opt-in positioning |
 
 ## Consequences
 
@@ -142,3 +191,4 @@ Discovery-only aliases are allowed, but they must remain non-requestable until t
 | Date | Reviewer | Note | Status |
 |------|----------|------|--------|
 | 2026-05-19 | User (AI-Assisted) | Initial boundary draft after qwen3-sortformer long-form probe and Paraformer comparison | 📝 Draft |
+| 2026-05-19 | User (AI-Assisted) | Added scope audit findings, opt-in production reachability for `qwen3-sortformer`, upstream watch policy, and fitness-function follow-up | ✅ Accepted |

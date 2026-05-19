@@ -90,7 +90,7 @@ def test_should_return_model_list_on_get_models(client) -> None:
 
 
 
-def test_models_endpoint_should_include_discovery_only_pipeline_profiles(client) -> None:
+def test_models_endpoint_should_include_requestable_pipeline_profiles(client) -> None:
     response = client.get("/v1/models")
 
     assert response.status_code == 200
@@ -98,7 +98,7 @@ def test_models_endpoint_should_include_discovery_only_pipeline_profiles(client)
     models = {item["alias"]: item for item in body["models"]}
     assert "qwen3-sortformer" in models
     assert models["qwen3-sortformer"]["capabilities"]["diarization"] is True
-    assert models["qwen3-sortformer"]["requestable"] is False
+    assert models["qwen3-sortformer"]["requestable"] is True
 
 
 # MA-2
@@ -162,11 +162,15 @@ def test_should_return_501_for_non_requestable_pipeline_profile() -> None:
     mock_service.submit_pipeline.assert_not_awaited()
 
 
-def test_should_reject_discovery_only_pipeline_profile_by_default() -> None:
+def test_should_submit_qwen3_sortformer_pipeline_by_default() -> None:
     qwen_spec = real_lookup("qwen3-asr")
     mock_service = _make_mock_service(
         qwen_spec.capabilities,
-        {"text": "unused", "segments": None, "duration": 1.0},
+        {
+            "text": "pipeline result",
+            "segments": [{"text": "hello", "start": 0.0, "end": 1.0, "speaker": "Speaker A"}],
+            "duration": 1.0,
+        },
         current_model_spec=qwen_spec,
     )
 
@@ -181,10 +185,10 @@ def test_should_reject_discovery_only_pipeline_profile_by_default() -> None:
             files={"file": _audio_file()},
         )
 
-    assert response.status_code == 501
-    assert "not enabled" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["model"] == "qwen3-sortformer"
     mock_service.submit.assert_not_called()
-    mock_service.submit_pipeline.assert_not_awaited()
+    mock_service.submit_pipeline.assert_awaited_once()
 
 
 def test_should_submit_pipeline_profile_when_explicitly_requestable() -> None:

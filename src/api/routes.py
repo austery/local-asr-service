@@ -129,7 +129,7 @@ async def create_transcription(
         description=(
             "Model alias or full model path. "
             "Pass None/'whisper-1' to use the server's current model. "
-            "Examples: 'paraformer', 'qwen3-asr-mini', 'mlx-community/Qwen3-ASR-1.7B-4bit'"
+            "Examples: 'paraformer', 'qwen3-asr', 'qwen3-sortformer'"
         ),
     ),
     language: str = Form("auto", description="Language code (auto, zh, en)"),
@@ -146,7 +146,8 @@ async def create_transcription(
 
     Model switching:
     - Pass `model=paraformer` for multi-speaker content (enables diarization).
-    - Pass `model=qwen3-asr-mini` for single-speaker content (low memory, fast).
+    - Pass `model=qwen3-asr` for single-speaker quality-first content.
+    - Pass `model=qwen3-sortformer` for opt-in English long-form batch speaker separation.
     - Omit `model` or pass `model=whisper-1` to use the server's currently loaded model.
 
     Output Formats:
