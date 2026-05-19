@@ -11,7 +11,7 @@ test instance to validate long-form behavior before considering public enablemen
 Input:
 
 ```text
-/Users/leipeng/Documents/Projects/model-management/Why Does 2 + 2 = 4？ What Math Teaches Us About Deep Reality.mp3
+/path/to/Why Does 2 + 2 = 4？ What Math Teaches Us About Deep Reality.mp3
 duration: 3437.075750s
 size: 79 MB
 ```
