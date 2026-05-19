@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
+from src.adapters.pipeline_chunking import ChunkWindow
 from src.config import (
     AUDIO_BITRATE,
     AUDIO_SAMPLE_RATE,
@@ -243,6 +244,49 @@ class AudioChunkingService:
             return float(result.stdout.strip())
         except (subprocess.CalledProcessError, ValueError) as e:
             raise RuntimeError(f"Failed to get audio duration: {e}") from e
+
+    def get_audio_duration(self, audio_path: str) -> float:
+        return self._get_audio_duration(audio_path)
+
+    def extract_pipeline_chunk(
+        self,
+        audio_path: str,
+        output_path: str,
+        window: ChunkWindow,
+    ) -> str:
+        if not isinstance(window, ChunkWindow):
+            raise TypeError("window must be a ChunkWindow")
+
+        cmd = [
+            "ffmpeg",
+            "-i",
+            audio_path,
+            "-ss",
+            str(window.start),
+            "-to",
+            str(window.end),
+            "-ac",
+            "1",
+            "-ar",
+            str(self.sample_rate),
+            "-c:a",
+            "pcm_s16le",
+            "-y",
+            output_path,
+        ]
+        try:
+            subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                check=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Failed to extract pipeline chunk {window.index}: {e.stderr}"
+            ) from e
+        return output_path
 
     def _detect_silence(
         self,

@@ -285,6 +285,42 @@ class TestMlxAudioEngine:
             language="auto",
         )
 
+    def test_transcribe_should_honor_output_format_alias(
+        self,
+        mock_load_model,
+        mock_generate_transcription,
+        mock_chunking_service,
+    ):
+        """Worker jobs pass output_format, so MLX must treat it as a first-class alias."""
+        from src.core.mlx_engine import MlxAudioEngine
+
+        mock_model = MagicMock()
+        mock_load_model.return_value = mock_model
+        mock_chunking_service.return_value.process_audio = MagicMock(return_value=["test.wav"])
+
+        mock_result = MagicMock()
+        mock_result.text = "Hello JSON"
+        mock_result.language = "en"
+        mock_result.segments = [{"text": "Hello JSON", "start": 0.0, "end": 1.0}]
+        mock_generate_transcription.return_value = mock_result
+
+        engine = MlxAudioEngine(model_id="mlx-community/Qwen3-ASR-1.7B-8bit")
+        engine.load()
+        result = engine.transcribe_file("test.wav", output_format="json")
+
+        assert result == {
+            "text": "Hello JSON",
+            "language": "en",
+            "segments": [{"text": "Hello JSON", "start": 0.0, "end": 1.0}],
+        }
+        mock_generate_transcription.assert_called_once_with(
+            model=mock_model,
+            audio="test.wav",
+            format="json",
+            verbose=False,
+            language="auto",
+        )
+
     def test_release(self, mock_load_model, mock_gc, mock_chunking_service):
         """测试资源释放"""
         from src.core.mlx_engine import MlxAudioEngine

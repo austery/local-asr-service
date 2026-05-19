@@ -166,6 +166,7 @@ class MlxAudioEngine:
             file_path: 音频文件路径
             language: 语言代码 (当前 mlx-audio 部分模型支持)
             **kwargs: 其他参数
+                - output_format: str - 服务内部输出格式参数
                 - verbose: bool - 详细输出
                 - format: str - 输出格式 (txt, json, srt, vtt)
                 - response_format: str - OpenAI 兼容的响应格式参数
@@ -178,8 +179,12 @@ class MlxAudioEngine:
             raise RuntimeError("Model not loaded! Call engine.load() first.")
 
         verbose = kwargs.get("verbose", False)
-        # 支持两种参数名：format (mlx-audio) 和 response_format (OpenAI)
-        output_format = kwargs.get("format") or kwargs.get("response_format", "txt")
+        # 支持三种参数名：output_format (service), format (mlx-audio), response_format (OpenAI)
+        output_format = (
+            kwargs.get("output_format")
+            or kwargs.get("format")
+            or kwargs.get("response_format", "txt")
+        )
 
         # 标准化格式名称
         if output_format in ["json", "verbose_json"]:

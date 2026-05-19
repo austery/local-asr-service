@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -13,6 +13,13 @@ class SpeakerTurn:
             raise ValueError("Speaker name cannot be empty")
         if self.end <= self.start:
             raise ValueError(f"Invalid interval: end ({self.end}) must be > start ({self.start})")
+
+
+@runtime_checkable
+class RuntimeDiarizationSegment(Protocol):
+    speaker: int | str
+    start: float
+    end: float
 
 
 class DiarizationPort(Protocol):

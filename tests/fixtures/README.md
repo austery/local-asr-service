@@ -12,6 +12,8 @@
 | 文件名 | 描述 | 用途 |
 |-------|------|------|
 | `two_speakers_60s.wav` | 60s English dialogue (16kHz mono WAV, ~1.8MB), 2 speakers (Lex Fridman + Peter Steinberger) | Speaker diarization test |
+| `Blair_FEB_09_last10min.wav` | VP presentation final Q&A segment (~10 min WAV), multiple speakers with audience handoff | SPEC-012 realistic diarization probe |
+| `Paul Rosolie and Lex Fridman.normalized.mp3` | Normalized long-form conversation sample | Secondary reference sample for SPEC-012 |
 
 ## 🔗 获取测试文件
 

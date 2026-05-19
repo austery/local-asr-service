@@ -8,6 +8,7 @@ def test_should_resolve_qwen3_sortformer_profile() -> None:
 
     assert profile.alias == "qwen3-sortformer"
     assert profile.transcription_alias == "qwen3-asr"
+    assert profile.alignment_alias == "qwen3-forced-aligner"
     assert profile.diarization_alias == "sortformer-diar"
     assert profile.capabilities.timestamp is True
     assert profile.capabilities.diarization is True

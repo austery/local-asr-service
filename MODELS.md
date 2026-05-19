@@ -13,11 +13,11 @@
 | `sensevoice-small` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/SenseVoiceSmall` | ❌ | Fast language/emotion tags, no timestamps |
 | `qwen3-asr` | mlx-audio (`load_model` + `generate_transcription` on MLX Metal) | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | Chinese/English quality-first ASR; language prompts are normalized before inference |
 
-## Discovery-Only Pipeline Profiles
+## Pipeline Profiles
 
 | Alias | Components | Requestable | Notes |
 |-------|------------|:-----------:|-------|
-| `qwen3-sortformer` | `qwen3-asr` + `sortformer-diar` | ❌ | Exposed by `/v1/models` for discovery, but `POST /v1/audio/transcriptions` returns 501 until Sortformer runtime validation passes |
+| `qwen3-sortformer` | `qwen3-asr` + `qwen3-forced-aligner` + `sortformer-diar` | ❌ discovery-only | Apple-native batch speaker-separation pipeline under validation. Three-stage orchestration exists in unit-tested code, but the profile must stay non-requestable until real-model E2E passes. |
 
 ---
 
@@ -28,6 +28,10 @@ The project registers models by runtime contract, not by vendor name.
 - Same runtime API means registry-only: for example, a future Qwen3-ASR model that still works with `mlx_audio.stt.utils.load_model()` and `generate_transcription()` should only need a new `ModelSpec`.
 - Different runtime API means a new engine adapter: for example, the independent `parakeet-mlx` package uses `from_pretrained(...).transcribe(...)`, so it should not be hidden inside `MlxAudioEngine` unless an adapter normalizes that contract.
 - Same Apple Silicon backend does not imply the same engine: MLX Metal, PyTorch MPS, CoreML/ANE, and CPU have different lifecycle and output contracts.
+- The service should wrap proven upstream runtime capabilities rather than
+  reimplementing model internals. For Qwen3 speaker separation, that means
+  reusing `mlx-audio` Qwen3-ASR, Qwen3-ForcedAligner, and Sortformer contracts
+  instead of inventing local timestamp or diarization model logic.
 
 ---
 
@@ -58,10 +62,19 @@ The project registers models by runtime contract, not by vendor name.
 |----------|------------------|--------|
 | Mandarin long-form podcast (20-60min) | `paraformer` | Best verified long-audio RTF, CAM++ diarization |
 | Chinese/English quality-first single-speaker audio | `qwen3-asr` | MLX-native Qwen3-ASR with explicit language prompt forwarding |
+| Spokenly local dictation fallback | `qwen3-asr` | Best current local path for low-latency single-speaker voice input through an OpenAI-compatible endpoint |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
-| Multi-speaker meeting today | `paraformer` | Only requestable model with diarization |
-| Future MLX diarization pipeline | `qwen3-sortformer` | Discovery-only until Sortformer integration is validated |
+| Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
+| Apple-native multi-speaker batch pipeline | `qwen3-sortformer` | Target design requires Qwen3-ASR text + Qwen3-ForcedAligner word timestamps + Sortformer speaker turns |
 | Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
+
+`qwen3-sortformer` is not just "Qwen3-ASR segments plus Sortformer." Local E2E
+testing showed Qwen3-ASR emits chunk-level segments for the tested English
+samples, which is too coarse for truthful speaker-labeled transcript output.
+The implementation direction is now a three-stage pipeline: Qwen3-ASR text,
+Qwen3-ForcedAligner word timestamps, and Sortformer speaker turns. Keep the
+profile discovery-only until the three-stage path is validated against real
+audio fixtures with real MLX runtimes.
 
 ---
 

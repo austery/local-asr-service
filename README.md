@@ -1,7 +1,49 @@
 # Local ASR Service (Mac Silicon)
 
-High-performance local speech transcription service optimized for Apple Silicon (M-series).
-OpenAI Whisper-compatible HTTP API on port **50700**.
+Local speech runtime gateway optimized for Apple Silicon (M-series).
+It exposes an OpenAI Whisper-compatible HTTP API on port **50700** for local
+dictation, transcription, and batch ASR workflows.
+
+The project exists because cloud speech APIs are not always reliable enough for
+interactive work. A 10-20 second stall from a remote provider can break flow for
+dictation and block downstream batch pipelines. This service keeps a local,
+high-quality fallback available for tools that already know how to call an
+OpenAI-compatible transcription endpoint.
+
+## Project Role
+
+This repo is the **API, queue, runtime-isolation, and response-normalization
+layer**. It should stay thin around model runtimes instead of becoming a new
+speech-model framework.
+
+Primary consumers:
+
+- **Spokenly dictation**: low-latency, single-speaker voice input through the
+  OpenAI-compatible custom API provider.
+- **puresubs batch transcription**: longer-form transcription and future speaker
+  separation integration for offline processing.
+
+Non-goals:
+
+- Reimplement `mlx-audio`, WhisperKit, FunASR, Sortformer, forced alignment, or
+  speaker-clustering internals.
+- Turn this service into a generic audio ML framework.
+- Mix low-latency dictation behavior with slower batch speaker-diarization
+  behavior in one default path.
+
+The preferred direction is to reuse strong upstream runtimes such as
+`mlx-audio` for Qwen3-ASR, Qwen3-ForcedAligner, and Sortformer, while this
+service owns the stable local HTTP contract and Apple Silicon memory boundary.
+
+## Background
+
+This project grew out of earlier local transcription workflows for YouTube and
+puresubs. The initial reference point was Whisper-style local API servers such
+as WhisperKit: useful server shape, but limited by Whisper-family model quality
+and behavior. The service then explored FunASR/SenseVoice and Paraformer for
+local transcription and speaker diarization, added MLX/Qwen3-ASR for stronger
+Chinese/English transcription quality, and is now investigating how to add
+speaker separation without rebuilding the lower-level model stack.
 
 **Dual-engine architecture:**
 - **FunASR** — Paraformer (Chinese SOTA) + CAM++ speaker diarization
@@ -36,10 +78,11 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 
 | Scenario | Recommended | Command |
 |----------|-------------|---------|
-| Mandarin multi-speaker podcast / meeting | `paraformer` (default) | `uv run python -m src.main` |
-| Chinese/English quality-first transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
+| Spokenly local dictation fallback | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
+| Chinese/English quality-first single-speaker transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
+| Mandarin multi-speaker podcast / meeting today | `paraformer` (default) | `uv run python -m src.main` |
 | Bulk speed-first tags / language detection | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
-| Future multi-speaker MLX pipeline | `qwen3-sortformer` | Discovery-only until Sortformer runtime validation passes |
+| Apple-native multi-speaker batch pipeline | `qwen3-sortformer` | Experimental; target design is Qwen3-ASR text + Qwen3-ForcedAligner word timestamps + Sortformer speaker turns |
 
 ## API & Web UI
 
@@ -59,10 +102,10 @@ curl http://localhost:50700/health
 
 #### Transcription
 ```bash
-# Default: JSON with speaker diarization
+# Default: JSON response
 curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg"
-```
+
 # Plain text (for RAG / LLM input)
 curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
@@ -97,7 +140,13 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `paraformer` | FunASR | FunASR/PyTorch MPS path; Mandarin-focused with CAM++ diarization |
 | `qwen3-asr` | MLX | mlx-audio/MLX Metal path; Chinese/English quality-first ASR |
 | `sensevoice-small` | FunASR | FunASR/PyTorch MPS path; speed-first language/emotion tags |
-| `qwen3-sortformer` | Pipeline | Discovery-only Qwen3-ASR + Sortformer profile; POST returns 501 until enabled |
+| `qwen3-sortformer` | Pipeline | Experimental decoupled pipeline; current implementation is under validation and should not be treated as production speaker labeling |
+
+`qwen3-sortformer` is the Apple-native speaker-separation research path. Early
+end-to-end validation showed that Qwen3-ASR's native segments are chunk-level,
+not reliable sentence/word timestamps. Production speaker labeling should use a
+three-stage pipeline: Qwen3-ASR transcript, Qwen3-ForcedAligner word timestamps,
+and Sortformer speaker turns.
 
 ### Query models
 
