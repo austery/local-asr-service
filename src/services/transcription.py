@@ -425,7 +425,11 @@ class TranscriptionService:
         request_id: str,
     ) -> float | None:
         duration = transcript_result.get("duration")
-        if isinstance(duration, int | float) and not isinstance(duration, bool):
+        if (
+            isinstance(duration, int | float)
+            and not isinstance(duration, bool)
+            and duration > 0.0
+        ):
             return float(duration)
 
         try:
@@ -584,6 +588,8 @@ class TranscriptionService:
                     transcript_result,
                     request_id=request_id,
                 )
+                if pipeline_duration is not None:
+                    transcript_result["duration"] = pipeline_duration
                 if profile.alignment_alias is not None:
                     alignment_language = self._resolve_alignment_language(params, transcript_result)
                     if (
@@ -739,6 +745,8 @@ class TranscriptionService:
         current_end = 0.0
 
         for word in aligned_words:
+            if word.end <= word.start:
+                continue
             speaker = TranscriptionService._speaker_for_word(word, speaker_turns)
             if current_speaker is None:
                 current_speaker = speaker

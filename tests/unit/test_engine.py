@@ -1,9 +1,14 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from src.core.base_engine import EngineCapabilities
 from src.core.funasr_engine import (
-    FunASREngine, DEFAULT_MODEL_ID, _resolve_capabilities,
+    DEFAULT_MODEL_ID,
+    FunASREngine,
+    _resolve_capabilities,
 )
+
 
 class TestEngineCapabilities:
     """Test EngineCapabilities dataclass and prefix-matching resolution."""
@@ -162,8 +167,13 @@ class TestFunASREngine:
         # 4. Assertions - JSON 格式返回 dict
         assert isinstance(result, dict)
         assert result["text"] == "Hello World"
+        assert result["duration"] == 1.0
         assert "segments" in result
         assert len(result["segments"]) == 2
+        assert result["segments"][0]["start"] == 0.0
+        assert result["segments"][0]["end"] == 0.5
+        assert result["segments"][1]["start"] == 0.5
+        assert result["segments"][1]["end"] == 1.0
 
         # 验证 generate 调用参数
         mock_instance.generate.assert_called_once()
