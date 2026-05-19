@@ -11,7 +11,7 @@ class TestMlxCapabilities:
 
     def test_qwen3_asr_capabilities(self):
         """Qwen3-ASR models get timestamp + language_detect."""
-        caps = _resolve_mlx_capabilities("mlx-community/Qwen3-ASR-1.7B-4bit")
+        caps = _resolve_mlx_capabilities("mlx-community/Qwen3-ASR-1.7B-8bit")
         assert caps.timestamp is True
         assert caps.language_detect is True
         assert caps.diarization is False
@@ -32,7 +32,7 @@ class TestMlxCapabilities:
         """Engine exposes capabilities as a property."""
         with patch("src.core.mlx_engine.AudioChunkingService"):
             from src.core.mlx_engine import MlxAudioEngine
-            engine = MlxAudioEngine(model_id="mlx-community/Qwen3-ASR-1.7B-4bit")
+            engine = MlxAudioEngine(model_id="mlx-community/Qwen3-ASR-1.7B-8bit")
             assert engine.capabilities.timestamp is True
 
 
@@ -115,7 +115,7 @@ class TestMlxAudioEngine:
         from src.core.mlx_engine import MlxAudioEngine
 
         engine = MlxAudioEngine()
-        assert engine.model_id == "mlx-community/Qwen3-ASR-1.7B-4bit"
+        assert engine.model_id == "mlx-community/Qwen3-ASR-1.7B-8bit"
 
     def test_load_model(self, mock_load_model, mock_chunking_service):
         """测试模型加载逻辑"""

@@ -76,6 +76,26 @@ def _audio_file() -> tuple[str, BytesIO, str]:
     return ("file", BytesIO(b"RIFF\x00\x00\x00\x00WAVEfmt "), "audio/wav")
 
 
+def test_openapi_transcription_docs_should_use_current_model_aliases() -> None:
+    schema = app.openapi()
+    operation = schema["paths"]["/v1/audio/transcriptions"]["post"]
+    description = operation["description"]
+    body_schema_ref = operation["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
+    body_schema_name = body_schema_ref.rsplit("/", 1)[-1]
+    model_description = schema["components"]["schemas"][body_schema_name]["properties"]["model"][
+        "description"
+    ]
+
+    assert "model=qwen3-asr" in description
+    assert "model=qwen3-sortformer" in description
+    assert "qwen3-asr-mini" not in description
+    assert "qwen3-asr-mini" not in model_description
+    assert "'qwen3-asr'" in model_description
+    assert "'qwen3-sortformer'" in model_description
+    assert "GET /v1/models" in description
+    assert "GET /v1/models" in model_description
+
+
 # MA-1
 def test_should_return_model_list_on_get_models(client) -> None:
     response = client.get("/v1/models")

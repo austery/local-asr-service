@@ -117,7 +117,7 @@ class MlxAudioEngine:
     实现 ASREngine Protocol。
     """
 
-    def __init__(self, model_id: str = "mlx-community/Qwen3-ASR-1.7B-4bit"):
+    def __init__(self, model_id: str = "mlx-community/Qwen3-ASR-1.7B-8bit"):
         self.model_id = model_id
         self._capabilities = _resolve_mlx_capabilities(model_id)
         self.model = None

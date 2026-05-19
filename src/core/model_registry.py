@@ -66,8 +66,8 @@ def lookup(model: str) -> ModelSpec:
     Resolve a model string to a ModelSpec.
 
     Resolution order:
-      1. Exact alias match         ("paraformer", "qwen3-asr-mini")
-      2. Registered model_id match ("mlx-community/Qwen3-ASR-1.7B-4bit")
+      1. Exact alias match         ("paraformer", "qwen3-asr")
+      2. Registered model_id match ("mlx-community/Qwen3-ASR-1.7B-8bit")
       3. Prefix-based engine_type inference for unknown full paths
          ("mlx-community/..." → mlx,  "iic/..." / "funasr..." → funasr)
 

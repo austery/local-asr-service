@@ -128,8 +128,9 @@ async def create_transcription(
         None,
         description=(
             "Model alias or full model path. "
-            "Pass None/'whisper-1' to use the server's current model. "
-            "Examples: 'paraformer', 'qwen3-asr', 'qwen3-sortformer'"
+            "Omit this field or pass 'whisper-1' to use the server's current model. "
+            "Use GET /v1/models for the live alias list. "
+            "Examples: 'paraformer', 'qwen3-asr', 'qwen3-sortformer'."
         ),
     ),
     language: str = Form("auto", description="Language code (auto, zh, en)"),
@@ -149,6 +150,7 @@ async def create_transcription(
     - Pass `model=qwen3-asr` for single-speaker quality-first content.
     - Pass `model=qwen3-sortformer` for opt-in English long-form batch speaker separation.
     - Omit `model` or pass `model=whisper-1` to use the server's currently loaded model.
+    - Use `GET /v1/models` or `GET /v1/models/current` to inspect runtime aliases.
 
     Output Formats:
     - **json** (default): Full structured data with segments and timestamps
