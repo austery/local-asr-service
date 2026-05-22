@@ -33,7 +33,7 @@ This project started as a local Apple Silicon ASR service with two practical job
 1. Provide a local transcription endpoint for personal data pipelines.
 2. Provide a local voice-input fallback when remote APIs are unavailable, too slow, or unsuitable.
 
-Recent work added dynamic model switching, idle subprocess offload, MLX Qwen3-ASR support, and the `qwen3-sortformer` pipeline profile. A 57-minute English multi-speaker probe showed that the Qwen3 + Sortformer direction is promising for long-form data-pipeline use: runtime was materially slower than Paraformer, but output quality was better for the English multi-speaker sample.
+Recent work added dynamic model switching, idle subprocess offload, MLX Qwen3-ASR support, and the `qwen3-sortformer` pipeline profile. A 57-minute English multi-speaker probe initially made the Qwen3 + Sortformer direction look promising for long-form data-pipeline use: runtime was materially slower than Paraformer, but top-level English transcript quality was better for that sample. A later real English manager 1:1 probe changed the product judgment: the pipeline kept the stronger Qwen3 transcript text, but its speaker-labeled segments were unreliable and its memory footprint was too high for the value delivered by this local gateway.
 
 The project is at risk of becoming a general speech model platform: adding more model adapters, custom diarization logic, embedding fallbacks, chunk reconciliation, Swift generation, and runtime-specific optimizations. That direction is technically interesting, but it expands maintenance cost beyond the project's original personal utility.
 
@@ -76,7 +76,8 @@ The project should not become the place where we deeply reimplement or own:
 
 - Maintain a reliable local `/v1/audio/transcriptions` compatible endpoint.
 - Keep the service safe on M-series machines through strict single-worker execution.
-- Support a small set of proven aliases: production-ready defaults plus a few discovery-only profiles.
+- Support a small set of proven aliases: production-ready defaults plus a few
+  explicitly gated experiments or discovery-only profiles.
 - Use subprocess offload to make heavyweight models tolerable for intermittent personal use.
 - Benchmark real files from the target workflows before promoting any model.
 - Preserve response contracts across upstream model differences.
@@ -115,19 +116,24 @@ The 2026-05-19 boundary review found that the project has started to approach th
 | Worker job kinds | The worker now hosts ASR, alignment, and diarization runtime objects. | Accept while it protects Apple Silicon memory boundaries; avoid adding VAD, embeddings, clustering, or TTS into this worker without a new ADR. |
 | Sortformer tuning constants | Local thresholds exist for the upstream runtime call. | Keep fixed constants; do not turn this repo into a Sortformer tuning harness. |
 
-The key conclusion: the current implementation is acceptable because it is still gated by explicit model selection and uses upstream runtimes, but further custom recovery logic would cross the project boundary.
+The key conclusion: the current implementation may remain as an explicit
+experiment because it is gated by model selection and uses upstream runtimes,
+but further custom recovery logic would cross the project boundary.
 
-## Production Reachability
+## Experimental Reachability
 
-`qwen3-sortformer` is allowed to become requestable as an explicit opt-in batch model:
+`qwen3-sortformer` may remain requestable as an explicit opt-in experiment:
 
 - Callers must pass `model=qwen3-sortformer`.
 - It must not become the default model.
-- It is positioned for English long-form, multi-speaker batch transcription, not low-latency dictation.
-- Slower runtime is acceptable for this use case because the 57-minute probe showed better English multi-speaker quality than Paraformer.
-- The service should fail closed on contract errors and quality-gate failures rather than silently inventing more recovery behavior.
+- It is not the recommended English multi-speaker meeting path.
+- Its current three-stage service pipeline is a deletion candidate if stronger
+  upstream or open-source local diarized-ASR capability replaces it.
+- The service should fail closed on contract errors and quality-gate failures
+  rather than silently inventing more recovery behavior.
 
-This is a product-level enablement, not a commitment to build a general diarization platform.
+This reachability is a way to preserve the evaluation result, not a product
+commitment to build a general diarization platform.
 
 ## Upstream Watch Policy
 
@@ -159,7 +165,7 @@ To keep the boundary from drifting again, we enforce architectural constraints a
 | Use only upstream tools directly and delete this service | Lowest maintenance; no adapter layer | Downstream personal services lose a stable OpenAI-compatible endpoint, queueing, idle offload, and response normalization | ❌ Rejected |
 | Keep this repo as a lightweight local speech gateway | Preserves personal pipeline utility while limiting scope; lets upstream projects own model runtime complexity | Requires discipline: new models must be gated and rejected when they do not fit | ✅ Chosen |
 | Move future voice-input work into Swift-native dependencies | Better fit for macOS/iOS latency, microphone, streaming, and UI integration | Separate codebase and dependency strategy; not a replacement for HTTP batch pipelines | ✅ Chosen for native voice-input path |
-| Make `qwen3-sortformer` requestable as an explicit batch model | Enables the better-quality English long-form path already validated by the 57-minute probe | Slower than Paraformer and close to the project's scope boundary | ✅ Chosen with strict opt-in positioning |
+| Keep `qwen3-sortformer` requestable as an explicit experiment | Preserves the evaluation path and the stronger Qwen3 transcript text for follow-up probes | Speaker-segment quality and resource cost do not justify recommending it now | ✅ Chosen as a deletion candidate, not a production recommendation |
 
 ## Consequences
 
@@ -184,7 +190,8 @@ To keep the boundary from drifting again, we enforce architectural constraints a
 - Prefer upstream feature branches or small upstream PRs over local forks when a model runtime needs improvement.
 - Prefer a new dependency-backed adapter only when the runtime contract is clearly different from existing engines.
 - Prefer deleting or deferring model-specific workaround code when upstream support becomes stable.
-- Keep production defaults boring; keep experiments explicitly discovery-only.
+- Keep production defaults boring; keep experiments explicitly labeled and
+  gated, and prefer discovery-only until reachable evaluation is useful.
 - For Swift-native voice workflows, evaluate `speech-swift` first before adding Swift code generation or native app logic here.
 
 ## Review History
@@ -193,3 +200,4 @@ To keep the boundary from drifting again, we enforce architectural constraints a
 |------|----------|------|--------|
 | 2026-05-19 | User (AI-Assisted) | Initial boundary draft after qwen3-sortformer long-form probe and Paraformer comparison | 📝 Draft |
 | 2026-05-19 | User (AI-Assisted) | Added scope audit findings, opt-in production reachability for `qwen3-sortformer`, upstream watch policy, and fitness-function follow-up | ✅ Accepted |
+| 2026-05-21 | User (AI-Assisted) | Real English manager 1:1 probe downgraded `qwen3-sortformer` from production-adjacent batch path to experimental reachable deletion candidate | ✅ Accepted |

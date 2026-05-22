@@ -4,9 +4,10 @@ Date: 2026-05-19
 
 ## Context
 
-The `qwen3-sortformer` profile is intentionally discovery-only after PR #15. A
-57m17s four-speaker English interview was run through a temporarily requestable
-test instance to validate long-form behavior before considering public enablement.
+At the time of this probe, the `qwen3-sortformer` profile was intentionally
+discovery-only after PR #15. A 57m17s four-speaker English interview was run
+through a temporarily requestable test instance to validate long-form behavior
+before considering public enablement.
 
 Input:
 
@@ -51,5 +52,7 @@ size: 79 MB
   examples. This should be handled carefully because duplicate-looking phrases
   may be legitimate repeated speech in interviews.
 - Add a reusable benchmark summary script for long-form probe JSON artifacts.
-- Keep `qwen3-sortformer` `requestable=False` until a longer 3-5 hour probe and
-  chunk-boundary cleanup are validated.
+- This note captured the earlier long-form probe. The later real English manager
+  1:1 reassessment on 2026-05-20 downgraded the path to an experimental
+  reachable deletion candidate instead of continuing toward a production
+  enablement gate in this repo.

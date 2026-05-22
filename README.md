@@ -82,7 +82,7 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 | Chinese/English quality-first single-speaker transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
 | Mandarin multi-speaker podcast / meeting today | `paraformer` (default) | `uv run python -m src.main` |
 | Bulk speed-first tags / language detection | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
-| Apple-native English multi-speaker batch pipeline | `qwen3-sortformer` | Explicit opt-in batch path; Qwen3-ASR text + Qwen3-ForcedAligner word timestamps + Sortformer speaker turns |
+| Experimental Apple-native English speaker-separation evaluation | `qwen3-sortformer` | Explicit opt-in experiment only; not a recommended meeting-transcript path |
 
 ## API & Web UI
 
@@ -140,14 +140,18 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `paraformer` | FunASR | FunASR/PyTorch MPS path; Mandarin-focused with CAM++ diarization |
 | `qwen3-asr` | MLX | mlx-audio/MLX Metal path; Chinese/English quality-first ASR |
 | `sensevoice-small` | FunASR | FunASR/PyTorch MPS path; speed-first language/emotion tags |
-| `qwen3-sortformer` | Pipeline | Opt-in batch speaker-separation path for English long-form validation workloads |
+| `qwen3-sortformer` | Pipeline | Experimental opt-in evaluation path for Qwen3-ASR + forced alignment + Sortformer |
 
-`qwen3-sortformer` is the Apple-native speaker-separation batch path. Early
-end-to-end validation showed that Qwen3-ASR's native segments are chunk-level,
-not reliable sentence/word timestamps. Speaker labeling therefore uses a
-three-stage pipeline: Qwen3-ASR transcript, Qwen3-ForcedAligner word timestamps,
-and Sortformer speaker turns. It is requestable only when explicitly selected
-with `model=qwen3-sortformer`; it is not the default dictation path.
+`qwen3-sortformer` remains reachable only as an explicit experiment through
+`model=qwen3-sortformer`; it is not the default dictation path and is not the
+recommended answer for English meeting transcripts. Early end-to-end validation
+showed that Qwen3-ASR's native segments are chunk-level, not reliable
+sentence/word timestamps, so this profile adds Qwen3-ForcedAligner word
+timestamps and Sortformer speaker turns before rebuilding speaker-labeled
+segments in this service. A later real English 1:1 meeting probe preserved the
+stronger Qwen3 transcript text but produced costly and unreliable
+speaker-labeled segments. Future progress should prefer stronger upstream local
+diarized-ASR capabilities over deeper pipeline-specific recovery logic here.
 
 ### Query models
 
@@ -219,7 +223,10 @@ uv run python benchmarks/run.py --all --save --compare  # compare all models, sa
 
 ## Memory Management
 
-This service is designed for Apple Silicon M-series chips with unified memory. Model memory consumption is **17–23 GB** during transcription.
+This service is designed for Apple Silicon M-series chips with unified memory.
+Single-model transcription can consume **17–23 GB** while active. Experimental
+multi-stage profiles such as `qwen3-sortformer` can cost more because ASR,
+alignment, diarization, and merge work are combined in one local pipeline.
 
 ### Idle Model Offloading (SPEC-009 v2)
 

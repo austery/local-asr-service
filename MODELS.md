@@ -17,7 +17,7 @@
 
 | Alias | Components | Requestable | Notes |
 |-------|------------|:-----------:|-------|
-| `qwen3-sortformer` | `qwen3-asr` + `qwen3-forced-aligner` + `sortformer-diar` | ✅ opt-in batch | Apple-native batch speaker-separation pipeline for English long-form validation workloads. Requestable only when explicitly selected; not the default dictation path. |
+| `qwen3-sortformer` | `qwen3-asr` + `qwen3-forced-aligner` + `sortformer-diar` | ✅ experimental opt-in | Reachable for evaluation only. The current local pipeline is a deletion candidate, not a recommended meeting-transcript path. |
 
 ---
 
@@ -65,20 +65,26 @@ The project registers models by runtime contract, not by vendor name.
 | Spokenly local dictation fallback | `qwen3-asr` | Best current local path for low-latency single-speaker voice input through an OpenAI-compatible endpoint |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
 | Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
-| Apple-native English multi-speaker batch pipeline | `qwen3-sortformer` | Higher quality than Paraformer on the 57-minute English probe, with materially slower runtime |
+| Experimental Apple-native English speaker-separation evaluation | `qwen3-sortformer` | Keeps the experiment callable, but current real-meeting evidence does not justify recommending it |
 | Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
 
 `qwen3-sortformer` is not just "Qwen3-ASR segments plus Sortformer." Local E2E
 testing showed Qwen3-ASR emits chunk-level segments for the tested English
 samples, which is too coarse for truthful speaker-labeled transcript output.
-The requestable path is therefore a three-stage pipeline: Qwen3-ASR text,
+The requestable experiment is therefore a three-stage pipeline: Qwen3-ASR text,
 Qwen3-ForcedAligner word timestamps, and Sortformer speaker turns.
 
-Production scope is intentionally narrow: callers must explicitly request
-`model=qwen3-sortformer`, and the profile is intended for batch English
-long-form validation workloads. It should not become the default dictation path,
-and this repo should not grow complex speaker embedding or diarization recovery
-logic unless the upstream runtimes expose it as a stable capability.
+Current stance is intentionally conservative: callers must explicitly request
+`model=qwen3-sortformer`, and requestable status only keeps the experiment
+reachable. The 57-minute English probe showed stronger transcript text than
+Paraformer with materially slower runtime, but a later real English 1:1 meeting
+probe showed a worse product tradeoff: top-level Qwen3 text stayed more
+readable, while speaker-labeled segments lost coverage, fragmented heavily, and
+cost more unified memory than this lightweight gateway should normalize. This
+repo should not grow complex speaker embedding, alignment recovery, or
+diarization cleanup logic to rescue the path. Prefer a stronger upstream or
+open-source local diarized-ASR capability; remove this profile later if that
+replacement makes the experiment unnecessary.
 
 ---
 

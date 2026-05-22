@@ -1,10 +1,10 @@
 ---
 specId: SPEC-013
-title: Production Qwen3 + Sortformer Speaker Separation Pipeline
-status: 🟡 实现中 (Implementation)
+title: Experimental Qwen3 + Sortformer Speaker Separation Pipeline
+status: 🧪 实验保留 (Experimental)
 priority: P1 - Core Feature
 creationDate: 2026-05-17
-lastUpdateDate: 2026-05-18
+lastUpdateDate: 2026-05-21
 owner: User (AI-Assisted)
 relatedSpecs:
   - SPEC-011
@@ -21,15 +21,15 @@ tags:
   - forced-alignment
 ---
 
-# SPEC-013: Production Qwen3 + Sortformer Speaker Separation Pipeline
+# SPEC-013: Experimental Qwen3 + Sortformer Speaker Separation Pipeline
 
 ## 1. Goal
 
-Expose a truthful Apple-native batch speaker-separation pipeline through the
-existing OpenAI-compatible service without violating Apple Silicon memory
-constraints or returning misleading speaker labels.
+Evaluate whether a truthful Apple-native batch speaker-separation pipeline can
+fit the existing OpenAI-compatible service without violating the project's
+Apple Silicon memory and gateway-boundary constraints.
 
-The target production pipeline is:
+The pipeline explored here is:
 
 ```text
 audio
@@ -39,7 +39,7 @@ audio
   -> speaker-labeled transcript segments
 ```
 
-This replaces the earlier two-stage assumption:
+This replaced the earlier two-stage assumption:
 
 ```text
 audio -> Qwen3-ASR segments -> Sortformer speaker turns
@@ -47,7 +47,11 @@ audio -> Qwen3-ASR segments -> Sortformer speaker turns
 
 Local E2E validation showed that Qwen3-ASR's native segments are chunk-level for
 the tested English samples, so they are too coarse for reliable speaker-label
-assignment.
+assignment. The three-stage path was implemented and made explicitly
+requestable for evaluation, but a later real English manager 1:1 probe showed
+that it is not currently a production recommendation: speaker-labeled segments
+lost transcript coverage, fragmented heavily, and cost too much memory for the
+value delivered by this local gateway.
 
 ## 2. Background
 
@@ -65,7 +69,7 @@ The service already has useful gateway primitives:
 - API gating for discovery-only pipeline profiles
 - OpenAI-compatible HTTP contract for Spokenly and puresubs
 
-What it still lacks for production pipeline enablement:
+At the original production-candidate stage, it still lacked:
 
 - a validated diarization runtime contract
 - a validated forced-alignment runtime contract
@@ -81,9 +85,10 @@ isolation, lifecycle management, and response normalization.
 
 ## 3. Design Decision
 
-**Chosen approach**: add a production pipeline that wraps proven `mlx-audio`
-runtime contracts for Qwen3-ASR, Qwen3-ForcedAligner, and Sortformer, while this
-service owns orchestration and OpenAI-compatible response shaping.
+**Chosen approach**: evaluate an explicit pipeline that wraps proven
+`mlx-audio` runtime contracts for Qwen3-ASR, Qwen3-ForcedAligner, and
+Sortformer, while this service owns orchestration and OpenAI-compatible response
+shaping.
 
 **Rationale**:
 
@@ -111,7 +116,7 @@ service owns orchestration and OpenAI-compatible response shaping.
 - orchestrate serial ASR, forced alignment, then diarization execution
 - add long-form chunk planning for ASR, forced alignment, and diarization
 - stitch chunk-level outputs into one global timeline with deterministic offsets
-- support truthful 5-hour offline batch processing as the production gate
+- support truthful 5-hour offline batch processing as the original production-candidate gate
 - group aligned words into speaker-labeled transcript segments
 - make resident-model restore deterministic for pipeline requests
 - add integration and failure-mode coverage
@@ -159,8 +164,9 @@ Additional intake from 2026-05-18 E2E debugging:
   and only when audio exceeds `MAX_AUDIO_DURATION_MINUTES` (default 50), so
   forced alignment currently receives unchunked long files
 - forced-align prompt length for long-form input can exceed model context
-  (`max_position_embeddings=8192`), so long-form production requires explicit
-  chunk-and-stitch orchestration in the service layer
+  (`max_position_embeddings=8192`), so the original long-form production
+  candidate required explicit chunk-and-stitch orchestration in the service
+  layer
 
 ## 6. Implementation Phases
 
@@ -213,21 +219,22 @@ from word timestamps and leaves the service in a correct post-request state.
 forced alignment + diarization and produce globally coherent speaker-labeled
 segments without tail timestamp collapse.
 
-### Phase 5: Public Enablement
+### Phase 5: Experimental Reachability
 
-- [ ] enable requestable pipeline profiles only after integration and real-model E2E coverage passes
-- [ ] return real speaker-labeled output on success in real-model E2E
+- [x] keep the pipeline reachable only through explicit `model=qwen3-sortformer` selection
+- [ ] promote the profile to a recommended production path
 - [x] fail clearly on ASR, forced-alignment, diarization, or orchestration failure
 - [x] update public model and pipeline documentation
 
-**Acceptance**: the service exposes a truthful requestable pipeline profile backed by real diarization execution.
+**Acceptance**: the service preserves an explicit evaluation path without
+presenting it as the stable English meeting-transcript answer.
 
 ## 7. Acceptance Criteria
 
 - [x] AC-1: a dedicated diarization worker path exists
 - [x] AC-2: a forced-alignment stage exists between Qwen3-ASR text and Sortformer speaker turns
 - [ ] AC-3: resident-model restoration is validated under real pipeline requests
-- [ ] AC-4: requestable pipeline profiles return real speaker-labeled results or fail clearly
+- [ ] AC-4: requestable pipeline profiles return trustworthy speaker-labeled results or fail clearly
 - [x] AC-5: unit and integration tests cover orchestration and failure modes
 - [ ] AC-6: long-form chunked pipeline supports truthful 5-hour batch requests
 - [ ] AC-7: no timestamp-tail collapse in final aligned words for long-form English
@@ -246,13 +253,14 @@ The current branch implements the non-public three-stage code path:
   a global timeline.
 - Alignment quality gates fail loudly on non-monotonic words or severe tail
   timestamp collapse.
-- `qwen3-sortformer` remains `requestable=False`; public API calls still return
-  501 until real-model E2E validates the path.
+- `qwen3-sortformer` is currently explicitly requestable for evaluation, but it
+  is no longer a production recommendation after the 2026-05-20 real English
+  manager 1:1 probe.
 
 ## 7.2 Current Gaps (2026-05-18 Reality Check)
 
-The current branch is functional but not yet production-truthful for public
-enablement. The remaining gaps are:
+The current branch is functional but not a recommended production path. The
+remaining gaps are:
 
 1. Cross-chunk speaker identity now has a lightweight overlap-based remap, but
    this only reconciles adjacent chunks when speakers are present in the overlap.
@@ -263,25 +271,56 @@ enablement. The remaining gaps are:
    ~596.76s.
 3. Word-to-speaker assignment still falls back to `Unknown` when overlap or
    midpoint matching misses a speaker turn boundary.
-4. AC-3/AC-4/AC-6/AC-7 remain open and are the true public-release blockers.
-5. `qwen3-sortformer` must remain discovery-only until real-runtime restore
-   stability and speaker-consistency criteria are met.
+4. AC-3/AC-4/AC-6/AC-7 remain open and explain why this path should not be a
+   production recommendation.
+5. `qwen3-sortformer` may remain explicitly reachable for evaluation, but
+   restore stability and speaker-consistency gaps remain unresolved.
 6. 5-hour long-form validation has not run yet. Public enablement still requires
    truthful long-form evidence, not just the 10-minute probe.
 7. Align and diarize jobs still share the same worker process as the resident
-   ASR engine. This is acceptable while the profile is discovery-only, but
-   production enablement should evaluate a lighter worker mode or split worker
-   topology to reduce peak Apple Silicon UMA pressure.
+   ASR engine. That contributes to the poor resource tradeoff for this local
+   gateway; the current decision is to avoid more local worker-topology work
+   until upstream capability changes the direction.
 8. Worker-originated errors now preserve the remote exception type in the IPC
-   tuple, but public enablement still needs real-runtime restore and long-form
-   validation before exposing the profile.
+   tuple, but that hardening does not turn the route into a reliable speaker
+   transcript product.
 
-Immediate implementation priority:
+Immediate project priority is no longer to deepen local speaker-recovery logic.
+Keep the route as an explicit experiment, prefer stronger upstream or
+open-source local diarized-ASR capabilities, and treat local embedding fallback
+or more complex reconciliation as out of bounds unless a new product decision
+reopens this line.
 
-- validate restore semantics under real pipeline requests,
-- run a 5-hour long-form probe,
-- decide whether overlap-based remapping is sufficient or whether a selective
-  embedding fallback is necessary for speaker identity stability.
+## 7.3 Real English 1:1 Reassessment (2026-05-20)
+
+A roughly 22-minute English 1:1 conversation between Lei and his manager was a
+more representative local-tool probe than the earlier promising long-form
+interview run.
+
+Observed `qwen3-sortformer` behavior:
+
+- top-level Qwen3 transcript text was materially more readable than the
+  Paraformer English transcript;
+- speaker-labeled `segments` were not trustworthy enough for the target use
+  case: top-level `text` contained 3,601 normalized words while `segments`
+  contained 2,540;
+- the response fragmented into 182 speaker segments, including 30 `Unknown`
+  segments and 59 segments shorter than 0.5 seconds;
+- Activity Monitor showed a peak near 28 GB while the local path combined ASR,
+  forced alignment, diarization, and service-side merge work.
+
+Observed Paraformer behavior on the same conversation:
+
+- top-level `text` and `segments` stayed structurally consistent at 3,279
+  normalized words;
+- the speaker segments did not include `Unknown` for the sample;
+- English text quality was visibly worse than Qwen3 and did not meet the
+  intended English meeting transcript bar.
+
+Decision from this probe: `qwen3-sortformer` remains an experimental reachable
+path and a deletion candidate. A 64 GB Apple Silicon machine being able to run
+the pipeline does not make the current design a good fit for this local speech
+gateway.
 
 ## 8. Affected Areas
 
@@ -312,6 +351,7 @@ Immediate implementation priority:
 | 2026-05-18 | 🟡 实现中 (Reconciliation probe) | Added overlap-based speaker label reconciliation and reran 10-minute probe; speaker-consistency gap remains open |
 | 2026-05-18 | 🟡 实现中 (Sortformer tuning) | Tuned Sortformer runtime parameters; Blair 10-minute probe now reaches ~596.76s max end with `Unknown` reduced from ~275.44s to ~17.41s |
 | 2026-05-18 | 🟡 实现中 (Review hardening) | Added chunk sub-request cleanup, typed worker errors, pipeline quality 422 responses, and stricter runtime contract validation |
+| 2026-05-21 | 🧪 实验保留 (Experimental) | Real English manager 1:1 probe showed better Qwen3 text did not translate into trustworthy speaker-labeled output at an acceptable resource cost; stop deeper local recovery work and keep the route as a deletion candidate |
 
 ## 10. Related
 
