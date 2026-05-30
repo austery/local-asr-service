@@ -2,6 +2,7 @@ import ast
 import re
 import subprocess
 import sys
+import textwrap
 import tomllib
 from pathlib import Path
 
@@ -124,11 +125,21 @@ def _max_block_depth(body: list[ast.stmt], depth: int = 0) -> int:
         max_d = max(max_d, child_depth)
         if isinstance(stmt, ast.If):
             max_d = max(max_d, _max_block_depth(stmt.body, child_depth))
-            if stmt.orelse and len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If):
-                # elif chain: single ast.If in orelse — keep flat (no extra depth)
+            # Distinguish elif from else: if using source-position data.
+            # An `elif` keyword is always at the same indentation (col_offset) as
+            # its parent `if`, while the `if` inside a real `else:` block is indented
+            # further.  Both produce orelse=[ast.If(...)], so the node type alone
+            # is not sufficient.
+            is_elif = (
+                len(stmt.orelse) == 1
+                and isinstance(stmt.orelse[0], ast.If)
+                and stmt.orelse[0].col_offset == stmt.col_offset
+            )
+            if is_elif:
+                # elif chain: keep flat — the elif keyword is at the same indentation
                 max_d = max(max_d, _max_block_depth(stmt.orelse, depth))
             else:
-                # genuine else block: counts as child_depth (same as if body)
+                # genuine else block (including else: if): counts as child_depth
                 max_d = max(max_d, _max_block_depth(stmt.orelse, child_depth))
         else:
             for child_body in _child_stmt_bodies(stmt):
@@ -448,4 +459,43 @@ def test_ruff_complexity_suppression_allowlist() -> None:
         f"Unapproved Ruff complexity suppressions added for: {new_suppressions}.\n"
         "Add the pattern to _APPROVED_COMPLEXITY_SUPPRESSED_FILES in this test with a rationale, "
         "or refactor the code to remove the suppression need."
+    )
+
+
+def test_max_block_depth_elif_vs_else_if() -> None:
+    """Regression: elif chains must stay flat; else: if must count as a deeper block.
+
+    Both produce orelse=[ast.If(...)] in the AST.  The col_offset heuristic is the
+    only source-position signal that separates them without a CST parser.
+    """
+    # 1. elif chain: all branches are logically at depth 1
+    elif_source = textwrap.dedent("""\
+        def f():
+            if a:
+                pass
+            elif b:
+                pass
+            elif c:
+                pass
+    """)
+    tree = ast.parse(elif_source)
+    func_body = tree.body[0].body  # type: ignore[union-attr]
+    assert _max_block_depth(func_body) == 1, (
+        "elif chain must not inflate depth beyond 1; got deeper"
+    )
+
+    # 2. else: if — the nested if is *inside* the else block, so depth must be 2
+    else_if_source = textwrap.dedent("""\
+        def f():
+            if a:
+                pass
+            else:
+                if b:
+                    pass
+    """)
+    tree = ast.parse(else_if_source)
+    func_body = tree.body[0].body  # type: ignore[union-attr]
+    assert _max_block_depth(func_body) == 2, (
+        "else: if must be counted as depth 2 (else body + inner if); got shallower — "
+        "check the col_offset heuristic in _max_block_depth"
     )
