@@ -1,11 +1,51 @@
 import ast
 import re
+import subprocess
+import sys
+import textwrap
+import tomllib
 from pathlib import Path
 
 from src.core.model_registry import list_all as list_all_models
 from src.core.pipeline_registry import list_all_profiles
 
 ALLOWED_JOB_KINDS = ("transcribe", "align", "diarize")
+
+# Layer 2 Hard Gate: maximum block nesting depth allowed in any src/ function.
+# Set conservatively at 5; tighten once orchestrator refactors land.
+_MAX_NESTING_DEPTH = 5
+
+# Files whose functions legitimately exceed _MAX_NESTING_DEPTH.
+# DO NOT add entries without a design rationale. Depth value is the approved ceiling.
+_NESTING_DEPTH_ALLOWLIST: dict[str, int] = {
+    # SPEC-009 subprocess IPC worker loop: outer-try → inner-try → while → try(dequeue)
+    # → if(job_kind) → if(alias-validation) is structural; extracting helpers would obscure
+    # the IPC contract without reducing real complexity.
+    "src/workers/model_worker.py": 6,
+}
+
+# Governance: Ruff rules considered "complexity suppressions".
+_COMPLEXITY_RULES: frozenset[str] = frozenset({"C901", "PLR0911", "PLR0912", "PLR0915"})
+
+# Files approved to suppress complexity rules — do NOT add entries without an ADR or design rationale.
+_APPROVED_COMPLEXITY_SUPPRESSED_FILES: frozenset[str] = frozenset({
+    "tests/**/*.py",              # test code: complex mocks and setup are expected
+    "src/api/routes.py",          # SPEC-014: multi-engine dispatch, approved in ADR-002
+    "src/services/transcription.py",  # SPEC-009: subprocess IPC orchestrator complexity
+    "src/workers/model_worker.py",    # subprocess worker loop: inherent IPC complexity
+    "benchmarks/**/*.py",         # benchmarks: measurement scaffolding
+    "examples/**/*.py",           # examples: demo scripts
+})
+
+_BLOCK_STMT_TYPES: tuple[type[ast.stmt], ...] = (
+    ast.If,
+    ast.For,
+    ast.While,
+    ast.Try,
+    ast.With,
+    ast.AsyncWith,
+    ast.AsyncFor,
+)
 
 
 def _workspace_root() -> Path:
@@ -43,6 +83,68 @@ def _getenv_default_string(node: ast.AST, variable_name: str) -> str:
         ):
             return child.value.args[1].value
     raise AssertionError(f"Could not find string default for {variable_name} in config.py")
+
+
+def _child_stmt_bodies(stmt: ast.stmt) -> list[list[ast.stmt]]:
+    """Return all direct child statement lists of a compound statement.
+
+    Handles ast.ExceptHandler (whose .body is not exposed as a plain list field).
+    """
+    result: list[list[ast.stmt]] = []
+    for field, value in ast.iter_fields(stmt):
+        if field == "handlers":
+            for handler in value:
+                if isinstance(handler, ast.ExceptHandler):
+                    result.append(handler.body)
+        elif isinstance(value, list) and value and isinstance(value[0], ast.stmt):
+            result.append(value)  # type: ignore[arg-type]
+    return result
+
+
+def _max_block_depth(body: list[ast.stmt], depth: int = 0) -> int:
+    """Return the maximum block nesting depth in a statement list.
+
+    elif chains are treated as flat (same depth as the parent if) so that
+    long if/elif/elif sequences do not inflate the nesting score.  A real
+    else: block is treated as being at the same nesting level as the if body
+    (child_depth), because it IS a separate nested block.
+
+    The distinction is made structurally: if orelse contains exactly one ast.If
+    node it is an elif chain; anything else is a genuine else block.
+
+    Nested function/class definitions are not crossed — they have their own
+    nesting budget.
+    """
+    max_d = depth
+    for stmt in body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if not isinstance(stmt, _BLOCK_STMT_TYPES):
+            continue
+        child_depth = depth + 1
+        max_d = max(max_d, child_depth)
+        if isinstance(stmt, ast.If):
+            max_d = max(max_d, _max_block_depth(stmt.body, child_depth))
+            # Distinguish elif from else: if using source-position data.
+            # An `elif` keyword is always at the same indentation (col_offset) as
+            # its parent `if`, while the `if` inside a real `else:` block is indented
+            # further.  Both produce orelse=[ast.If(...)], so the node type alone
+            # is not sufficient.
+            is_elif = (
+                len(stmt.orelse) == 1
+                and isinstance(stmt.orelse[0], ast.If)
+                and stmt.orelse[0].col_offset == stmt.col_offset
+            )
+            if is_elif:
+                # elif chain: keep flat — the elif keyword is at the same indentation
+                max_d = max(max_d, _max_block_depth(stmt.orelse, depth))
+            else:
+                # genuine else block (including else: if): counts as child_depth
+                max_d = max(max_d, _max_block_depth(stmt.orelse, child_depth))
+        else:
+            for child_body in _child_stmt_bodies(stmt):
+                max_d = max(max_d, _max_block_depth(child_body, child_depth))
+    return max_d
 
 
 def test_models_md_documents_all_aliases() -> None:
@@ -279,3 +381,121 @@ def test_config_defaults_do_not_point_to_pipeline_profiles() -> None:
             f"{variable_name} default '{default_model}' is not a registered model alias/model_id. "
             "Add it to model_registry.py before making it a config default."
         )
+
+
+def test_tach_architecture_boundaries() -> None:
+    """Layer 1 (Break Build): Module dependency directions must satisfy tach.toml.
+
+    Runs `tach check` as part of the standard pytest suite so boundary violations
+    are caught alongside unit and integration tests.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "tach", "check"],
+        capture_output=True,
+        text=True,
+        cwd=str(_workspace_root()),
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"Architecture boundary violation detected by tach:\n{result.stdout}{result.stderr}\n"
+        "Update tach.toml only when the dependency is intentional and design-reviewed."
+    )
+
+
+def test_src_functions_max_nesting_depth() -> None:
+    """Layer 2 (Hard Gate): No function in src/ may exceed _MAX_NESTING_DEPTH block nesting levels.
+
+    elif/else chains do not count as deeper nesting — only body blocks do.
+    """
+    workspace_root = _workspace_root()
+    src_dir = workspace_root / "src"
+
+    violations: list[str] = []
+    for py_file in sorted(src_dir.rglob("*.py")):
+        rel_path = str(py_file.relative_to(workspace_root))
+        allowed = _NESTING_DEPTH_ALLOWLIST.get(rel_path, _MAX_NESTING_DEPTH)
+        tree = _parse_python_file(py_file)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            depth = _max_block_depth(node.body)
+            if depth > allowed:
+                violations.append(
+                    f"  {rel_path}:{node.lineno} {node.name}() — depth {depth} (max {allowed})"
+                )
+
+    assert not violations, (
+        f"Block nesting depth exceeded in {len(violations)} function(s):\n"
+        + "\n".join(violations)
+        + "\nRefactor to reduce nesting or adjust _MAX_NESTING_DEPTH with a design rationale."
+    )
+
+
+def test_ruff_complexity_suppression_allowlist() -> None:
+    """Governance: The set of files suppressing Ruff complexity rules must not grow silently.
+
+    Any new per-file-ignores entry covering C901/PLR0911/PLR0912/PLR0915 must be
+    added to _APPROVED_COMPLEXITY_SUPPRESSED_FILES in this file with a rationale.
+    """
+    workspace_root = _workspace_root()
+    pyproject_path = workspace_root / "pyproject.toml"
+    assert pyproject_path.exists(), "pyproject.toml not found"
+
+    with pyproject_path.open("rb") as f:
+        pyproject = tomllib.load(f)
+
+    per_file_ignores: dict[str, list[str]] = (
+        pyproject.get("tool", {}).get("ruff", {}).get("lint", {}).get("per-file-ignores", {})
+    )
+
+    files_with_complexity_suppression = {
+        pattern
+        for pattern, rules in per_file_ignores.items()
+        if _COMPLEXITY_RULES & set(rules)
+    }
+
+    new_suppressions = files_with_complexity_suppression - _APPROVED_COMPLEXITY_SUPPRESSED_FILES
+    assert not new_suppressions, (
+        f"Unapproved Ruff complexity suppressions added for: {new_suppressions}.\n"
+        "Add the pattern to _APPROVED_COMPLEXITY_SUPPRESSED_FILES in this test with a rationale, "
+        "or refactor the code to remove the suppression need."
+    )
+
+
+def test_max_block_depth_elif_vs_else_if() -> None:
+    """Regression: elif chains must stay flat; else: if must count as a deeper block.
+
+    Both produce orelse=[ast.If(...)] in the AST.  The col_offset heuristic is the
+    only source-position signal that separates them without a CST parser.
+    """
+    # 1. elif chain: all branches are logically at depth 1
+    elif_source = textwrap.dedent("""\
+        def f():
+            if a:
+                pass
+            elif b:
+                pass
+            elif c:
+                pass
+    """)
+    tree = ast.parse(elif_source)
+    func_body = tree.body[0].body  # type: ignore[union-attr]
+    assert _max_block_depth(func_body) == 1, (
+        "elif chain must not inflate depth beyond 1; got deeper"
+    )
+
+    # 2. else: if — the nested if is *inside* the else block, so depth must be 2
+    else_if_source = textwrap.dedent("""\
+        def f():
+            if a:
+                pass
+            else:
+                if b:
+                    pass
+    """)
+    tree = ast.parse(else_if_source)
+    func_body = tree.body[0].body  # type: ignore[union-attr]
+    assert _max_block_depth(func_body) == 2, (
+        "else: if must be counted as depth 2 (else body + inner if); got shallower — "
+        "check the col_offset heuristic in _max_block_depth"
+    )
