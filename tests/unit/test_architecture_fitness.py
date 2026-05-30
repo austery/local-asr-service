@@ -103,9 +103,16 @@ def _child_stmt_bodies(stmt: ast.stmt) -> list[list[ast.stmt]]:
 def _max_block_depth(body: list[ast.stmt], depth: int = 0) -> int:
     """Return the maximum block nesting depth in a statement list.
 
-    elif/else branches are recursed at the parent depth so that flat elif chains
-    do not inflate the nesting score.  Nested function/class definitions are not
-    crossed — they have their own nesting budget.
+    elif chains are treated as flat (same depth as the parent if) so that
+    long if/elif/elif sequences do not inflate the nesting score.  A real
+    else: block is treated as being at the same nesting level as the if body
+    (child_depth), because it IS a separate nested block.
+
+    The distinction is made structurally: if orelse contains exactly one ast.If
+    node it is an elif chain; anything else is a genuine else block.
+
+    Nested function/class definitions are not crossed — they have their own
+    nesting budget.
     """
     max_d = depth
     for stmt in body:
@@ -116,9 +123,13 @@ def _max_block_depth(body: list[ast.stmt], depth: int = 0) -> int:
         child_depth = depth + 1
         max_d = max(max_d, child_depth)
         if isinstance(stmt, ast.If):
-            # body increases depth; orelse (elif/else) stays at the same level
             max_d = max(max_d, _max_block_depth(stmt.body, child_depth))
-            max_d = max(max_d, _max_block_depth(stmt.orelse, depth))
+            if stmt.orelse and len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If):
+                # elif chain: single ast.If in orelse — keep flat (no extra depth)
+                max_d = max(max_d, _max_block_depth(stmt.orelse, depth))
+            else:
+                # genuine else block: counts as child_depth (same as if body)
+                max_d = max(max_d, _max_block_depth(stmt.orelse, child_depth))
         else:
             for child_body in _child_stmt_bodies(stmt):
                 max_d = max(max_d, _max_block_depth(child_body, child_depth))
@@ -372,9 +383,10 @@ def test_tach_architecture_boundaries() -> None:
         capture_output=True,
         text=True,
         cwd=str(_workspace_root()),
+        timeout=30,
     )
     assert result.returncode == 0, (
-        f"Architecture boundary violation detected by tach:\n{result.stdout}{result.stderr}"
+        f"Architecture boundary violation detected by tach:\n{result.stdout}{result.stderr}\n"
         "Update tach.toml only when the dependency is intentional and design-reviewed."
     )
 
