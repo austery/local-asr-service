@@ -6,10 +6,21 @@ public protocol AppleSpeechRuntime: AnyObject, Sendable {
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult
 }
 
-public enum WorkerError: Error, Equatable, Sendable {
+public enum WorkerError: Error, Equatable, Sendable, CustomStringConvertible {
     case invalidArguments([String])
     case missingFakeResult(String)
     case unsupportedModule(WorkerSpeechModule)
+
+    public var description: String {
+        switch self {
+        case let .invalidArguments(arguments):
+            "invalid arguments: \(arguments.joined(separator: " "))"
+        case let .missingFakeResult(name):
+            "missing fake runtime result: \(name)"
+        case let .unsupportedModule(module):
+            "unsupported module: \(module.rawValue)"
+        }
+    }
 }
 
 public final class FakeAppleSpeechRuntime: AppleSpeechRuntime, @unchecked Sendable {

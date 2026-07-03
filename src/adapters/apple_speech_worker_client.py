@@ -153,6 +153,10 @@ class AppleSpeechWorkerClient:
             raise AppleSpeechWorkerError(
                 f"apple-speech-worker timed out after {self.timeout_seconds:.1f}s"
             ) from exc
+        except OSError as exc:
+            raise AppleSpeechWorkerError(
+                f"failed to run apple-speech-worker at {self.worker_path}: {exc}"
+            ) from exc
 
         if completed.returncode != 0:
             stderr = completed.stderr.strip()

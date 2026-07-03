@@ -89,6 +89,9 @@ public final class LiveAppleSpeechRuntime: AppleSpeechRuntime, @unchecked Sendab
             }
             return collectedResults
         }
+        defer {
+            resultsTask.cancel()
+        }
 
         _ = try await analyzer.analyzeSequence(from: audioFile)
         try await analyzer.finalizeAndFinishThroughEndOfInput()

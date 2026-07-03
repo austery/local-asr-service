@@ -126,3 +126,16 @@ def test_worker_timeout_raises() -> None:
         client = AppleSpeechWorkerClient(Path("/tmp/apple-speech-worker"), timeout_seconds=1.0)
         with pytest.raises(AppleSpeechWorkerError, match="timed out"):
             client.capabilities()
+
+
+def test_worker_os_error_raises_with_worker_path() -> None:
+    with patch(
+        "src.adapters.apple_speech_worker_client.subprocess.run",
+        side_effect=FileNotFoundError("missing worker"),
+    ):
+        client = AppleSpeechWorkerClient(Path("/tmp/missing-apple-speech-worker"))
+        with pytest.raises(
+            AppleSpeechWorkerError,
+            match="/tmp/missing-apple-speech-worker",
+        ):
+            client.capabilities()

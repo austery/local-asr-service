@@ -22,6 +22,7 @@ struct AppleSpeechWorkerContractTests {
             try await prepareCommandWritesOnlyJsonToStdout()
             try parsesTranscribeCommand()
             try await transcribeCommandWritesOnlyJsonToStdout()
+            try workerErrorDescriptionIsStableForCliStderr()
             try await liveRuntimeReportsSpeechFrameworkCapabilities()
             print("contract-tests: passed")
         } catch {
@@ -208,6 +209,16 @@ struct AppleSpeechWorkerContractTests {
         try assertContains(output.stdout, "\"confidence\":null", "stdout contains confidence null")
         try assertContains(output.stdout, "\"speaker\":null", "stdout contains speaker null")
         try assertFalse(output.stdout.contains("Transcribing"), "stdout contains Transcribing")
+    }
+
+    private static func workerErrorDescriptionIsStableForCliStderr() throws {
+        let error = WorkerError.invalidArguments(["prepare", "--locale"])
+
+        try assertEqual(
+            error.description,
+            "invalid arguments: prepare --locale",
+            "WorkerError.invalidArguments description"
+        )
     }
 
     private static func assertEqual<Value: Equatable>(
