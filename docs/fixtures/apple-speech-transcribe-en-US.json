@@ -1,0 +1,26 @@
+{
+  "engine": "apple-speech",
+  "jobId": null,
+  "locale": "en-US",
+  "metadata": {
+    "appleApi": true,
+    "assetManagedBySystem": true,
+    "durationMs": 237,
+    "local": true,
+    "timingGranularity": "segment",
+    "volatileIncluded": false
+  },
+  "module": "speechTranscriber",
+  "segments": [
+    {
+      "confidence": null,
+      "end": 8.58,
+      "id": 0,
+      "isFinal": true,
+      "speaker": null,
+      "start": 4.08,
+      "text": "Can you guarantee that the replacement part will be shipped tomorrow?"
+    }
+  ],
+  "text": "Can you guarantee that the replacement part will be shipped tomorrow?"
+}

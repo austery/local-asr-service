@@ -526,16 +526,31 @@ A diarized Apple pipeline is not production-eligible unless all of these pass on
 
 ### Phase 0: API feasibility probe
 
-- [ ] Create a minimal Swift package outside the Python service integration path.
-- [ ] Build and run on the target Mac.
-- [ ] Print SpeechTranscriber / DictationTranscriber availability.
-- [ ] Print supported locales.
-- [ ] Allocate `zh-CN` and `en-US` model assets.
+- [x] Create a minimal Swift package outside the Python service integration path.
+- [x] Build and run on the target Mac.
+- [x] Print SpeechTranscriber / DictationTranscriber availability.
+- [x] Print supported locales.
+- [x] Allocate `zh-CN` and `en-US` model assets.
 - [ ] Transcribe one 30-second Chinese/English mixed sample.
-- [ ] Verify whether audio time ranges are returned, and at what granularity.
-- [ ] Produce one deterministic JSON fixture that matches the proposed worker response envelope.
+- [x] Verify whether audio time ranges are returned, and at what granularity.
+- [x] Produce one deterministic JSON fixture that matches the proposed worker response envelope.
 
 Acceptance: a standalone Swift program can produce JSON for one local file and records an explicit go / no-go / blocked result for Phase 1. Python service integration must not start before this acceptance is met.
+
+Phase 0 evidence from 2026-07-03:
+
+- Swift package: `apple-speech-worker/`
+- Target SDK/toolchain: Apple Swift 6.3.3, macOS SDK 26.5, runtime OS `Version 26.5.1 (Build 25F80)`
+- `capabilities --json`: `supported=true`, 54 locales, `speechTranscriber=true`, `dictationTranscriber=true`, `speechDetector=true`
+- `prepare --locale en-US --module speechTranscriber --json`: `supported=true`, `allocated=true`, `downloaded=true`
+- `prepare --locale zh-CN --module speechTranscriber --json`: `supported=true`, `allocated=true`, `downloaded=true`
+- `transcribe --input /Users/leipeng/Documents/Projects/speech-swift/Tests/AudioServerTests/Resources/test_audio.wav --locale en-US --module speechTranscriber --audio-time-ranges true --volatile false --json`: produced one final segment with segment-level timing and no stderr
+- Fixture: `docs/fixtures/apple-speech-transcribe-en-US.json`
+- Python subprocess client probe: parsed capabilities, prepare, and transcribe output from the built Swift binary
+
+Phase 0 decision: **GO for Phase 1 CLI and Python worker-client boundary**. Full service registry/API integration remains out of scope until a project-owned Chinese/English mixed fixture is added or the English-only probe is explicitly accepted as sufficient.
+
+Environment caveat: running the built worker inside the Codex filesystem sandbox returned no Speech framework locales. Running the same binary outside the sandbox returned the expected locale inventory. Real worker verification must run outside sandboxed shells or under the final app's normal macOS permissions.
 
 ### Phase 1: `apple-speech-worker` CLI
 
