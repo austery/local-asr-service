@@ -253,6 +253,7 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
 
     allowed_adapters_files = {
         "__init__.py",
+        "apple_speech_worker_client.py",
         "audio_chunking.py",
         "pipeline_chunking.py",
         "segment_alignment.py",
