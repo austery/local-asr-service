@@ -157,6 +157,16 @@ def test_worker_timeout_raises() -> None:
             client.capabilities()
 
 
+def test_worker_timeout_is_caught_by_compatibility_error_type() -> None:
+    with patch(
+        "src.adapters.apple_speech_worker_client.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["worker"], timeout=1.0),
+    ):
+        client = AppleSpeechWorkerClient(Path("/tmp/apple-speech-worker"), timeout_seconds=1.0)
+        with pytest.raises(AppleSpeechWorkerError, match="timed out"):
+            client.capabilities()
+
+
 def test_worker_os_error_raises_with_worker_path() -> None:
     with patch(
         "src.adapters.apple_speech_worker_client.subprocess.run",

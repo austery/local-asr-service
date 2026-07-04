@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 from src.core.apple_speech_port import (
+    AppleSpeechError,
     AppleSpeechModule,
     AppleSpeechWorkerResponseError,
     AppleSpeechWorkerUnavailableError,
@@ -22,7 +23,14 @@ from src.core.apple_speech_port import (
 )
 
 JsonObject = Mapping[str, object]
-AppleSpeechWorkerError = AppleSpeechWorkerResponseError
+AppleSpeechWorkerError = AppleSpeechError
+
+__all__ = [
+    "AppleSpeechWorkerClient",
+    "AppleSpeechWorkerError",
+    "AppleSpeechWorkerResponseError",
+    "AppleSpeechWorkerUnavailableError",
+]
 
 
 class AppleSpeechWorkerClient:
@@ -110,14 +118,14 @@ class AppleSpeechWorkerClient:
         if completed.returncode != 0:
             stderr = completed.stderr.strip()
             message = stderr or f"worker exited with code {completed.returncode}"
-            raise AppleSpeechWorkerError(message)
+            raise AppleSpeechWorkerResponseError(message)
 
         try:
             decoded: object = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
-            raise AppleSpeechWorkerError("worker stdout is not valid JSON") from exc
+            raise AppleSpeechWorkerResponseError("worker stdout is not valid JSON") from exc
         if not isinstance(decoded, Mapping):
-            raise AppleSpeechWorkerError("worker stdout JSON must be an object")
+            raise AppleSpeechWorkerResponseError("worker stdout JSON must be an object")
         return cast(JsonObject, decoded)
 
 
@@ -147,11 +155,11 @@ def _parse_transcription_result(payload: JsonObject) -> TranscriptionResult:
 def _parse_segments(payload: JsonObject) -> list[TranscriptionSegment]:
     value = payload.get("segments")
     if not isinstance(value, list):
-        raise AppleSpeechWorkerError("worker JSON field 'segments' must be a list")
+        raise AppleSpeechWorkerResponseError("worker JSON field 'segments' must be a list")
     segments: list[TranscriptionSegment] = []
     for item in value:
         if not isinstance(item, Mapping):
-            raise AppleSpeechWorkerError("worker JSON segment must be an object")
+            raise AppleSpeechWorkerResponseError("worker JSON segment must be an object")
         segment = cast(JsonObject, item)
         segments.append(
             TranscriptionSegment(
@@ -170,14 +178,14 @@ def _parse_segments(payload: JsonObject) -> list[TranscriptionSegment]:
 def _required_object(payload: JsonObject, key: str) -> JsonObject:
     value = payload.get(key)
     if not isinstance(value, Mapping):
-        raise AppleSpeechWorkerError(f"worker JSON field '{key}' must be an object")
+        raise AppleSpeechWorkerResponseError(f"worker JSON field '{key}' must be an object")
     return cast(JsonObject, value)
 
 
 def _required_str(payload: JsonObject, key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str):
-        raise AppleSpeechWorkerError(f"worker JSON field '{key}' must be a string")
+        raise AppleSpeechWorkerResponseError(f"worker JSON field '{key}' must be a string")
     return value
 
 
@@ -186,28 +194,30 @@ def _optional_str(payload: JsonObject, key: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise AppleSpeechWorkerError(f"worker JSON field '{key}' must be a string or null")
+        raise AppleSpeechWorkerResponseError(
+            f"worker JSON field '{key}' must be a string or null"
+        )
     return value
 
 
 def _required_bool(payload: JsonObject, key: str) -> bool:
     value = payload.get(key)
     if not isinstance(value, bool):
-        raise AppleSpeechWorkerError(f"worker JSON field '{key}' must be a boolean")
+        raise AppleSpeechWorkerResponseError(f"worker JSON field '{key}' must be a boolean")
     return value
 
 
 def _required_int(payload: JsonObject, key: str) -> int:
     value = payload.get(key)
     if not isinstance(value, int) or isinstance(value, bool):
-        raise AppleSpeechWorkerError(f"worker JSON field '{key}' must be an integer")
+        raise AppleSpeechWorkerResponseError(f"worker JSON field '{key}' must be an integer")
     return value
 
 
 def _required_float(payload: JsonObject, key: str) -> float:
     value = payload.get(key)
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise AppleSpeechWorkerError(f"worker JSON field '{key}' must be a number")
+        raise AppleSpeechWorkerResponseError(f"worker JSON field '{key}' must be a number")
     return float(value)
 
 
@@ -216,14 +226,16 @@ def _optional_float(payload: JsonObject, key: str) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise AppleSpeechWorkerError(f"worker JSON field '{key}' must be a number or null")
+        raise AppleSpeechWorkerResponseError(
+            f"worker JSON field '{key}' must be a number or null"
+        )
     return float(value)
 
 
 def _required_str_list(payload: JsonObject, key: str) -> list[str]:
     value = payload.get(key)
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise AppleSpeechWorkerError(f"worker JSON field '{key}' must be a string list")
+        raise AppleSpeechWorkerResponseError(f"worker JSON field '{key}' must be a string list")
     return list(value)
 
 
