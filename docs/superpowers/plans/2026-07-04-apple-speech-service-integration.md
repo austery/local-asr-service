@@ -1134,6 +1134,7 @@ Add these rows to `README.md`:
 | `APPLE_SPEECH_WORKER_PATH` | `apple-speech-worker/.build/debug/apple-speech-worker` | Swift sidecar binary path for Apple Speech models |
 | `APPLE_SPEECH_WORKER_TIMEOUT_SEC` | `120` | Timeout for one Apple Speech worker CLI invocation |
 | `APPLE_SPEECH_DEFAULT_LOCALE` | `en-US` | Locale used when API callers pass `language=auto` to Apple Speech models |
+| `APPLE_SPEECH_MAX_CONCURRENCY` | `1` | Maximum concurrent Apple Speech sidecar transcriptions |
 ```
 
 - [ ] **Step 4: Update SPEC-014 Phase 2 evidence**
@@ -1144,6 +1145,7 @@ Append to Phase 2 after the checklist:
 Phase 2 implementation note:
 
 - The Python service routes Apple Speech requests through a direct sidecar path rather than through `src/workers/model_worker.py`; the Swift CLI is already the process boundary for Apple Speech framework access.
+- Apple Speech sidecar transcription is capped by `APPLE_SPEECH_MAX_CONCURRENCY` (default `1`) to preserve the Mac Silicon single-inference memory discipline while still counting waiting sidecar jobs against `MAX_QUEUE_SIZE`.
 - `apple-speech` preserves the existing local JSON response shape and does not emit non-null speaker labels.
 - `GET /v1/models` advertises the `apple-speech` alias as requestable; `apple-dictation` stays hidden until the Swift runtime supports `DictationTranscriber` transcription.
 ```

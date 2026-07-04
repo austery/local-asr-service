@@ -590,6 +590,7 @@ Acceptance: `model=apple-speech` works through the same HTTP API used by Spokenl
 Phase 2 implementation note from 2026-07-04:
 
 - The Python service routes Apple Speech requests through a direct sidecar path rather than through `src/workers/model_worker.py`; the Swift CLI is already the process boundary for Apple Speech framework access.
+- Apple Speech sidecar transcription is capped by `APPLE_SPEECH_MAX_CONCURRENCY` (default `1`) to preserve the Mac Silicon single-inference memory discipline while still counting waiting sidecar jobs against `MAX_QUEUE_SIZE`.
 - `apple-speech` preserves the existing local JSON response shape and does not emit non-null speaker labels.
 - `GET /v1/models` advertises the `apple-speech` alias as requestable; `apple-dictation` stays hidden until the Swift runtime supports `DictationTranscriber` transcription.
 - Current automated acceptance covers registry, service routing, and API response-shape compatibility with mocked worker clients. Real sidecar smoke still must run from a non-sandboxed shell with a project-owned fixture before broader bilingual quality claims.

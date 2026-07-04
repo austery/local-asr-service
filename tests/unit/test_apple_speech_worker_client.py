@@ -9,6 +9,7 @@ from src.adapters.apple_speech_worker_client import (
     AppleSpeechWorkerError,
 )
 from src.core.apple_speech_port import (
+    AppleSpeechWorkerResponseError,
     AppleSpeechWorkerUnavailableError,
     TranscriptionResult,
 )
@@ -65,6 +66,23 @@ def test_prepare_passes_locale_module_and_json_flag() -> None:
     assert result.downloaded is True
 
 
+def test_prepare_rejects_unknown_worker_module() -> None:
+    completed = subprocess.CompletedProcess(
+        args=["worker"],
+        returncode=0,
+        stdout=(
+            '{"locale":"zh-CN","module":"bogusModule","supported":true,'
+            '"allocated":true,"downloaded":true,"durationMs":61}'
+        ),
+        stderr="",
+    )
+
+    with patch("src.adapters.apple_speech_worker_client.subprocess.run", return_value=completed):
+        client = AppleSpeechWorkerClient(Path("/tmp/apple-speech-worker"))
+        with pytest.raises(AppleSpeechWorkerResponseError, match="module"):
+            client.prepare(locale="zh-CN", module="speechTranscriber")
+
+
 def test_transcribe_passes_input_and_returns_segments() -> None:
     completed = subprocess.CompletedProcess(
         args=["worker"],
@@ -92,6 +110,31 @@ def test_transcribe_passes_input_and_returns_segments() -> None:
     assert result.text == "hello world"
     assert result.segments[0].start == 0.0
     assert result.metadata.timing_granularity == "segment"
+
+
+def test_transcribe_rejects_unknown_timing_granularity() -> None:
+    completed = subprocess.CompletedProcess(
+        args=["worker"],
+        returncode=0,
+        stdout=(
+            '{"jobId":null,"engine":"apple-speech","module":"speechTranscriber",'
+            '"locale":"en-US","text":"hello world",'
+            '"segments":[{"id":0,"start":0.0,"end":1.0,"text":"hello world",'
+            '"isFinal":true,"confidence":null,"speaker":null}],'
+            '"metadata":{"local":true,"appleApi":true,"volatileIncluded":false,'
+            '"timingGranularity":"bogusTiming","assetManagedBySystem":true,"durationMs":42}}'
+        ),
+        stderr="",
+    )
+
+    with patch("src.adapters.apple_speech_worker_client.subprocess.run", return_value=completed):
+        client = AppleSpeechWorkerClient(Path("/tmp/apple-speech-worker"))
+        with pytest.raises(AppleSpeechWorkerResponseError, match="timingGranularity"):
+            client.transcribe(
+                input_path=Path("/tmp/audio.wav"),
+                locale="en-US",
+                module="speechTranscriber",
+            )
 
 
 def test_transcribe_returns_shared_port_type() -> None:

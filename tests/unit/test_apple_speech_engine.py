@@ -125,6 +125,15 @@ def test_transcribe_file_returns_plain_text_for_txt_output() -> None:
     assert result == "hello world"
 
 
+def test_transcribe_file_formats_segments_as_srt() -> None:
+    client = FakeClient()
+    engine = AppleSpeechEngine(client=client, module="speechTranscriber")
+
+    result = engine.transcribe_file("/tmp/audio.wav", language="en-US", output_format="srt")
+
+    assert result == "1\n00:00:00,000 --> 00:00:01,250\nhello world\n"
+
+
 def test_worker_errors_are_not_hidden() -> None:
     class FailingClient(FakeClient):
         def transcribe(

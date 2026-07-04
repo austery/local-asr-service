@@ -23,6 +23,7 @@ from src.adapters.pipeline_chunking import (
 from src.adapters.segment_alignment import align_speakers
 from src.config import (
     APPLE_SPEECH_DEFAULT_LOCALE,
+    APPLE_SPEECH_MAX_CONCURRENCY,
     APPLE_SPEECH_WORKER_PATH,
     APPLE_SPEECH_WORKER_TIMEOUT_SEC,
 )
@@ -102,6 +103,7 @@ class TranscriptionService:
         self._result_reader_task: asyncio.Task[None] | None = None
         self._audio_chunker: AudioChunkingService | None = None
         self._sidecar_pending: set[str] = set()
+        self._sidecar_semaphore = asyncio.Semaphore(APPLE_SPEECH_MAX_CONCURRENCY)
         self._apple_speech_engines: dict[str, AppleSpeechEngine] = {}
         self.is_running = False
 
@@ -178,7 +180,6 @@ class TranscriptionService:
                         temp_file_path=temp_path,
                         params=params,
                         request_id=request_id,
-                        model_spec=model_spec,
                     )
                 finally:
                     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -287,7 +288,7 @@ class TranscriptionService:
     def _is_apple_speech_spec(model_spec: ModelSpec | None) -> bool:
         return model_spec is not None and model_spec.engine_type == "apple-speech"
 
-    def _get_apple_speech_engine(self, model_spec: ModelSpec) -> AppleSpeechEngine:
+    def _get_apple_speech_engine(self) -> AppleSpeechEngine:
         module: AppleSpeechModule = "speechTranscriber"
         engine = self._apple_speech_engines.get(module)
         if engine is None:
@@ -299,6 +300,7 @@ class TranscriptionService:
                 ),
                 module=module,
             )
+            engine.load()
             self._apple_speech_engines[module] = engine
         return engine
 
@@ -307,7 +309,6 @@ class TranscriptionService:
         temp_file_path: str,
         params: dict[str, object],
         request_id: str,
-        model_spec: ModelSpec,
     ) -> object:
         if self._active_job_count() >= self._max_queue_size:
             self.logger.warning(f"[{request_id}] Queue full, rejecting Apple Speech request")
@@ -315,17 +316,18 @@ class TranscriptionService:
 
         self._sidecar_pending.add(request_id)
         try:
-            engine = self._get_apple_speech_engine(model_spec)
-            language = params.get("language", "auto")
-            output_format = params.get("output_format", "json")
-            with_timestamp = params.get("with_timestamp", False)
-            return await asyncio.to_thread(
-                engine.transcribe_file,
-                temp_file_path,
-                language=language if isinstance(language, str) else "auto",
-                output_format=output_format if isinstance(output_format, str) else "json",
-                with_timestamp=with_timestamp if isinstance(with_timestamp, bool) else False,
-            )
+            async with self._sidecar_semaphore:
+                engine = self._get_apple_speech_engine()
+                language = params.get("language", "auto")
+                output_format = params.get("output_format", "json")
+                with_timestamp = params.get("with_timestamp", False)
+                return await asyncio.to_thread(
+                    engine.transcribe_file,
+                    temp_file_path,
+                    language=language if isinstance(language, str) else "auto",
+                    output_format=output_format if isinstance(output_format, str) else "json",
+                    with_timestamp=with_timestamp if isinstance(with_timestamp, bool) else False,
+                )
         finally:
             self._sidecar_pending.discard(request_id)
 

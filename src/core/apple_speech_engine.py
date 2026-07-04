@@ -101,6 +101,8 @@ class AppleSpeechEngine:
         )
         if output_format == "txt":
             return result.text
+        if output_format == "srt":
+            return self._format_as_srt(result)
         return self._to_service_dict(result)
 
     def release(self) -> None:
@@ -137,3 +139,25 @@ class AppleSpeechEngine:
             "duration": duration,
             "language": result.locale,
         }
+
+    @staticmethod
+    def _format_as_srt(result: TranscriptionResult) -> str:
+        lines: list[str] = []
+        for index, segment in enumerate(result.segments, start=1):
+            lines.extend(
+                [
+                    str(index),
+                    f"{_seconds_to_srt_time(segment.start)} --> {_seconds_to_srt_time(segment.end)}",
+                    segment.text,
+                    "",
+                ]
+            )
+        return "\n".join(lines)
+
+
+def _seconds_to_srt_time(seconds: float) -> str:
+    total_ms = max(0, int(round(seconds * 1000)))
+    hours, remainder = divmod(total_ms, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    secs, millis = divmod(remainder, 1_000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"

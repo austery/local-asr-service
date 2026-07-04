@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -39,6 +42,32 @@ class FakeAppleSpeechEngine:
             "duration": 1.0,
             "language": "en-US",
         }
+
+
+class ConcurrentAppleSpeechEngine(FakeAppleSpeechEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active = 0
+        self.max_active = 0
+        self._lock = threading.Lock()
+
+    def transcribe_file(
+        self,
+        file_path: str,
+        language: str = "auto",
+        output_format: str = "json",
+        with_timestamp: bool = False,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.1)
+            return super().transcribe_file(file_path, language, output_format, with_timestamp)
+        finally:
+            with self._lock:
+                self.active -= 1
 
 
 def _upload() -> UploadFile:
@@ -114,3 +143,76 @@ async def test_submit_apple_speech_cleans_temp_dir_on_error() -> None:
     assert captured_path is not None
     assert not captured_path.exists()
     assert service.queue_size == 0
+
+
+@pytest.mark.asyncio
+async def test_submit_apple_speech_limits_sidecar_concurrency() -> None:
+    service = TranscriptionService(engine_type="funasr", model_id="iic/default")
+    fake_engine = ConcurrentAppleSpeechEngine()
+
+    with patch.object(service, "_get_apple_speech_engine", return_value=fake_engine):
+        await asyncio.gather(
+            service.submit(
+                _upload(),
+                {"language": "en", "output_format": "json", "with_timestamp": False},
+                request_id="req-3",
+                model_spec=lookup("apple-speech"),
+            ),
+            service.submit(
+                _upload(),
+                {"language": "en", "output_format": "json", "with_timestamp": False},
+                request_id="req-4",
+                model_spec=lookup("apple-speech"),
+            ),
+        )
+
+    assert fake_engine.max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_submit_apple_speech_rejects_when_combined_queue_is_full() -> None:
+    service = TranscriptionService(engine_type="funasr", model_id="iic/default", max_queue_size=1)
+    service._sidecar_pending.add("busy-request")
+
+    with pytest.raises(RuntimeError, match="Queue is full"):
+        await service.submit(
+            _upload(),
+            {"language": "en", "output_format": "json", "with_timestamp": False},
+            request_id="req-queue-full",
+            model_spec=lookup("apple-speech"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_submit_apple_speech_loads_cached_engine_before_transcription() -> None:
+    service = TranscriptionService(engine_type="funasr", model_id="iic/default")
+
+    class LoadingEngine(FakeAppleSpeechEngine):
+        def __init__(self) -> None:
+            super().__init__()
+            self.loaded = False
+
+        def load(self) -> None:
+            self.loaded = True
+
+        def transcribe_file(
+            self,
+            file_path: str,
+            language: str = "auto",
+            output_format: str = "json",
+            with_timestamp: bool = False,
+            **_kwargs: object,
+        ) -> dict[str, object]:
+            assert self.loaded
+            return super().transcribe_file(file_path, language, output_format, with_timestamp)
+
+    fake_engine = LoadingEngine()
+    with patch("src.services.transcription.AppleSpeechEngine.from_config", return_value=fake_engine):
+        await service.submit(
+            _upload(),
+            {"language": "en", "output_format": "json", "with_timestamp": False},
+            request_id="req-5",
+            model_spec=lookup("apple-speech"),
+        )
+
+    assert fake_engine.loaded is True

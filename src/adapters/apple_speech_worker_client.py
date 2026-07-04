@@ -63,7 +63,7 @@ class AppleSpeechWorkerClient:
         )
         return AssetPreparationResult(
             locale=_required_str(payload, "locale"),
-            module=cast(AppleSpeechModule, _required_str(payload, "module")),
+            module=_required_module(payload, "module"),
             supported=_required_bool(payload, "supported"),
             allocated=_required_bool(payload, "allocated"),
             downloaded=_required_bool(payload, "downloaded"),
@@ -134,7 +134,7 @@ def _parse_transcription_result(payload: JsonObject) -> TranscriptionResult:
     return TranscriptionResult(
         job_id=_optional_str(payload, "jobId"),
         engine=_required_str(payload, "engine"),
-        module=cast(AppleSpeechModule, _required_str(payload, "module")),
+        module=_required_module(payload, "module"),
         locale=_required_str(payload, "locale"),
         text=_required_str(payload, "text"),
         segments=_parse_segments(payload),
@@ -142,10 +142,7 @@ def _parse_transcription_result(payload: JsonObject) -> TranscriptionResult:
             local=_required_bool(metadata, "local"),
             apple_api=_required_bool(metadata, "appleApi"),
             volatile_included=_required_bool(metadata, "volatileIncluded"),
-            timing_granularity=cast(
-                TimingGranularity,
-                _required_str(metadata, "timingGranularity"),
-            ),
+            timing_granularity=_required_timing_granularity(metadata, "timingGranularity"),
             asset_managed_by_system=_required_bool(metadata, "assetManagedBySystem"),
             duration_ms=_required_int(metadata, "durationMs"),
         ),
@@ -187,6 +184,26 @@ def _required_str(payload: JsonObject, key: str) -> str:
     if not isinstance(value, str):
         raise AppleSpeechWorkerResponseError(f"worker JSON field '{key}' must be a string")
     return value
+
+
+def _required_module(payload: JsonObject, key: str) -> AppleSpeechModule:
+    value = _required_str(payload, key)
+    allowed: tuple[AppleSpeechModule, ...] = ("speechTranscriber", "dictationTranscriber")
+    if value not in allowed:
+        raise AppleSpeechWorkerResponseError(
+            f"worker JSON field '{key}' must be one of: speechTranscriber, dictationTranscriber"
+        )
+    return cast(AppleSpeechModule, value)
+
+
+def _required_timing_granularity(payload: JsonObject, key: str) -> TimingGranularity:
+    value = _required_str(payload, key)
+    allowed: tuple[TimingGranularity, ...] = ("none", "segment", "word", "unknown")
+    if value not in allowed:
+        raise AppleSpeechWorkerResponseError(
+            f"worker JSON field '{key}' must be one of: none, segment, word, unknown"
+        )
+    return cast(TimingGranularity, value)
 
 
 def _optional_str(payload: JsonObject, key: str) -> str | None:
