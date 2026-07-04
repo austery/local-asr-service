@@ -69,6 +69,9 @@ async def test_submit_apple_speech_bypasses_multiprocessing_worker() -> None:
     assert result["text"] == "apple result"
     assert result["language"] == "en-US"
     assert fake_engine.calls[0][1:] == ("en", "json", False)
+    captured_path = Path(fake_engine.calls[0][0])
+    assert not captured_path.exists()
+    assert not captured_path.parent.exists()
     worker_submit.assert_not_called()
     assert service.queue_size == 0
 

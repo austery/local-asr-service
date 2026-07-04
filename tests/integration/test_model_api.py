@@ -137,7 +137,7 @@ def test_models_endpoint_should_include_apple_speech_aliases(client) -> None:
     assert models["apple-speech"]["engine_type"] == "apple-speech"
     assert models["apple-speech"]["capabilities"]["timestamp"] is True
     assert models["apple-speech"]["capabilities"]["diarization"] is False
-    assert models["apple-dictation"]["engine_type"] == "apple-speech"
+    assert "apple-dictation" not in models
 
 
 # MA-2

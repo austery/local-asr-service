@@ -94,13 +94,9 @@ class TestRuntimeContracts:
         assert spec.capabilities.diarization is False
         assert "ASR-only" in spec.description
 
-    def test_apple_dictation_alias_should_use_dictation_module(self) -> None:
-        spec = lookup("apple-dictation")
-
-        assert spec.engine_type == "apple-speech"
-        assert spec.model_id == "apple-speech:dictationTranscriber"
-        assert spec.capabilities.timestamp is True
-        assert spec.capabilities.diarization is False
+    def test_apple_dictation_alias_should_stay_hidden_until_runtime_support_exists(self) -> None:
+        with pytest.raises(ValueError, match="Unknown model"):
+            lookup("apple-dictation")
 
 
 class TestPassthrough:

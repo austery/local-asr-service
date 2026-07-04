@@ -173,12 +173,15 @@ class TranscriptionService:
             if self._is_apple_speech_spec(model_spec):
                 if model_spec is None:
                     raise RuntimeError("Apple Speech request requires a resolved model spec")
-                result = await self._submit_apple_speech_job(
-                    temp_file_path=temp_path,
-                    params=params,
-                    request_id=request_id,
-                    model_spec=model_spec,
-                )
+                try:
+                    result = await self._submit_apple_speech_job(
+                        temp_file_path=temp_path,
+                        params=params,
+                        request_id=request_id,
+                        model_spec=model_spec,
+                    )
+                finally:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
             else:
                 result = await self._submit_worker_job(
                     temp_file_path=temp_path,
@@ -284,14 +287,8 @@ class TranscriptionService:
     def _is_apple_speech_spec(model_spec: ModelSpec | None) -> bool:
         return model_spec is not None and model_spec.engine_type == "apple-speech"
 
-    @staticmethod
-    def _apple_speech_module_for_spec(model_spec: ModelSpec) -> AppleSpeechModule:
-        if model_spec.model_id == "apple-speech:dictationTranscriber":
-            return "dictationTranscriber"
-        return "speechTranscriber"
-
     def _get_apple_speech_engine(self, model_spec: ModelSpec) -> AppleSpeechEngine:
-        module = self._apple_speech_module_for_spec(model_spec)
+        module: AppleSpeechModule = "speechTranscriber"
         engine = self._apple_speech_engines.get(module)
         if engine is None:
             engine = AppleSpeechEngine.from_config(

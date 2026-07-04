@@ -13,7 +13,6 @@
 | `sensevoice-small` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/SenseVoiceSmall` | ❌ | Fast language/emotion tags, no timestamps |
 | `qwen3-asr` | mlx-audio (`load_model` + `generate_transcription` on MLX Metal) | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | Chinese/English quality-first ASR; language prompts are normalized before inference |
 | `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; no speaker labels without a separate diarization stage |
-| `apple-dictation` | Apple SpeechAnalyzer `DictationTranscriber` via Swift sidecar | `apple-speech:dictationTranscriber` | ❌ | short dictation path for contextual vocabulary experiments |
 
 ## Pipeline Profiles
 

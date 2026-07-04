@@ -144,7 +144,7 @@ FastAPI / Python service
 - Support both SpeechTranscriber and DictationTranscriber modes if available.
 - Request and normalize timing metadata, especially audio time ranges.
 - Normalize Apple results into the existing OpenAI-compatible response structure.
-- Add model registry entries such as `apple-speech`, `apple-speech-transcriber`, and `apple-dictation-transcriber`.
+- Add a requestable model registry entry for `apple-speech`; keep dictation aliases deferred until `DictationTranscriber` transcription is implemented.
 - Add quality gates for monotonic timeline, transcript coverage, duplicate volatile handling, and missing time ranges.
 - Add optional contextual vocabulary for dictation mode.
 - Add an explicit diarization probe that combines Apple ASR timing with an existing diarization engine only if requested.
@@ -386,6 +386,7 @@ apple-speech:
 apple-dictation:
   engine: apple-speech
   module: dictationTranscriber
+  status: deferred_until_runtime_support
   local: true
   contextualVocabulary: true
   recommendedFor:
@@ -578,7 +579,7 @@ Phase 1 decision: **GO for Phase 2 Python service integration**. Runtime verific
 
 - [x] Add `AppleSpeechEngine` in `src/core/apple_speech_engine.py`.
 - [x] Add `AppleSpeechWorkerClient` in `src/adapters/apple_speech_worker_client.py`.
-- [x] Add registry entries for `apple-speech` and `apple-dictation`.
+- [x] Add registry entry for `apple-speech`; defer `apple-dictation` until the Swift runtime supports `DictationTranscriber` transcription.
 - [x] Add model discovery to existing capabilities endpoint.
 - [x] Add OpenAI-compatible `/v1/audio/transcriptions` support.
 - [x] Preserve existing Qwen/FunASR routes.
@@ -589,8 +590,8 @@ Acceptance: `model=apple-speech` works through the same HTTP API used by Spokenl
 Phase 2 implementation note from 2026-07-04:
 
 - The Python service routes Apple Speech requests through a direct sidecar path rather than through `src/workers/model_worker.py`; the Swift CLI is already the process boundary for Apple Speech framework access.
-- `apple-speech` and `apple-dictation` preserve the existing local JSON response shape and do not emit non-null speaker labels.
-- `GET /v1/models` advertises Apple aliases as requestable, but real runtime use remains macOS 26+ and final Speech framework checks still run in the sidecar.
+- `apple-speech` preserves the existing local JSON response shape and does not emit non-null speaker labels.
+- `GET /v1/models` advertises the `apple-speech` alias as requestable; `apple-dictation` stays hidden until the Swift runtime supports `DictationTranscriber` transcription.
 - Current automated acceptance covers registry, service routing, and API response-shape compatibility with mocked worker clients. Real sidecar smoke still must run from a non-sandboxed shell with a project-owned fixture before broader bilingual quality claims.
 
 ### Phase 3: Batch transcription quality probe
@@ -636,7 +637,7 @@ Acceptance: Apple SpeechAnalyzer has a clear recommended role, even if it is ASR
 - [ ] Include user/project terms: `local-asr-service`, `PureSubs`, `FunASR`, `Qwen3-ASR`, `SpeechAnalyzer`, `Spokenly`, `Soniox`, `ElevenLabs`, `WhisperX`, `pyannote`, `Playwright`, `Spring Boot`, `Spinnaker`, `GitHub Actions`, `Obsidian`.
 - [ ] Validate whether DictationTranscriber improves short input over SpeechTranscriber.
 
-Acceptance: `apple-dictation` is either recommended for short dictation or kept as fallback only.
+Acceptance: `apple-dictation` is either implemented and recommended for short dictation, or kept hidden as an unregistered future alias.
 
 ### Phase 5: Diarization integration probe
 

@@ -64,16 +64,6 @@ _REGISTRY: dict[str, ModelSpec] = {
             ),
             capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=False),
         ),
-        ModelSpec(
-            alias="apple-dictation",
-            model_id="apple-speech:dictationTranscriber",
-            engine_type="apple-speech",
-            description=(
-                "Apple SpeechAnalyzer DictationTranscriber sidecar. Local macOS 26+ ASR-only "
-                "runtime for short dictation and contextual vocabulary experiments."
-            ),
-            capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=False),
-        ),
     ]
 }
 # fmt: on

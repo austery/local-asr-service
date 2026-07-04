@@ -23,10 +23,11 @@
 In scope:
 
 - Sync SPEC-014 Phase 1 status with code already present on `main`.
-- Add `apple-speech` and `apple-dictation` model registry entries.
+- Add the `apple-speech` model registry entry.
 - Add a typed core Apple Speech port.
 - Implement `AppleSpeechEngine` as an `ASREngine` adapter around `AppleSpeechWorkerClient`.
-- Route explicit `model=apple-speech` and `model=apple-dictation` requests through the Swift sidecar path.
+- Route explicit `model=apple-speech` requests through the Swift sidecar path.
+- Keep `apple-dictation` hidden until the Swift runtime supports `DictationTranscriber` transcription.
 - Preserve existing `/v1/audio/transcriptions` response shape: rich JSON by default, segments only for JSON/verbose JSON, no speaker labels for Apple-only mode.
 - Add API, service, registry, engine, and documentation tests.
 
@@ -641,13 +642,9 @@ def test_apple_speech_alias_should_use_apple_speech_runtime_contract() -> None:
     assert "ASR-only" in spec.description
 
 
-def test_apple_dictation_alias_should_use_dictation_module() -> None:
-    spec = lookup("apple-dictation")
-
-    assert spec.engine_type == "apple-speech"
-    assert spec.model_id == "apple-speech:dictationTranscriber"
-    assert spec.capabilities.timestamp is True
-    assert spec.capabilities.diarization is False
+def test_apple_dictation_alias_should_stay_hidden_until_runtime_support_exists() -> None:
+    with pytest.raises(ValueError, match="Unknown model"):
+        lookup("apple-dictation")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -655,10 +652,10 @@ def test_apple_dictation_alias_should_use_dictation_module() -> None:
 Run:
 
 ```bash
-uv run python -m pytest tests/unit/test_model_registry.py::test_apple_speech_alias_should_use_apple_speech_runtime_contract tests/unit/test_model_registry.py::test_apple_dictation_alias_should_use_dictation_module -q
+uv run python -m pytest tests/unit/test_model_registry.py::test_apple_speech_alias_should_use_apple_speech_runtime_contract tests/unit/test_model_registry.py::test_apple_dictation_alias_should_stay_hidden_until_runtime_support_exists -q
 ```
 
-Expected: FAIL with `Unknown model: 'apple-speech'`.
+Expected: FAIL with `Unknown model: 'apple-speech'` for the new Apple Speech alias.
 
 - [ ] **Step 3: Add Apple engine type and registry entries**
 
@@ -668,7 +665,7 @@ In `src/core/model_registry.py`, change the engine type literal:
 EngineType = Literal["funasr", "mlx", "apple-speech"]
 ```
 
-Add two `ModelSpec` entries to `_REGISTRY`:
+Add one `ModelSpec` entry to `_REGISTRY`; keep `apple-dictation` hidden until the Swift runtime supports `DictationTranscriber` transcription:
 
 ```python
 ModelSpec(
@@ -682,22 +679,12 @@ ModelSpec(
     ),
     capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=False),
 ),
-ModelSpec(
-    alias="apple-dictation",
-    model_id="apple-speech:dictationTranscriber",
-    engine_type="apple-speech",
-    description=(
-        "Apple SpeechAnalyzer DictationTranscriber sidecar. Local macOS 26+ ASR-only "
-        "runtime for short dictation and contextual vocabulary experiments."
-    ),
-    capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=False),
-),
 ```
 
-In `src/config.py`, change:
+Keep `src/config.py` startup engines limited to directly loadable Python worker runtimes:
 
 ```python
-EngineType = Literal["funasr", "mlx", "apple-speech"]
+EngineType = Literal["funasr", "mlx"]
 ```
 
 - [ ] **Step 4: Document Apple models**
@@ -706,7 +693,6 @@ In `MODELS.md`, add rows under Active Models:
 
 ```markdown
 | `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; no speaker labels without a separate diarization stage |
-| `apple-dictation` | Apple SpeechAnalyzer `DictationTranscriber` via Swift sidecar | `apple-speech:dictationTranscriber` | ❌ | short dictation path for contextual vocabulary experiments |
 ```
 
 Add to Model Selection Guide:
@@ -1024,7 +1010,7 @@ def test_models_endpoint_should_include_apple_speech_aliases(client) -> None:
     assert models["apple-speech"]["engine_type"] == "apple-speech"
     assert models["apple-speech"]["capabilities"]["timestamp"] is True
     assert models["apple-speech"]["capabilities"]["diarization"] is False
-    assert models["apple-dictation"]["engine_type"] == "apple-speech"
+    assert "apple-dictation" not in models
 
 
 def test_should_submit_apple_speech_model_spec_to_service() -> None:
@@ -1081,7 +1067,7 @@ Update the endpoint docstring model switching list:
 
 ```python
 - Pass `model=apple-speech` for macOS 26+ Apple SpeechAnalyzer ASR-only sidecar transcription.
-- Pass `model=apple-dictation` for macOS 26+ DictationTranscriber experiments.
+- `apple-dictation` remains hidden until the Swift runtime supports DictationTranscriber.
 ```
 
 - [ ] **Step 4: Update OpenAPI docs test**
@@ -1158,8 +1144,8 @@ Append to Phase 2 after the checklist:
 Phase 2 implementation note:
 
 - The Python service routes Apple Speech requests through a direct sidecar path rather than through `src/workers/model_worker.py`; the Swift CLI is already the process boundary for Apple Speech framework access.
-- `apple-speech` and `apple-dictation` preserve the existing local JSON response shape and do not emit non-null speaker labels.
-- `GET /v1/models` advertises Apple aliases as requestable, but real runtime use remains macOS 26+ and final Speech framework checks still run in the sidecar.
+- `apple-speech` preserves the existing local JSON response shape and does not emit non-null speaker labels.
+- `GET /v1/models` advertises the `apple-speech` alias as requestable; `apple-dictation` stays hidden until the Swift runtime supports `DictationTranscriber` transcription.
 ```
 
 - [ ] **Step 5: Run docs and architecture focused tests**
