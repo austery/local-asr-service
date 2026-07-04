@@ -554,16 +554,25 @@ Environment caveat: running the built worker inside the Codex filesystem sandbox
 
 ### Phase 1: `apple-speech-worker` CLI
 
-- [ ] Implement `capabilities` command.
-- [ ] Implement `prepare` command.
-- [ ] Implement `transcribe` command.
-- [ ] Convert input audio to the analyzer's required format when needed.
-- [ ] Return deterministic JSON.
-- [ ] Separate stdout JSON from stderr logs.
-- [ ] Add timeout and structured error codes.
-- [ ] Add CLI contract tests that assert stdout is valid JSON with no human log lines.
+- [x] Implement `capabilities` command.
+- [x] Implement `prepare` command.
+- [x] Implement `transcribe` command.
+- [x] Convert input audio to the analyzer's required format when needed.
+- [x] Return deterministic JSON.
+- [x] Separate stdout JSON from stderr logs.
+- [x] Add timeout and structured error codes.
+- [x] Add CLI contract tests that assert stdout is valid JSON with no human log lines.
 
 Acceptance: Python can call the CLI and parse stable JSON.
+
+Phase 1 evidence from 2026-07-04:
+
+- Swift package builds in a non-sandboxed shell.
+- `swift run --package-path apple-speech-worker apple-speech-worker-contract-tests` prints `contract-tests: passed`.
+- `tests/unit/test_apple_speech_worker_client.py` verifies Python subprocess JSON parsing, stderr failure handling, invalid stdout rejection, timeout handling, and missing binary errors.
+- `tests/unit/test_apple_speech_worker_source_contracts.py` verifies the live runtime cancels its result collection task on early exit.
+
+Phase 1 decision: **GO for Phase 2 Python service integration**. Runtime verification for Apple Speech framework capability discovery and real transcription must continue outside the Codex filesystem sandbox.
 
 ### Phase 2: Python adapter and registry
 
