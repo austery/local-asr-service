@@ -128,7 +128,10 @@ async def create_transcription(
         None,
         description=(
             "Model alias or full model path. "
-            "Omit this field or pass 'whisper-1' to use the server's current model. "
+            "Omit this field to use the server's current model. "
+            "'whisper-1' is accepted as an OpenAI-compatible passthrough value "
+            "and does not select Whisper; the fresh server default is `paraformer` "
+            "unless ENGINE_TYPE or MODEL_ID overrides it. "
             "Use GET /v1/models for the live alias list. "
             "Examples: 'paraformer', 'qwen3-asr', 'qwen3-sortformer'."
         ),
@@ -149,7 +152,11 @@ async def create_transcription(
     - Pass `model=paraformer` for multi-speaker content (enables diarization).
     - Pass `model=qwen3-asr` for single-speaker quality-first content.
     - Pass `model=qwen3-sortformer` for opt-in English long-form batch speaker separation.
-    - Omit `model` or pass `model=whisper-1` to use the server's currently loaded model.
+    - Omit `model` to use the server's currently loaded model.
+    - `model=whisper-1` is accepted as an OpenAI-compatible passthrough value and
+      does not select Whisper.
+    - By default, a fresh server starts with `paraformer` unless `ENGINE_TYPE`,
+      `MODEL_ID`, or engine-specific model environment variables override it.
     - Use `GET /v1/models` or `GET /v1/models/current` to inspect runtime aliases.
 
     Output Formats:

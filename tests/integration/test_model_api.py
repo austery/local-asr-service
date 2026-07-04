@@ -94,6 +94,12 @@ def test_openapi_transcription_docs_should_use_current_model_aliases() -> None:
     assert "'qwen3-sortformer'" in model_description
     assert "GET /v1/models" in description
     assert "GET /v1/models" in model_description
+    assert "whisper-1" in description
+    assert "passthrough" in description
+    assert "does not select Whisper" in description
+    assert "fresh server starts with `paraformer`" in description
+    assert "passthrough" in model_description
+    assert "fresh server default is `paraformer`" in model_description
 
 
 # MA-1
