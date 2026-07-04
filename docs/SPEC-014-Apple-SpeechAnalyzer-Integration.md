@@ -4,7 +4,7 @@ title: Apple SpeechAnalyzer Local ASR Integration and Diarization Boundary Probe
 status: 📝 草案 (Draft)
 priority: P1 - Core Feature
 creationDate: 2026-07-03
-lastUpdateDate: 2026-07-03
+lastUpdateDate: 2026-07-04
 owner: User (AI-Assisted)
 relatedSpecs:
   - SPEC-011
