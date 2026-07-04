@@ -5,75 +5,24 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from src.core.apple_speech_port import (
+    AppleSpeechModule,
+    AppleSpeechWorkerResponseError,
+    AppleSpeechWorkerUnavailableError,
+    AssetPreparationResult,
+    TimingGranularity,
+    TranscriptionMetadata,
+    TranscriptionResult,
+    TranscriptionSegment,
+    WorkerCapabilities,
+    WorkerModules,
+)
+
 JsonObject = Mapping[str, object]
-
-
-class AppleSpeechWorkerError(RuntimeError):
-    """Raised when the Swift worker cannot return a valid JSON response."""
-
-
-@dataclass(frozen=True)
-class WorkerModules:
-    speech_transcriber: bool
-    dictation_transcriber: bool
-    speech_detector: bool
-
-
-@dataclass(frozen=True)
-class WorkerCapabilities:
-    runtime: str
-    platform: str
-    os_version: str
-    supported: bool
-    supported_locales: list[str]
-    modules: WorkerModules
-    notes: list[str]
-
-
-@dataclass(frozen=True)
-class AssetPreparationResult:
-    locale: str
-    module: str
-    supported: bool
-    allocated: bool
-    downloaded: bool
-    duration_ms: int
-
-
-@dataclass(frozen=True)
-class TranscriptionSegment:
-    id: int
-    start: float
-    end: float
-    text: str
-    is_final: bool
-    confidence: float | None
-    speaker: str | None
-
-
-@dataclass(frozen=True)
-class TranscriptionMetadata:
-    local: bool
-    apple_api: bool
-    volatile_included: bool
-    timing_granularity: str
-    asset_managed_by_system: bool
-    duration_ms: int
-
-
-@dataclass(frozen=True)
-class TranscriptionResult:
-    job_id: str | None
-    engine: str
-    module: str
-    locale: str
-    text: str
-    segments: list[TranscriptionSegment]
-    metadata: TranscriptionMetadata
+AppleSpeechWorkerError = AppleSpeechWorkerResponseError
 
 
 class AppleSpeechWorkerClient:
@@ -100,13 +49,13 @@ class AppleSpeechWorkerClient:
             notes=_required_str_list(payload, "notes"),
         )
 
-    def prepare(self, locale: str, module: str) -> AssetPreparationResult:
+    def prepare(self, locale: str, module: AppleSpeechModule) -> AssetPreparationResult:
         payload = self._run_json(
             ["prepare", "--locale", locale, "--module", module, "--json"]
         )
         return AssetPreparationResult(
             locale=_required_str(payload, "locale"),
-            module=_required_str(payload, "module"),
+            module=cast(AppleSpeechModule, _required_str(payload, "module")),
             supported=_required_bool(payload, "supported"),
             allocated=_required_bool(payload, "allocated"),
             downloaded=_required_bool(payload, "downloaded"),
@@ -117,7 +66,7 @@ class AppleSpeechWorkerClient:
         self,
         input_path: Path,
         locale: str,
-        module: str,
+        module: AppleSpeechModule,
         audio_time_ranges: bool = True,
         include_volatile: bool = False,
     ) -> TranscriptionResult:
@@ -150,11 +99,11 @@ class AppleSpeechWorkerClient:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise AppleSpeechWorkerError(
+            raise AppleSpeechWorkerUnavailableError(
                 f"apple-speech-worker timed out after {self.timeout_seconds:.1f}s"
             ) from exc
         except OSError as exc:
-            raise AppleSpeechWorkerError(
+            raise AppleSpeechWorkerUnavailableError(
                 f"failed to run apple-speech-worker at {self.worker_path}: {exc}"
             ) from exc
 
@@ -177,7 +126,7 @@ def _parse_transcription_result(payload: JsonObject) -> TranscriptionResult:
     return TranscriptionResult(
         job_id=_optional_str(payload, "jobId"),
         engine=_required_str(payload, "engine"),
-        module=_required_str(payload, "module"),
+        module=cast(AppleSpeechModule, _required_str(payload, "module")),
         locale=_required_str(payload, "locale"),
         text=_required_str(payload, "text"),
         segments=_parse_segments(payload),
@@ -185,7 +134,10 @@ def _parse_transcription_result(payload: JsonObject) -> TranscriptionResult:
             local=_required_bool(metadata, "local"),
             apple_api=_required_bool(metadata, "appleApi"),
             volatile_included=_required_bool(metadata, "volatileIncluded"),
-            timing_granularity=_required_str(metadata, "timingGranularity"),
+            timing_granularity=cast(
+                TimingGranularity,
+                _required_str(metadata, "timingGranularity"),
+            ),
             asset_managed_by_system=_required_bool(metadata, "assetManagedBySystem"),
             duration_ms=_required_int(metadata, "durationMs"),
         ),

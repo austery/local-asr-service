@@ -8,6 +8,10 @@ from src.adapters.apple_speech_worker_client import (
     AppleSpeechWorkerClient,
     AppleSpeechWorkerError,
 )
+from src.core.apple_speech_port import (
+    AppleSpeechWorkerUnavailableError,
+    TranscriptionResult,
+)
 
 
 def test_capabilities_parses_worker_json() -> None:
@@ -90,6 +94,31 @@ def test_transcribe_passes_input_and_returns_segments() -> None:
     assert result.metadata.timing_granularity == "segment"
 
 
+def test_transcribe_returns_shared_port_type() -> None:
+    completed = subprocess.CompletedProcess(
+        args=["worker"],
+        returncode=0,
+        stdout=(
+            '{"jobId":null,"engine":"apple-speech","module":"speechTranscriber",'
+            '"locale":"en-US","text":"hello world",'
+            '"segments":[{"id":0,"start":0.0,"end":1.0,"text":"hello world",'
+            '"isFinal":true,"confidence":null,"speaker":null}],'
+            '"metadata":{"local":true,"appleApi":true,"volatileIncluded":false,'
+            '"timingGranularity":"segment","assetManagedBySystem":true,"durationMs":42}}'
+        ),
+        stderr="",
+    )
+
+    with patch("src.adapters.apple_speech_worker_client.subprocess.run", return_value=completed):
+        result = AppleSpeechWorkerClient(Path("/tmp/apple-speech-worker")).transcribe(
+            input_path=Path("/tmp/audio.wav"),
+            locale="en-US",
+            module="speechTranscriber",
+        )
+
+    assert isinstance(result, TranscriptionResult)
+
+
 def test_worker_nonzero_raises_with_stderr() -> None:
     completed = subprocess.CompletedProcess(
         args=["worker"],
@@ -124,7 +153,7 @@ def test_worker_timeout_raises() -> None:
         side_effect=subprocess.TimeoutExpired(cmd=["worker"], timeout=1.0),
     ):
         client = AppleSpeechWorkerClient(Path("/tmp/apple-speech-worker"), timeout_seconds=1.0)
-        with pytest.raises(AppleSpeechWorkerError, match="timed out"):
+        with pytest.raises(AppleSpeechWorkerUnavailableError, match="timed out"):
             client.capabilities()
 
 
@@ -135,7 +164,7 @@ def test_worker_os_error_raises_with_worker_path() -> None:
     ):
         client = AppleSpeechWorkerClient(Path("/tmp/missing-apple-speech-worker"))
         with pytest.raises(
-            AppleSpeechWorkerError,
+            AppleSpeechWorkerUnavailableError,
             match="/tmp/missing-apple-speech-worker",
         ):
             client.capabilities()
