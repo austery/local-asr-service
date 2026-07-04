@@ -85,5 +85,13 @@ CHUNK_OVERLAP_SECONDS = int(os.getenv("CHUNK_OVERLAP_SECONDS", "15"))
 # 设置为 0 表示禁用空闲卸载（模型永久驻留内存）。
 MODEL_IDLE_TIMEOUT_SEC = int(os.getenv("MODEL_IDLE_TIMEOUT_SEC", "60"))
 
+# === Apple Speech sidecar configuration ===
+APPLE_SPEECH_WORKER_PATH = os.getenv(
+    "APPLE_SPEECH_WORKER_PATH",
+    str(Path(__file__).parent.parent / "apple-speech-worker" / ".build" / "debug" / "apple-speech-worker"),
+)
+APPLE_SPEECH_WORKER_TIMEOUT_SEC = float(os.getenv("APPLE_SPEECH_WORKER_TIMEOUT_SEC", "120"))
+APPLE_SPEECH_DEFAULT_LOCALE = os.getenv("APPLE_SPEECH_DEFAULT_LOCALE", "en-US")
+
 # Tokenizers 并行警告抑制
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
