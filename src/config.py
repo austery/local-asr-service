@@ -20,7 +20,7 @@ else:
     load_dotenv()
 
 # 引擎类型
-EngineType = Literal["funasr", "mlx"]
+EngineType = Literal["funasr", "mlx", "apple-speech"]
 
 # === 引擎配置 ===
 ENGINE_TYPE: EngineType = os.getenv("ENGINE_TYPE", "funasr")  # type: ignore
