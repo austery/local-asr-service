@@ -576,15 +576,22 @@ Phase 1 decision: **GO for Phase 2 Python service integration**. Runtime verific
 
 ### Phase 2: Python adapter and registry
 
-- [ ] Add `AppleSpeechEngine` in `src/core/apple_speech_engine.py`.
-- [ ] Add `AppleSpeechWorkerClient` in `src/adapters/apple_speech_worker_client.py`.
-- [ ] Add registry entries for `apple-speech` and `apple-dictation`.
-- [ ] Add model discovery to existing capabilities endpoint.
-- [ ] Add OpenAI-compatible `/v1/audio/transcriptions` support.
-- [ ] Preserve existing Qwen/FunASR routes.
-- [ ] Preserve existing default JSON response shape for this repo.
+- [x] Add `AppleSpeechEngine` in `src/core/apple_speech_engine.py`.
+- [x] Add `AppleSpeechWorkerClient` in `src/adapters/apple_speech_worker_client.py`.
+- [x] Add registry entries for `apple-speech` and `apple-dictation`.
+- [x] Add model discovery to existing capabilities endpoint.
+- [x] Add OpenAI-compatible `/v1/audio/transcriptions` support.
+- [x] Preserve existing Qwen/FunASR routes.
+- [x] Preserve existing default JSON response shape for this repo.
 
 Acceptance: `model=apple-speech` works through the same HTTP API used by Spokenly / puresubs.
+
+Phase 2 implementation note from 2026-07-04:
+
+- The Python service routes Apple Speech requests through a direct sidecar path rather than through `src/workers/model_worker.py`; the Swift CLI is already the process boundary for Apple Speech framework access.
+- `apple-speech` and `apple-dictation` preserve the existing local JSON response shape and do not emit non-null speaker labels.
+- `GET /v1/models` advertises Apple aliases as requestable, but real runtime use remains macOS 26+ and final Speech framework checks still run in the sidecar.
+- Current automated acceptance covers registry, service routing, and API response-shape compatibility with mocked worker clients. Real sidecar smoke still must run from a non-sandboxed shell with a project-owned fixture before broader bilingual quality claims.
 
 ### Phase 3: Batch transcription quality probe
 
