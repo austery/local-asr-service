@@ -100,6 +100,8 @@ def test_openapi_transcription_docs_should_use_current_model_aliases() -> None:
     assert "fresh server starts with `paraformer`" in description
     assert "passthrough" in model_description
     assert "fresh server default is `paraformer`" in model_description
+    assert "model=apple-speech" in description
+    assert "'apple-speech'" in model_description
 
 
 # MA-1
@@ -125,6 +127,17 @@ def test_models_endpoint_should_include_requestable_pipeline_profiles(client) ->
     assert "qwen3-sortformer" in models
     assert models["qwen3-sortformer"]["capabilities"]["diarization"] is True
     assert models["qwen3-sortformer"]["requestable"] is True
+
+
+def test_models_endpoint_should_include_apple_speech_aliases(client) -> None:
+    response = client.get("/v1/models")
+
+    assert response.status_code == 200
+    models = {item["alias"]: item for item in response.json()["models"]}
+    assert models["apple-speech"]["engine_type"] == "apple-speech"
+    assert models["apple-speech"]["capabilities"]["timestamp"] is True
+    assert models["apple-speech"]["capabilities"]["diarization"] is False
+    assert models["apple-dictation"]["engine_type"] == "apple-speech"
 
 
 # MA-2
@@ -215,6 +228,46 @@ def test_should_submit_qwen3_sortformer_pipeline_by_default() -> None:
     assert response.json()["model"] == "qwen3-sortformer"
     mock_service.submit.assert_not_called()
     mock_service.submit_pipeline.assert_awaited_once()
+
+
+def test_should_submit_apple_speech_model_spec_to_service() -> None:
+    qwen_spec = real_lookup("qwen3-asr")
+    mock_service = _make_mock_service(
+        qwen_spec.capabilities,
+        {
+            "text": "apple result",
+            "segments": [
+                {
+                    "id": 0,
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "apple result",
+                    "speaker": None,
+                }
+            ],
+            "duration": 1.0,
+            "language": "en-US",
+        },
+        current_model_spec=qwen_spec,
+    )
+
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"model": "apple-speech", "language": "en", "output_format": "json"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["model"] == "apple-speech"
+    assert response.json()["segments"][0]["speaker"] is None
+    submitted_spec = mock_service.submit.await_args.kwargs["model_spec"]
+    assert submitted_spec.alias == "apple-speech"
+    mock_service.submit_pipeline.assert_not_awaited()
 
 
 def test_should_submit_pipeline_profile_when_explicitly_requestable() -> None:

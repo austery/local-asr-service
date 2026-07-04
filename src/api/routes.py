@@ -133,7 +133,7 @@ async def create_transcription(
             "and does not select Whisper; the fresh server default is `paraformer` "
             "unless ENGINE_TYPE or MODEL_ID overrides it. "
             "Use GET /v1/models for the live alias list. "
-            "Examples: 'paraformer', 'qwen3-asr', 'qwen3-sortformer'."
+            "Examples: 'paraformer', 'qwen3-asr', 'qwen3-sortformer', 'apple-speech'."
         ),
     ),
     language: str = Form("auto", description="Language code (auto, zh, en)"),
@@ -152,6 +152,8 @@ async def create_transcription(
     - Pass `model=paraformer` for multi-speaker content (enables diarization).
     - Pass `model=qwen3-asr` for single-speaker quality-first content.
     - Pass `model=qwen3-sortformer` for opt-in English long-form batch speaker separation.
+    - Pass `model=apple-speech` for macOS 26+ Apple SpeechAnalyzer ASR-only sidecar transcription.
+    - Pass `model=apple-dictation` for macOS 26+ DictationTranscriber experiments.
     - Omit `model` to use the server's currently loaded model.
     - `model=whisper-1` is accepted as an OpenAI-compatible passthrough value and
       does not select Whisper.
