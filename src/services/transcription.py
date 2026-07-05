@@ -22,7 +22,6 @@ from src.adapters.pipeline_chunking import (
 )
 from src.adapters.segment_alignment import align_speakers
 from src.config import (
-    APPLE_SPEECH_DEFAULT_LOCALE,
     APPLE_SPEECH_MAX_CONCURRENCY,
     APPLE_SPEECH_WORKER_PATH,
     APPLE_SPEECH_WORKER_TIMEOUT_SEC,
@@ -296,7 +295,6 @@ class TranscriptionService:
                 AppleSpeechEngineConfig(
                     worker_path=Path(APPLE_SPEECH_WORKER_PATH),
                     timeout_seconds=APPLE_SPEECH_WORKER_TIMEOUT_SEC,
-                    default_locale=APPLE_SPEECH_DEFAULT_LOCALE,
                 ),
                 module=module,
             )

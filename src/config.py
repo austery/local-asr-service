@@ -91,7 +91,6 @@ APPLE_SPEECH_WORKER_PATH = os.getenv(
     str(Path(__file__).parent.parent / "apple-speech-worker" / ".build" / "debug" / "apple-speech-worker"),
 )
 APPLE_SPEECH_WORKER_TIMEOUT_SEC = float(os.getenv("APPLE_SPEECH_WORKER_TIMEOUT_SEC", "120"))
-APPLE_SPEECH_DEFAULT_LOCALE = os.getenv("APPLE_SPEECH_DEFAULT_LOCALE", "en-US")
 APPLE_SPEECH_MAX_CONCURRENCY = max(1, int(os.getenv("APPLE_SPEECH_MAX_CONCURRENCY", "1")))
 
 # Tokenizers 并行警告抑制

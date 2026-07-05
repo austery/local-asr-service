@@ -38,7 +38,6 @@ class AppleSpeechClient(Protocol):
 class AppleSpeechEngineConfig:
     worker_path: Path
     timeout_seconds: float = 120.0
-    default_locale: str = "en-US"
 
 
 class AppleSpeechEngine:
@@ -49,11 +48,9 @@ class AppleSpeechEngine:
         *,
         client: AppleSpeechClient,
         module: AppleSpeechModule,
-        default_locale: str = "en-US",
     ) -> None:
         self._client = client
         self._module = module
-        self._default_locale = default_locale
 
     @classmethod
     def from_config(
@@ -67,7 +64,6 @@ class AppleSpeechEngine:
                 timeout_seconds=config.timeout_seconds,
             ),
             module=module,
-            default_locale=config.default_locale,
         )
 
     @property
@@ -85,7 +81,7 @@ class AppleSpeechEngine:
     def transcribe_file(
         self,
         file_path: str,
-        language: str = "auto",
+        language: str,
         output_format: str = "json",
         with_timestamp: bool = False,
         include_volatile: bool = False,
@@ -111,7 +107,10 @@ class AppleSpeechEngine:
     def _resolve_locale(self, language: str) -> str:
         normalized = language.strip()
         if not normalized or normalized.lower() == "auto":
-            return self._default_locale
+            raise ValueError(
+                "Apple Speech requires an explicit language or locale; "
+                "pass 'zh', 'zh-CN', 'en', or 'en-US'."
+            )
         lowered = normalized.lower()
         if lowered == "zh":
             return "zh-CN"

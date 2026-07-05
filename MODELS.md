@@ -12,7 +12,7 @@
 | `paraformer` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | ✅ | Mandarin-focused default with CAM++ diarization |
 | `sensevoice-small` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/SenseVoiceSmall` | ❌ | Fast language/emotion tags, no timestamps |
 | `qwen3-asr` | mlx-audio (`load_model` + `generate_transcription` on MLX Metal) | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | Chinese/English quality-first ASR; language prompts are normalized before inference |
-| `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; no speaker labels without a separate diarization stage |
+| `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; requires explicit `zh`/`zh-CN` or `en`/`en-US`; no speaker labels without a separate diarization stage |
 
 ## Pipeline Profiles
 
@@ -64,7 +64,7 @@ The project registers models by runtime contract, not by vendor name.
 | Mandarin long-form podcast (20-60min) | `paraformer` | Best verified long-audio RTF, CAM++ diarization |
 | Chinese/English quality-first single-speaker audio | `qwen3-asr` | MLX-native Qwen3-ASR with explicit language prompt forwarding |
 | Spokenly local dictation fallback | `qwen3-asr` | Best current local path for low-latency single-speaker voice input through an OpenAI-compatible endpoint |
-| Apple-native local dictation on macOS 26+ | `apple-speech` | Uses the system SpeechAnalyzer model through the Swift sidecar; ASR-only until diarization gates pass |
+| Apple-native low-resource local dictation on macOS 26+ | `apple-speech` | Uses the system SpeechAnalyzer model through the Swift sidecar with far lower service memory pressure than the PyTorch MPS path; requires explicit language; ASR-only until diarization gates pass |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
 | Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
 | Experimental Apple-native English speaker-separation evaluation | `qwen3-sortformer` | Keeps the experiment callable, but current real-meeting evidence does not justify recommending it |

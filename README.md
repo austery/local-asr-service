@@ -130,7 +130,7 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `output_format` | `json` | Output: `json`, `txt`, `srt` |
 | `response_format` | — | OpenAI alias: `verbose_json`, `text`, `vtt` |
 | `with_timestamp` | `false` | Prepend `[MM:SS]` to each line in txt mode |
-| `language` | `auto` | `zh`, `en`, `auto` |
+| `language` | `auto` | `zh`, `zh-CN`, `en`, `en-US`, `auto`; Apple Speech requires an explicit language and rejects `auto` |
 | `model` | — | Alias or full model path. Omit to keep current model. |
 
 **Supported Models (`model` parameter):**
@@ -141,6 +141,7 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `qwen3-asr` | MLX | mlx-audio/MLX Metal path; Chinese/English quality-first ASR |
 | `sensevoice-small` | FunASR | FunASR/PyTorch MPS path; speed-first language/emotion tags |
 | `qwen3-sortformer` | Pipeline | Experimental opt-in evaluation path for Qwen3-ASR + forced alignment + Sortformer |
+| `apple-speech` | Apple Speech | macOS 26+ SpeechAnalyzer sidecar; requires explicit `language` such as `zh-CN` or `en-US` |
 
 `qwen3-sortformer` remains reachable only as an explicit experiment through
 `model=qwen3-sortformer`; it is not the default dictation path and is not the
@@ -189,7 +190,6 @@ MODEL_IDLE_TIMEOUT_SEC=60     # Worker auto-terminates after idle period (0 = di
 # Apple Speech sidecar (macOS 26+)
 APPLE_SPEECH_WORKER_PATH=apple-speech-worker/.build/debug/apple-speech-worker
 APPLE_SPEECH_WORKER_TIMEOUT_SEC=120
-APPLE_SPEECH_DEFAULT_LOCALE=en-US
 APPLE_SPEECH_MAX_CONCURRENCY=1
 
 # Audio processing (MLX engine only)

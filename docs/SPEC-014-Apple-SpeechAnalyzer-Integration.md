@@ -595,6 +595,14 @@ Phase 2 implementation note from 2026-07-04:
 - `GET /v1/models` advertises the `apple-speech` alias as requestable; `apple-dictation` stays hidden until the Swift runtime supports `DictationTranscriber` transcription.
 - Current automated acceptance covers registry, service routing, and API response-shape compatibility with mocked worker clients. Real sidecar smoke still must run from a non-sandboxed shell with a project-owned fixture before broader bilingual quality claims.
 
+Phase 2 smoke update from 2026-07-05:
+
+- Real OpenAPI smoke with explicit `language=zh-CN` produced a usable long-form Chinese transcript, close enough to keep Apple Speech in the next evaluation round against Paraformer and Qwen3-ASR.
+- A 50-minute audio file completed through the OpenAPI `model=apple-speech` path without observed processing failure, making long-audio resource behavior a priority benchmark axis for Phase 3.
+- `language=auto` is not a reliable Apple Speech language detection mode in this service path. The API and engine adapter now reject `auto`/blank language for `model=apple-speech` and require an explicit language or locale.
+- Apple Speech's strongest observed advantage is resource profile, not guaranteed best raw recognition quality: it avoids the large PyTorch MPS resident memory footprint required by the Paraformer path.
+- SRT/timing output remains a service quality requirement, but it is not the primary user workflow for the next evaluation.
+
 ### Phase 3: Batch transcription quality probe
 
 Run at least these samples:
@@ -625,6 +633,7 @@ technical term preservation
 Chinese/English switching errors
 punctuation quality
 segment timing availability
+SRT/VTT correctness from segment timing
 runtime duration
 peak process memory
 failure rate

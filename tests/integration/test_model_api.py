@@ -270,6 +270,60 @@ def test_should_submit_apple_speech_model_spec_to_service() -> None:
     mock_service.submit_pipeline.assert_not_awaited()
 
 
+@pytest.mark.parametrize("language", ["auto", "   "])
+def test_should_reject_implicit_language_for_apple_speech(language: str) -> None:
+    qwen_spec = real_lookup("qwen3-asr")
+    mock_service = _make_mock_service(
+        qwen_spec.capabilities,
+        {"text": "unused", "segments": [], "duration": 1.0},
+        current_model_spec=qwen_spec,
+    )
+
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=qwen_spec),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"model": "apple-speech", "language": language, "output_format": "json"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "apple-speech" in detail
+    assert "explicit language" in detail
+    mock_service.submit.assert_not_awaited()
+    mock_service.submit_pipeline.assert_not_awaited()
+
+
+def test_should_reject_implicit_language_when_current_model_is_apple_speech() -> None:
+    apple_spec = real_lookup("apple-speech")
+    mock_service = _make_mock_service(
+        apple_spec.capabilities,
+        {"text": "unused", "segments": [], "duration": 1.0},
+        current_model_spec=apple_spec,
+    )
+
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=apple_spec),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"language": "auto", "output_format": "json"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 400
+    assert "apple-speech" in response.json()["detail"]
+    assert "explicit language" in response.json()["detail"]
+    mock_service.submit.assert_not_awaited()
+    mock_service.submit_pipeline.assert_not_awaited()
+
+
 def test_should_submit_pipeline_profile_when_explicitly_requestable() -> None:
     qwen_spec = real_lookup("qwen3-asr")
     mock_service = _make_mock_service(
