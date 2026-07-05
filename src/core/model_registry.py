@@ -10,7 +10,7 @@ from typing import Literal
 
 from src.core.base_engine import EngineCapabilities
 
-EngineType = Literal["funasr", "mlx"]
+EngineType = Literal["funasr", "mlx", "apple-speech"]
 
 # OpenAI-compat placeholder values that mean "use the server's current model"
 # Empty string is also passthrough: form data serialises None as "" in some clients
@@ -52,6 +52,17 @@ _REGISTRY: dict[str, ModelSpec] = {
             engine_type="funasr",
             description="SenseVoice Small via FunASR runtime on PyTorch MPS/CPU. Fast language/emotion-tag model; no timestamps or diarization.",
             capabilities=EngineCapabilities(timestamp=False, diarization=False, emotion_tags=True, language_detect=True),
+        ),
+        ModelSpec(
+            alias="apple-speech",
+            model_id="apple-speech:speechTranscriber",
+            engine_type="apple-speech",
+            description=(
+                "Apple SpeechAnalyzer SpeechTranscriber sidecar. Local macOS 26+ ASR-only "
+                "runtime for dictation and short/medium transcription; speaker labels require "
+                "a separate diarization stage."
+            ),
+            capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=False),
         ),
     ]
 }

@@ -4,7 +4,7 @@ title: Apple SpeechAnalyzer Local ASR Integration and Diarization Boundary Probe
 status: 📝 草案 (Draft)
 priority: P1 - Core Feature
 creationDate: 2026-07-03
-lastUpdateDate: 2026-07-03
+lastUpdateDate: 2026-07-04
 owner: User (AI-Assisted)
 relatedSpecs:
   - SPEC-011
@@ -144,7 +144,7 @@ FastAPI / Python service
 - Support both SpeechTranscriber and DictationTranscriber modes if available.
 - Request and normalize timing metadata, especially audio time ranges.
 - Normalize Apple results into the existing OpenAI-compatible response structure.
-- Add model registry entries such as `apple-speech`, `apple-speech-transcriber`, and `apple-dictation-transcriber`.
+- Add a requestable model registry entry for `apple-speech`; keep dictation aliases deferred until `DictationTranscriber` transcription is implemented.
 - Add quality gates for monotonic timeline, transcript coverage, duplicate volatile handling, and missing time ranges.
 - Add optional contextual vocabulary for dictation mode.
 - Add an explicit diarization probe that combines Apple ASR timing with an existing diarization engine only if requested.
@@ -386,6 +386,7 @@ apple-speech:
 apple-dictation:
   engine: apple-speech
   module: dictationTranscriber
+  status: deferred_until_runtime_support
   local: true
   contextualVocabulary: true
   recommendedFor:
@@ -554,28 +555,45 @@ Environment caveat: running the built worker inside the Codex filesystem sandbox
 
 ### Phase 1: `apple-speech-worker` CLI
 
-- [ ] Implement `capabilities` command.
-- [ ] Implement `prepare` command.
-- [ ] Implement `transcribe` command.
-- [ ] Convert input audio to the analyzer's required format when needed.
-- [ ] Return deterministic JSON.
-- [ ] Separate stdout JSON from stderr logs.
-- [ ] Add timeout and structured error codes.
-- [ ] Add CLI contract tests that assert stdout is valid JSON with no human log lines.
+- [x] Implement `capabilities` command.
+- [x] Implement `prepare` command.
+- [x] Implement `transcribe` command.
+- [x] Convert input audio to the analyzer's required format when needed.
+- [x] Return deterministic JSON.
+- [x] Separate stdout JSON from stderr logs.
+- [x] Add timeout and structured error codes.
+- [x] Add CLI contract tests that assert stdout is valid JSON with no human log lines.
 
 Acceptance: Python can call the CLI and parse stable JSON.
 
+Phase 1 evidence from 2026-07-04:
+
+- Swift package builds in a non-sandboxed shell.
+- `swift run --package-path apple-speech-worker apple-speech-worker-contract-tests` prints `contract-tests: passed`.
+- `tests/unit/test_apple_speech_worker_client.py` verifies Python subprocess JSON parsing, stderr failure handling, invalid stdout rejection, timeout handling, and missing binary errors.
+- `tests/unit/test_apple_speech_worker_source_contracts.py` verifies the live runtime cancels its result collection task on early exit.
+
+Phase 1 decision: **GO for Phase 2 Python service integration**. Runtime verification for Apple Speech framework capability discovery and real transcription must continue outside the Codex filesystem sandbox.
+
 ### Phase 2: Python adapter and registry
 
-- [ ] Add `AppleSpeechEngine` in `src/core/apple_speech_engine.py`.
-- [ ] Add `AppleSpeechWorkerClient` in `src/adapters/apple_speech_worker_client.py`.
-- [ ] Add registry entries for `apple-speech` and `apple-dictation`.
-- [ ] Add model discovery to existing capabilities endpoint.
-- [ ] Add OpenAI-compatible `/v1/audio/transcriptions` support.
-- [ ] Preserve existing Qwen/FunASR routes.
-- [ ] Preserve existing default JSON response shape for this repo.
+- [x] Add `AppleSpeechEngine` in `src/core/apple_speech_engine.py`.
+- [x] Add `AppleSpeechWorkerClient` in `src/adapters/apple_speech_worker_client.py`.
+- [x] Add registry entry for `apple-speech`; defer `apple-dictation` until the Swift runtime supports `DictationTranscriber` transcription.
+- [x] Add model discovery to existing capabilities endpoint.
+- [x] Add OpenAI-compatible `/v1/audio/transcriptions` support.
+- [x] Preserve existing Qwen/FunASR routes.
+- [x] Preserve existing default JSON response shape for this repo.
 
 Acceptance: `model=apple-speech` works through the same HTTP API used by Spokenly / puresubs.
+
+Phase 2 implementation note from 2026-07-04:
+
+- The Python service routes Apple Speech requests through a direct sidecar path rather than through `src/workers/model_worker.py`; the Swift CLI is already the process boundary for Apple Speech framework access.
+- Apple Speech sidecar transcription is capped by `APPLE_SPEECH_MAX_CONCURRENCY` (default `1`) to preserve the Mac Silicon single-inference memory discipline while still counting waiting sidecar jobs against `MAX_QUEUE_SIZE`.
+- `apple-speech` preserves the existing local JSON response shape and does not emit non-null speaker labels.
+- `GET /v1/models` advertises the `apple-speech` alias as requestable; `apple-dictation` stays hidden until the Swift runtime supports `DictationTranscriber` transcription.
+- Current automated acceptance covers registry, service routing, and API response-shape compatibility with mocked worker clients. Real sidecar smoke still must run from a non-sandboxed shell with a project-owned fixture before broader bilingual quality claims.
 
 ### Phase 3: Batch transcription quality probe
 
@@ -620,7 +638,7 @@ Acceptance: Apple SpeechAnalyzer has a clear recommended role, even if it is ASR
 - [ ] Include user/project terms: `local-asr-service`, `PureSubs`, `FunASR`, `Qwen3-ASR`, `SpeechAnalyzer`, `Spokenly`, `Soniox`, `ElevenLabs`, `WhisperX`, `pyannote`, `Playwright`, `Spring Boot`, `Spinnaker`, `GitHub Actions`, `Obsidian`.
 - [ ] Validate whether DictationTranscriber improves short input over SpeechTranscriber.
 
-Acceptance: `apple-dictation` is either recommended for short dictation or kept as fallback only.
+Acceptance: `apple-dictation` is either implemented and recommended for short dictation, or kept hidden as an unregistered future alias.
 
 ### Phase 5: Diarization integration probe
 

@@ -6,6 +6,7 @@ import queue as _stdlib_queue
 import shutil
 import tempfile
 from contextlib import suppress
+from pathlib import Path
 from typing import Literal, TypedDict
 
 from fastapi import UploadFile
@@ -20,7 +21,15 @@ from src.adapters.pipeline_chunking import (
     validate_aligned_word_quality,
 )
 from src.adapters.segment_alignment import align_speakers
+from src.config import (
+    APPLE_SPEECH_DEFAULT_LOCALE,
+    APPLE_SPEECH_MAX_CONCURRENCY,
+    APPLE_SPEECH_WORKER_PATH,
+    APPLE_SPEECH_WORKER_TIMEOUT_SEC,
+)
 from src.core.alignment_port import AlignedWord, normalize_alignment_language
+from src.core.apple_speech_engine import AppleSpeechEngine, AppleSpeechEngineConfig
+from src.core.apple_speech_port import AppleSpeechModule
 from src.core.base_engine import EngineCapabilities
 from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import ModelSpec
@@ -93,6 +102,9 @@ class TranscriptionService:
         self._spawn_lock: asyncio.Lock = asyncio.Lock()
         self._result_reader_task: asyncio.Task[None] | None = None
         self._audio_chunker: AudioChunkingService | None = None
+        self._sidecar_pending: set[str] = set()
+        self._sidecar_semaphore = asyncio.Semaphore(APPLE_SPEECH_MAX_CONCURRENCY)
+        self._apple_speech_engines: dict[str, AppleSpeechEngine] = {}
         self.is_running = False
 
         self.logger = logging.getLogger(__name__)
@@ -120,8 +132,8 @@ class TranscriptionService:
 
     @property
     def queue_size(self) -> int:
-        """Number of jobs currently in-flight (queued or processing)."""
-        return len(self._pending)
+        """Number of jobs currently in-flight across worker and sidecar paths."""
+        return self._active_job_count()
 
     @property
     def max_queue_size(self) -> int:
@@ -149,7 +161,7 @@ class TranscriptionService:
         request_id: str = "unknown",
         model_spec: ModelSpec | None = None,
     ) -> TranscriptionResult:
-        if len(self._pending) >= self._max_queue_size:
+        if self._active_job_count() >= self._max_queue_size:
             self.logger.warning(f"[{request_id}] Queue full, rejecting request")
             raise RuntimeError("Service busy: Queue is full.")
 
@@ -160,13 +172,25 @@ class TranscriptionService:
             with open(temp_path, "wb") as buf:
                 shutil.copyfileobj(file.file, buf)
 
-            result = await self._submit_worker_job(
-                temp_file_path=temp_path,
-                params=params,
-                request_id=request_id,
-                model_spec=model_spec,
-                temp_dir=temp_dir,
-            )
+            if self._is_apple_speech_spec(model_spec):
+                if model_spec is None:
+                    raise RuntimeError("Apple Speech request requires a resolved model spec")
+                try:
+                    result = await self._submit_apple_speech_job(
+                        temp_file_path=temp_path,
+                        params=params,
+                        request_id=request_id,
+                    )
+                finally:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+            else:
+                result = await self._submit_worker_job(
+                    temp_file_path=temp_path,
+                    params=params,
+                    request_id=request_id,
+                    model_spec=model_spec,
+                    temp_dir=temp_dir,
+                )
             return self._coerce_transcription_result(result)
 
         except BaseException:
@@ -183,7 +207,7 @@ class TranscriptionService:
     ) -> TranscriptionResult:
         if not profile.requestable:
             raise RuntimeError(f"Pipeline profile '{profile.alias}' is not enabled for requests.")
-        if len(self._pending) >= self._max_queue_size:
+        if self._active_job_count() >= self._max_queue_size:
             self.logger.warning(f"[{request_id}] Queue full, rejecting pipeline request")
             raise RuntimeError("Service busy: Queue is full.")
 
@@ -257,6 +281,56 @@ class TranscriptionService:
             self._discard_request_state(request_id)
             raise
 
+    def _active_job_count(self) -> int:
+        return len(self._pending) + len(self._sidecar_pending)
+
+    @staticmethod
+    def _is_apple_speech_spec(model_spec: ModelSpec | None) -> bool:
+        return model_spec is not None and model_spec.engine_type == "apple-speech"
+
+    def _get_apple_speech_engine(self) -> AppleSpeechEngine:
+        module: AppleSpeechModule = "speechTranscriber"
+        engine = self._apple_speech_engines.get(module)
+        if engine is None:
+            engine = AppleSpeechEngine.from_config(
+                AppleSpeechEngineConfig(
+                    worker_path=Path(APPLE_SPEECH_WORKER_PATH),
+                    timeout_seconds=APPLE_SPEECH_WORKER_TIMEOUT_SEC,
+                    default_locale=APPLE_SPEECH_DEFAULT_LOCALE,
+                ),
+                module=module,
+            )
+            engine.load()
+            self._apple_speech_engines[module] = engine
+        return engine
+
+    async def _submit_apple_speech_job(
+        self,
+        temp_file_path: str,
+        params: dict[str, object],
+        request_id: str,
+    ) -> object:
+        if self._active_job_count() >= self._max_queue_size:
+            self.logger.warning(f"[{request_id}] Queue full, rejecting Apple Speech request")
+            raise RuntimeError("Service busy: Queue is full.")
+
+        self._sidecar_pending.add(request_id)
+        try:
+            async with self._sidecar_semaphore:
+                engine = self._get_apple_speech_engine()
+                language = params.get("language", "auto")
+                output_format = params.get("output_format", "json")
+                with_timestamp = params.get("with_timestamp", False)
+                return await asyncio.to_thread(
+                    engine.transcribe_file,
+                    temp_file_path,
+                    language=language if isinstance(language, str) else "auto",
+                    output_format=output_format if isinstance(output_format, str) else "json",
+                    with_timestamp=with_timestamp if isinstance(with_timestamp, bool) else False,
+                )
+        finally:
+            self._sidecar_pending.discard(request_id)
+
     async def _enqueue_worker_job(
         self,
         future: asyncio.Future[object],
@@ -270,7 +344,7 @@ class TranscriptionService:
         diarizer_alias: str | None,
     ) -> None:
         async with self._spawn_lock:
-            if len(self._pending) >= self._max_queue_size:
+            if self._active_job_count() >= self._max_queue_size:
                 self.logger.warning(f"[{request_id}] Queue full, rejecting worker job")
                 raise RuntimeError("Service busy: Queue is full.")
 

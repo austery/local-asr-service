@@ -17,3 +17,15 @@ def test_live_runtime_cancels_results_task_on_early_exit() -> None:
     analyze_index = source.index("analyzer.analyzeSequence")
 
     assert task_index < cancel_index < analyze_index
+
+
+def test_live_runtime_does_not_statically_bind_speech_result_range_type() -> None:
+    source = (
+        WORKSPACE_ROOT
+        / "apple-speech-worker"
+        / "Sources"
+        / "AppleSpeechWorkerCore"
+        / "LiveAppleSpeechRuntime.swift"
+    ).read_text()
+
+    assert "result.range" not in source

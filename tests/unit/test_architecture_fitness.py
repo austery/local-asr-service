@@ -221,6 +221,8 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
 
     allowed_core_files = {
         "__init__.py",
+        "apple_speech_engine.py",
+        "apple_speech_port.py",
         "base_engine.py",
         "alignment_port.py",
         "diarization_port.py",

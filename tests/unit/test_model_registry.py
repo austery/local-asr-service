@@ -85,6 +85,19 @@ class TestRuntimeContracts:
         assert "FunASR" in spec.description
         assert "PyTorch" in spec.description
 
+    def test_apple_speech_alias_should_use_apple_speech_runtime_contract(self) -> None:
+        spec = lookup("apple-speech")
+
+        assert spec.engine_type == "apple-speech"
+        assert spec.model_id == "apple-speech:speechTranscriber"
+        assert spec.capabilities.timestamp is True
+        assert spec.capabilities.diarization is False
+        assert "ASR-only" in spec.description
+
+    def test_apple_dictation_alias_should_stay_hidden_until_runtime_support_exists(self) -> None:
+        with pytest.raises(ValueError, match="Unknown model"):
+            lookup("apple-dictation")
+
 
 class TestPassthrough:
     def test_should_return_true_for_none(self) -> None:

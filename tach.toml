@@ -31,6 +31,7 @@ depends_on = [
   "src.core",
   "src.core.alignment_port",
   "src.core.diarization_port",
+  "src.core.apple_speech_port",
   "src.adapters",
   "src.workers",
   "src.config",
@@ -50,6 +51,7 @@ path = "src.core"
 depends_on = [
   "src.core.alignment_port",
   "src.core.diarization_port",
+  "src.core.apple_speech_port",
   "src.adapters",
   "src.config",
 ]
@@ -63,6 +65,10 @@ depends_on = []
 path = "src.core.diarization_port"
 depends_on = []
 
+[[modules]]
+path = "src.core.apple_speech_port"
+depends_on = []
+
 # ── Adapters: Helper utilities for audio and text processing ──
 # Depends only on interfaces (ports) and config.
 [[modules]]
@@ -70,6 +76,7 @@ path = "src.adapters"
 depends_on = [
   "src.core.alignment_port",
   "src.core.diarization_port",
+  "src.core.apple_speech_port",
   "src.config",
 ]
 

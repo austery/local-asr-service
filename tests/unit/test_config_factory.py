@@ -1,4 +1,5 @@
 import os
+from typing import get_args
 from unittest.mock import patch
 
 from src.core.funasr_engine import DEFAULT_MODEL_ID
@@ -28,6 +29,11 @@ class TestConfig:
             assert src.config.MLX_MODEL_ID == "mlx-community/Qwen3-ASR-1.7B-8bit"
         finally:
             os.environ.update(old_env)
+
+    def test_startup_engine_type_should_exclude_sidecar_only_runtimes(self) -> None:
+        import src.config
+
+        assert get_args(src.config.EngineType) == ("funasr", "mlx")
 
 
 class TestFactory:

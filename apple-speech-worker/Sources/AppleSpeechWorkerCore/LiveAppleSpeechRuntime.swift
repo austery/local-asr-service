@@ -176,8 +176,9 @@ public final class LiveAppleSpeechRuntime: AppleSpeechRuntime, @unchecked Sendab
         id: Int,
         result: SpeechTranscriber.Result
     ) -> TranscriptionSegment {
-        let start = seconds(result.range.start)
-        let duration = seconds(result.range.duration)
+        let timeRange = speechResultTimeRange(result)
+        let start = timeRange.map { seconds($0.start) } ?? 0.0
+        let duration = timeRange.map { seconds($0.duration) } ?? 0.0
         return TranscriptionSegment(
             id: id,
             start: start,
@@ -187,6 +188,14 @@ public final class LiveAppleSpeechRuntime: AppleSpeechRuntime, @unchecked Sendab
             confidence: nil,
             speaker: nil
         )
+    }
+
+    private func speechResultTimeRange(_ result: SpeechTranscriber.Result) -> CMTimeRange? {
+        // Avoid binding to beta SDK variations of SpeechTranscriber.Result.range.
+        Mirror(reflecting: result)
+            .children
+            .first { $0.label == "range" }?
+            .value as? CMTimeRange
     }
 
     private func seconds(_ time: CMTime) -> Double {
