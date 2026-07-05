@@ -52,6 +52,24 @@ class TestMlxLanguageNormalization:
 
         assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "zh") == "Chinese"
 
+    @pytest.mark.parametrize(
+        ("language", "expected"),
+        [
+            ("zh-CN", "Chinese"),
+            ("zh_CN", "Chinese"),
+            ("en-US", "English"),
+            ("en_US", "English"),
+        ],
+    )
+    def test_should_map_public_locale_for_qwen3_asr(
+        self,
+        language: str,
+        expected: str,
+    ) -> None:
+        from src.core.mlx_engine import _normalize_mlx_language
+
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", language) == expected
+
     def test_should_map_cantonese_code_for_qwen3_asr(self) -> None:
         from src.core.mlx_engine import _normalize_mlx_language
 

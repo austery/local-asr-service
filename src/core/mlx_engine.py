@@ -40,9 +40,13 @@ _MLX_DEFAULT_CAPS = EngineCapabilities()
 
 _QWEN3_LANGUAGE_ALIASES: dict[str, str] = {
     "en": "English",
+    "en-us": "English",
+    "en_us": "English",
     "eng": "English",
     "english": "English",
     "zh": "Chinese",
+    "zh-cn": "Chinese",
+    "zh_cn": "Chinese",
     "cn": "Chinese",
     "chinese": "Chinese",
     "yue": "Cantonese",
