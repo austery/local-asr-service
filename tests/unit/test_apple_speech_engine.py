@@ -99,9 +99,29 @@ def test_transcribe_file_maps_short_language_codes_to_apple_locales() -> None:
 
     engine.transcribe_file("/tmp/audio.wav", language="zh", output_format="json")
     engine.transcribe_file("/tmp/audio.wav", language="en", output_format="json")
-    engine.transcribe_file("/tmp/audio.wav", language="auto", output_format="json")
 
-    assert [call[1] for call in client.calls] == ["zh-CN", "en-US", "en-US"]
+    assert [call[1] for call in client.calls] == ["zh-CN", "en-US"]
+
+
+def test_transcribe_file_requires_language_argument() -> None:
+    client = FakeClient()
+    engine = AppleSpeechEngine(client=client, module="speechTranscriber")
+
+    with pytest.raises(TypeError, match="language"):
+        engine.transcribe_file("/tmp/audio.wav", output_format="json")
+
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("language", ["auto", "AUTO", "   "])
+def test_transcribe_file_rejects_implicit_language_for_apple_speech(language: str) -> None:
+    client = FakeClient()
+    engine = AppleSpeechEngine(client=client, module="speechTranscriber")
+
+    with pytest.raises(ValueError, match="requires an explicit language"):
+        engine.transcribe_file("/tmp/audio.wav", language=language, output_format="json")
+
+    assert client.calls == []
 
 
 def test_transcribe_file_never_synthesizes_speaker_labels() -> None:

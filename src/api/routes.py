@@ -120,6 +120,11 @@ def _resolve_pipeline_profile(model: str | None) -> PipelineProfile | None:
         return None
 
 
+def _is_implicit_language(language: str) -> bool:
+    normalized = language.strip()
+    return not normalized or normalized.lower() == "auto"
+
+
 @router.post("/v1/audio/transcriptions", response_model=None)
 async def create_transcription(
     request: Request,
@@ -136,7 +141,13 @@ async def create_transcription(
             "Examples: 'paraformer', 'qwen3-asr', 'qwen3-sortformer', 'apple-speech'."
         ),
     ),
-    language: str = Form("auto", description="Language code (auto, zh, en)"),
+    language: str = Form(
+        "auto",
+        description=(
+            "Language code. Use 'zh'/'zh-CN' or 'en'/'en-US' for Apple Speech; "
+            "'auto' is only supported by engines with language detection."
+        ),
+    ),
     response_format: str | None = Form(
         None, description="OpenAI-compatible format: json, verbose_json, text, vtt, srt"
     ),
@@ -153,6 +164,7 @@ async def create_transcription(
     - Pass `model=qwen3-asr` for single-speaker quality-first content.
     - Pass `model=qwen3-sortformer` for opt-in English long-form batch speaker separation.
     - Pass `model=apple-speech` for macOS 26+ Apple SpeechAnalyzer ASR-only sidecar transcription.
+      Apple Speech requires an explicit language or locale, such as `zh-CN` or `en-US`.
     - `apple-dictation` remains hidden until the Swift runtime supports DictationTranscriber.
     - Omit `model` to use the server's currently loaded model.
     - `model=whisper-1` is accepted as an OpenAI-compatible passthrough value and
@@ -221,6 +233,25 @@ async def create_transcription(
     # 4. Resolve effective output format
     effective_format = response_format if response_format is not None else output_format
     effective_format = _RESPONSE_FORMAT_MAP.get(effective_format, effective_format)
+
+    spec_for_language_validation = resolved_spec
+    if spec_for_language_validation is None and resolved_profile is None:
+        current_spec = request.app.state.service.current_model_spec
+        if isinstance(current_spec, ModelSpec):
+            spec_for_language_validation = current_spec
+
+    if (
+        isinstance(spec_for_language_validation, ModelSpec)
+        and spec_for_language_validation.engine_type == "apple-speech"
+        and _is_implicit_language(language)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "model=apple-speech requires an explicit language or locale; "
+                "pass 'zh', 'zh-CN', 'en', or 'en-US' instead of 'auto'."
+            ),
+        )
 
     # 5. Capability pre-validation (fail fast before queuing)
     #    If the request specifies a model, validate against ITS declared capabilities
