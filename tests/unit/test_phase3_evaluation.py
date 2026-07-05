@@ -38,6 +38,16 @@ def test_analyze_segments_detects_timing_defects() -> None:
     assert summary.zero_or_negative_duration_count == 2
 
 
+def test_analyze_segments_marks_all_non_dict_items_as_invalid() -> None:
+    summary = analyze_segments({"segments": ["string", 42, None]})
+
+    assert summary.field_state == "invalid"
+    assert summary.count == 0
+    assert summary.monotonic is False
+    assert summary.missing_timing_count == 3
+    assert summary.zero_or_negative_duration_count == 0
+
+
 def test_summarize_json_response_keeps_model_language_and_preview() -> None:
     summary = summarize_json_response(
         {

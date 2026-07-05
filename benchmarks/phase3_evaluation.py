@@ -212,6 +212,15 @@ def analyze_segments(payload: dict[str, object]) -> SegmentSummary:
             monotonic = False
         previous_end = end
 
+    if count == 0 and missing_timing_count > 0:
+        return SegmentSummary(
+            field_state="invalid",
+            count=0,
+            monotonic=False,
+            missing_timing_count=missing_timing_count,
+            zero_or_negative_duration_count=0,
+        )
+
     return SegmentSummary(
         field_state="non_empty",
         count=count,
