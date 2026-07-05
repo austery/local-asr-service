@@ -42,6 +42,42 @@ These benchmark rows predate Apple Speech integration. Use
 `benchmarks/phase3_evaluation.py` for SPEC-014 Phase 3 Apple Speech comparisons
 against Paraformer and Qwen3-ASR.
 
+### SPEC-014 Phase 3 Long Audio Probe (53m Chinese Session, 2026-07-05)
+
+Command shape:
+
+```bash
+uv run python benchmarks/phase3_evaluation.py \
+  --file /Users/leipeng/Downloads/750BF500-09E2-4821-B2B9-15383C915051.wav \
+  --language zh-CN \
+  --models apple-speech paraformer \
+  --base-url http://127.0.0.1:50700 \
+  --server-pid 76957 \
+  --timeout 7200 \
+  --srt-probe \
+  --save
+```
+
+`qwen3-asr` was rerun with `language=zh` because the live service still had the
+pre-fix Qwen3 locale alias bug where `zh-CN` was not normalized to `Chinese`.
+
+| Model | Language | Status | Elapsed | RTF | Realtime | Peak process-tree RSS | Segment/SRT notes |
+|-------|----------|--------|---------|-----|----------|------------------------|-------------------|
+| `apple-speech` | `zh-CN` | ✅ | 20.77s | 0.0065 | 154.4x | 88.9 MB | 213 JSON segments; SRT valid; JSON segment monotonicity flagged false |
+| `paraformer` | `zh-CN` | ✅ | 100.38s | 0.0313 | 31.9x | 6444.6 MB | 1129 JSON segments; SRT valid; monotonic timing |
+| `qwen3-asr` | `zh` | ✅ | 237.92s | 0.0742 | 13.5x | 4500.5 MB | 5 JSON segments; SRT probe produced no valid cues |
+
+Early interpretation:
+
+- `apple-speech` is the strongest low-resource local ASR candidate for long
+  Chinese dictation/transcription. Its speed and memory profile are materially
+  better than both local neural-model paths on this sample.
+- `paraformer` remains the structurally safest long-form meeting path when
+  timestamp density, SRT correctness, and diarization matter.
+- `qwen3-asr` can produce usable long-form text when given the runtime's expected
+  language value, but its long-audio segment granularity is too coarse for SRT or
+  downstream speaker/timeline workflows in this probe.
+
 ### Short Audio (60s, two-speaker English conversation)
 
 | Model | RTF | Realtime | Notes |
@@ -68,7 +104,7 @@ against Paraformer and Qwen3-ASR.
 | Mandarin long-form podcast (20-60min) | `paraformer` | Best verified long-audio RTF, CAM++ diarization |
 | Chinese/English quality-first single-speaker audio | `qwen3-asr` | MLX-native Qwen3-ASR with explicit language prompt forwarding |
 | Spokenly local dictation fallback | `qwen3-asr` | Best current local path for low-latency single-speaker voice input through an OpenAI-compatible endpoint |
-| Apple-native low-resource local dictation on macOS 26+ | `apple-speech` | Promising after the 50-minute smoke, but final recommendation strength is pending SPEC-014 Phase 3; requires explicit language; ASR-only until diarization gates pass |
+| Apple-native low-resource local dictation/transcription on macOS 26+ | `apple-speech` | Strong Phase 3 long-audio resource result; keep ASR-only until segment ordering and diarization gates pass |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
 | Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
 | Experimental Apple-native English speaker-separation evaluation | `qwen3-sortformer` | Keeps the experiment callable, but current real-meeting evidence does not justify recommending it |
