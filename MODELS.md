@@ -71,7 +71,10 @@ Early interpretation:
 
 - `apple-speech` is the strongest low-resource local ASR candidate for long
   Chinese dictation/transcription. Its speed and memory profile are materially
-  better than both local neural-model paths on this sample.
+  better than both local neural-model paths on this sample. User review of the
+  full transcript found the output better than expected for a familiar long
+  Mandarin therapy conversation; mixed English terms were imperfect but
+  recognizable.
 - `paraformer` remains the structurally safest long-form meeting path when
   timestamp density, SRT correctness, and diarization matter.
 - `qwen3-asr` can produce usable long-form text when given the runtime's expected
@@ -104,7 +107,7 @@ Early interpretation:
 | Mandarin long-form podcast (20-60min) | `paraformer` | Best verified long-audio RTF, CAM++ diarization |
 | Chinese/English quality-first single-speaker audio | `qwen3-asr` | MLX-native Qwen3-ASR with explicit language prompt forwarding |
 | Spokenly local dictation fallback | `qwen3-asr` | Best current local path for low-latency single-speaker voice input through an OpenAI-compatible endpoint |
-| Apple-native low-resource local dictation/transcription on macOS 26+ | `apple-speech` | Strong Phase 3 long-audio resource result; keep ASR-only until segment ordering and diarization gates pass |
+| Apple-native low-resource local dictation/transcription on macOS 26+ | `apple-speech` | Recommended ASR-only low-resource path after Phase 3 long-audio evidence and user quality review; no speaker labels |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
 | Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
 | Experimental Apple-native English speaker-separation evaluation | `qwen3-sortformer` | Keeps the experiment callable, but current real-meeting evidence does not justify recommending it |

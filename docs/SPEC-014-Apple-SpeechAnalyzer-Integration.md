@@ -708,30 +708,52 @@ Interpretation:
 - Qwen3-ASR remains useful for raw text quality experiments, but this long-audio
   probe shows insufficient segment granularity for subtitle or downstream
   timeline workflows.
-- Apple Speech should not be promoted as the general meeting-transcript default
-  from this single sample. The near-term role is ASR-only low-resource
-  dictation/transcription, pending segment-ordering review and diarization
-  integration evidence.
+- User review of the full transcript judged the output better than expected on
+  a familiar long therapy conversation: paragraph-like segmentation was useful,
+  Mandarin accuracy was strong, and mixed English terms were imperfect but
+  recognizable.
+- Apple Speech is recommended as the Apple Silicon low-resource ASR-only
+  fallback/default candidate for transcription and dictation. It should not be
+  promoted as the general multi-speaker meeting-transcript default because it
+  does not provide speaker labels.
 
 Acceptance: Apple SpeechAnalyzer has a clear recommended role, even if it is ASR-only.
 
-### Phase 4: Dictation vocabulary mode
+### Phase 4: Optional dictation vocabulary mode
 
-- [ ] Add configurable contextual vocabulary list.
-- [ ] Include user/project terms: `local-asr-service`, `PureSubs`, `FunASR`, `Qwen3-ASR`, `SpeechAnalyzer`, `Spokenly`, `Soniox`, `ElevenLabs`, `WhisperX`, `pyannote`, `Playwright`, `Spring Boot`, `Spinnaker`, `GitHub Actions`, `Obsidian`.
-- [ ] Validate whether DictationTranscriber improves short input over SpeechTranscriber.
+Status: optional parking lot, not required for the transcription gateway.
 
-Acceptance: `apple-dictation` is either implemented and recommended for short dictation, or kept hidden as an unregistered future alias.
+Rationale: `DictationTranscriber` and contextual vocabulary are useful only if
+the product goal shifts toward short dictation with technical term bias. The
+current service goal is file-based transcription through an OpenAI-compatible
+gateway, and `apple-speech` already covers the ASR-only path.
+
+Keep `apple-dictation` hidden unless a future dictation-specific slice proves
+that it improves short input over `SpeechTranscriber` on user/project terms such
+as `local-asr-service`, `PureSubs`, `FunASR`, `Qwen3-ASR`, `SpeechAnalyzer`,
+`Spokenly`, `Soniox`, `ElevenLabs`, `WhisperX`, `pyannote`, `Playwright`,
+`Spring Boot`, `Spinnaker`, `GitHub Actions`, and `Obsidian`.
+
+Acceptance: no Phase 4 work is needed for SPEC-014 completion; `apple-dictation`
+remains unregistered unless a later dictation slice explicitly revives it.
 
 ### Phase 5: Diarization integration probe
 
-- [ ] Feed Apple time-ranged output into the existing segment alignment layer.
-- [ ] Run external diarization, initially the existing Sortformer route if it remains available.
-- [ ] Align Apple transcript units to speaker turns.
-- [ ] Apply quality gates.
-- [ ] Compare against previous `qwen3-sortformer` outputs on the same 1:1 meeting sample.
+Status: rejected/deferred for the current product boundary.
 
-Acceptance: either a truthful speaker-labeled path emerges, or the Apple path remains ASR-only and the spec explicitly blocks diarized promotion.
+Rationale: Apple SpeechAnalyzer does not provide speaker labels in the validated
+service path. Building speaker separation by taking Apple ASR timing, running a
+separate diarizer, and manually aligning speaker turns is too heavy for
+`local-asr-service`; it repeats the complexity that made the previous
+`qwen3-sortformer` experiment a poor fit for this lightweight gateway.
+
+Decision: do not implement Apple diarization integration in SPEC-014. The Apple
+path remains ASR-only. Multi-speaker meeting workflows should continue to use
+`paraformer`/CAM++ or a future upstream runtime that provides speaker labels
+with acceptable quality and resource cost.
+
+Acceptance: SPEC-014 is allowed to finish with Apple diarization explicitly
+blocked; no speaker field should be non-null for `model=apple-speech`.
 
 ### Phase 6: Production decision
 
@@ -739,11 +761,14 @@ Possible outcomes:
 
 ```text
 A. Promote apple-speech as default local dictation / transcription engine.
-B. Promote apple-dictation for short dictation only.
+B. Keep apple-dictation hidden unless a future short-dictation slice revives it.
 C. Keep Apple ASR as optional local engine.
-D. Use Apple transcript + external diarization as an experimental speaker pipeline.
-E. Do not promote Apple diarization integration because timing granularity or speaker quality gates fail.
+D. Do not promote Apple diarization integration in this service.
 ```
+
+Chosen outcome after the first Phase 3 evidence review: A for ASR-only
+transcription/dictation on Apple Silicon, B for `apple-dictation`, and D for
+diarization.
 
 ## 10. Acceptance criteria
 
