@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 import requests
+from requests import Response
 
 JsonObject = dict[str, object]
 SegmentFieldState = Literal["missing", "null", "empty", "non_empty", "invalid"]
@@ -123,8 +124,15 @@ class ProbeRequest:
     timeout_seconds: float
 
 
+@dataclass(frozen=True)
+class ProcessRssRow:
+    pid: int
+    ppid: int
+    rss_kb: int
+
+
 class PeakRssSampler:
-    """Poll one process RSS while a probe request is in flight."""
+    """Poll one process tree RSS while a probe request is in flight."""
 
     def __init__(self, pid: int | None, interval_seconds: float = 0.25) -> None:
         self._pid = pid
@@ -152,7 +160,7 @@ class PeakRssSampler:
         if self._pid is None:
             return
         while not self._stop_event.is_set():
-            rss_mb = sample_process_rss_mb(self._pid)
+            rss_mb = sample_process_tree_rss_mb(self._pid)
             if rss_mb is not None and (
                 self._peak_rss_mb is None or rss_mb > self._peak_rss_mb
             ):
@@ -185,7 +193,7 @@ def analyze_segments(payload: dict[str, object]) -> SegmentSummary:
     if not isinstance(segments_obj, list):
         return SegmentSummary("invalid", 0, None, 0, 0)
     if not segments_obj:
-        return SegmentSummary("empty", 0, True, 0, 0)
+        return SegmentSummary("empty", 0, None, 0, 0)
 
     count = 0
     missing_timing_count = 0
@@ -207,7 +215,6 @@ def analyze_segments(payload: dict[str, object]) -> SegmentSummary:
             continue
         if end <= start:
             zero_or_negative_duration_count += 1
-            monotonic = False
         if previous_end is not None and start < previous_end:
             monotonic = False
         previous_end = end
@@ -314,6 +321,49 @@ def parse_ps_rss_kb(stdout: str) -> int | None:
         return None
 
 
+def parse_ps_process_table(stdout: str) -> list[ProcessRssRow]:
+    """Parse `ps -axo pid=,ppid=,rss=` output."""
+    rows: list[ProcessRssRow] = []
+    for raw_line in stdout.splitlines():
+        parts = raw_line.split()
+        if len(parts) != 3:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+            rss_kb = int(parts[2])
+        except ValueError:
+            continue
+        rows.append(ProcessRssRow(pid=pid, ppid=ppid, rss_kb=rss_kb))
+    return rows
+
+
+def process_tree_rss_mb_from_table(root_pid: int, rows: list[ProcessRssRow]) -> float | None:
+    """Sum RSS for a root process and all descendants from a parsed process table."""
+    rows_by_pid = {row.pid: row for row in rows}
+    if root_pid not in rows_by_pid:
+        return None
+
+    children_by_parent: dict[int, list[int]] = {}
+    for row in rows:
+        children_by_parent.setdefault(row.ppid, []).append(row.pid)
+
+    to_visit = [root_pid]
+    visited: set[int] = set()
+    total_rss_kb = 0
+    while to_visit:
+        pid = to_visit.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        current_row = rows_by_pid.get(pid)
+        if current_row is not None:
+            total_rss_kb += current_row.rss_kb
+        to_visit.extend(children_by_parent.get(pid, []))
+
+    return round(total_rss_kb / 1024, 3)
+
+
 def sample_process_rss_mb(pid: int) -> float | None:
     """Sample one process RSS via POSIX `ps`; returns MiB."""
     if pid <= 0:
@@ -330,6 +380,21 @@ def sample_process_rss_mb(pid: int) -> float | None:
     if rss_kb is None:
         return None
     return round(rss_kb / 1024, 3)
+
+
+def sample_process_tree_rss_mb(pid: int) -> float | None:
+    """Sample a process plus descendants RSS via POSIX `ps`; returns MiB."""
+    if pid <= 0:
+        return None
+    completed = subprocess.run(
+        ["ps", "-axo", "pid=,ppid=,rss="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return process_tree_rss_mb_from_table(pid, parse_ps_process_table(completed.stdout))
 
 
 def run_json_probe(request: ProbeRequest) -> ProbeResult:
@@ -360,8 +425,8 @@ def run_json_probe(request: ProbeRequest) -> ProbeResult:
             ),
         )
 
-    payload_obj: object = response.json()
-    if not isinstance(payload_obj, dict):
+    payload_obj, decode_error = decode_json_response(response)
+    if decode_error is not None or payload_obj is None:
         return build_probe_result(
             identity,
             ProbeOutcome(
@@ -370,7 +435,7 @@ def run_json_probe(request: ProbeRequest) -> ProbeResult:
                 json_summary=None,
                 srt_summary=None,
                 peak_rss_mb=sampler.peak_rss_mb,
-                error="JSON response body is not an object",
+                error=decode_error or "JSON response body is not an object",
             ),
         )
 
@@ -385,6 +450,22 @@ def run_json_probe(request: ProbeRequest) -> ProbeResult:
             error=None,
         ),
     )
+
+
+def decode_json_response(response: Response) -> tuple[JsonObject | None, str | None]:
+    """Decode a requests response body as a JSON object for result summarization."""
+    return decode_json_object(response.text)
+
+
+def decode_json_object(text: str) -> tuple[JsonObject | None, str | None]:
+    """Decode text as a JSON object, returning a structured error instead of raising."""
+    try:
+        decoded: object = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return None, f"Response body is not valid JSON: {exc.msg}"
+    if not isinstance(decoded, dict):
+        return None, "JSON response body is not an object"
+    return decoded, None
 
 
 def run_srt_probe(
@@ -489,7 +570,20 @@ def _probe_duration_seconds(file_path: Path) -> float:
     )
     if completed.returncode != 0:
         raise RuntimeError(f"ffprobe failed for {file_path}: {completed.stderr.strip()}")
-    return float(completed.stdout.strip())
+    return parse_ffprobe_duration_stdout(completed.stdout, file_path)
+
+
+def parse_ffprobe_duration_stdout(stdout: str, file_path: Path) -> float:
+    """Parse ffprobe duration output into seconds with actionable errors."""
+    stripped = stdout.strip()
+    if not stripped:
+        raise RuntimeError(f"ffprobe returned empty duration for {file_path}")
+    try:
+        return float(stripped)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"ffprobe returned non-numeric duration for {file_path}: {stripped!r}"
+        ) from exc
 
 
 def _print_result(result: ProbeResult) -> None:
@@ -510,7 +604,12 @@ def main() -> None:
     parser.add_argument("--language", required=True, help="Explicit language/locale, e.g. zh-CN")
     parser.add_argument("--models", nargs="+", required=True, help="Model aliases to compare")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Service base URL")
-    parser.add_argument("--server-pid", type=int, default=None, help="Optional service PID for RSS")
+    parser.add_argument(
+        "--server-pid",
+        type=int,
+        default=None,
+        help="Optional service PID for process-tree RSS sampling",
+    )
     parser.add_argument("--timeout", type=float, default=900.0, help="Per-request timeout seconds")
     parser.add_argument("--save", action="store_true", help="Save JSON report")
     parser.add_argument("--srt-probe", action="store_true", help="Also run output_format=srt")

@@ -667,7 +667,8 @@ The harness records:
 
 - explicit model alias and explicit language/locale;
 - elapsed time, RTF, and speed ratio;
-- optional peak service RSS sampled from `ps` when `--server-pid` is passed;
+- optional peak process-tree RSS sampled from `ps` when `--server-pid` is passed,
+  including the FastAPI process and descendant worker/sidecar processes;
 - JSON response-shape summary, including whether `segments` is missing, null,
   empty, non-empty, or invalid;
 - segment monotonicity and zero/non-positive duration counts;

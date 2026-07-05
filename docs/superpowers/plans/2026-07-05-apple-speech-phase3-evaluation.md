@@ -4,7 +4,7 @@
 
 **Goal:** Make SPEC-014 Phase 3 evaluation reproducible enough to decide whether `apple-speech` is usable through the normal API, which workflows it should be recommended for, and where it must remain ASR-only or experimental.
 
-**Architecture:** Keep evaluation at the gateway boundary. The harness calls `/v1/audio/transcriptions` with explicit `model` and `language`, records response shape, timing/SRT behavior, runtime duration, optional server RSS, and enough text summary to compare Apple Speech against Paraformer and Qwen3-ASR without turning this repo into a general ASR leaderboard.
+**Architecture:** Keep evaluation at the gateway boundary. The harness calls `/v1/audio/transcriptions` with explicit `model` and `language`, records response shape, timing/SRT behavior, runtime duration, optional process-tree RSS, and enough text summary to compare Apple Speech against Paraformer and Qwen3-ASR without turning this repo into a general ASR leaderboard.
 
 **Tech Stack:** Python 3.11, FastAPI contract tests, pytest, requests, POSIX `ps` sampling, `uv`.
 
@@ -93,7 +93,7 @@ Expected: PASS.
 
 - [ ] **Step 1: Add failing tests for `build_probe_result`, invalid RSS parsing, and unavailable-process sampling.**
 - [ ] **Step 2: Verify tests fail.**
-- [ ] **Step 3: Implement `ProbeResult`, `sample_process_rss_mb`, `PeakRssSampler`, `run_json_probe`, optional `run_srt_probe`, and CLI.**
+- [ ] **Step 3: Implement `ProbeResult`, process-tree RSS sampling, `PeakRssSampler`, `run_json_probe`, optional `run_srt_probe`, and CLI.**
 - [ ] **Step 4: Verify focused tests pass.**
 
 Example command:
