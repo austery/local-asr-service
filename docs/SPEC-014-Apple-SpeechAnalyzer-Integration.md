@@ -674,6 +674,45 @@ The harness records:
 - segment monotonicity and zero/non-positive duration counts;
 - optional SRT cue count and monotonicity.
 
+#### Phase 3 evidence snapshot: 53-minute Chinese session, 2026-07-05
+
+Sample:
+
+```text
+/Users/leipeng/Downloads/750BF500-09E2-4821-B2B9-15383C915051.wav
+duration: 3206.752s
+format: 16 kHz mono PCM WAV
+```
+
+Results:
+
+| Model | Language | Status | Elapsed | RTF | Speed ratio | Peak process-tree RSS | Structure notes |
+|-------|----------|--------|---------|-----|-------------|------------------------|-----------------|
+| `apple-speech` | `zh-CN` | pass | 20.77s | 0.0065 | 154.4x | 88.9 MB | 213 JSON segments; no missing timing; no zero/negative durations; SRT valid; JSON segment monotonicity flagged false |
+| `paraformer` | `zh-CN` | pass | 100.38s | 0.0313 | 31.9x | 6444.6 MB | 1129 JSON segments; no missing timing; no zero/negative durations; SRT valid; monotonic timing |
+| `qwen3-asr` | `zh` | pass | 237.92s | 0.0742 | 13.5x | 4500.5 MB | 5 JSON segments; no missing timing; SRT probe produced no valid cues |
+
+An initial `qwen3-asr` probe with `language=zh-CN` failed immediately because
+the live service did not yet normalize public locale values to Qwen3's internal
+language names. That is an API/runtime-boundary defect, not a benchmark harness
+failure: callers should not need to know that Qwen3 expects `Chinese` while Apple
+Speech expects locales such as `zh-CN`.
+
+Interpretation:
+
+- Apple Speech is the strongest low-resource local ASR candidate on this sample.
+  It completed the 53-minute file much faster than the local neural-model paths
+  and with far lower process-tree RSS.
+- Paraformer remains the most structurally reliable long-form path when dense
+  segments, SRT correctness, monotonic timing, and diarization matter.
+- Qwen3-ASR remains useful for raw text quality experiments, but this long-audio
+  probe shows insufficient segment granularity for subtitle or downstream
+  timeline workflows.
+- Apple Speech should not be promoted as the general meeting-transcript default
+  from this single sample. The near-term role is ASR-only low-resource
+  dictation/transcription, pending segment-ordering review and diarization
+  integration evidence.
+
 Acceptance: Apple SpeechAnalyzer has a clear recommended role, even if it is ASR-only.
 
 ### Phase 4: Dictation vocabulary mode
