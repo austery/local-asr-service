@@ -347,7 +347,6 @@ async def create_transcription(
             text_obj = result.get("text", "")
             text = text_obj if isinstance(text_obj, str) else ""
             segments_obj = result.get("segments", [])
-            segments_data = segments_obj if isinstance(segments_obj, list) else []
             duration_obj = result.get("duration", 0.0)
             duration = (
                 float(duration_obj)
@@ -359,9 +358,9 @@ async def create_transcription(
                 response_language = result_language
 
             segments: list[Segment] | None = None
-            if effective_format == "json" and segments_data:
+            if effective_format == "json" and isinstance(segments_obj, list):
                 segments = []
-                for i, seg in enumerate(segments_data):
+                for i, seg in enumerate(segments_obj):
                     if not isinstance(seg, dict):
                         continue
                     speaker = seg.get("speaker")
