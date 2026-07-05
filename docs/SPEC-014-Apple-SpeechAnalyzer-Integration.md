@@ -605,6 +605,17 @@ Phase 2 smoke update from 2026-07-05:
 
 ### Phase 3: Batch transcription quality probe
 
+Phase 3 is a usability and recommendation gate, not a leaderboard. It follows
+the same pattern as SPEC-008 and SPEC-013: prove the model works through the
+normal OpenAI-compatible API, record speed/resource/response-shape/quality facts
+on representative samples, then classify the model as recommended, optional,
+experimental, or not promoted for each workflow. The practical question is:
+
+```text
+After Apple Speech is connected to the existing pipeline, is it actually usable
+through the normal API, and if yes, for which scenario?
+```
+
 Run at least these samples:
 
 ```text
@@ -638,6 +649,29 @@ runtime duration
 peak process memory
 failure rate
 ```
+
+Reproducible local harness:
+
+```bash
+uv run python benchmarks/phase3_evaluation.py \
+  --file /path/to/sample.wav \
+  --language zh-CN \
+  --models apple-speech paraformer qwen3-asr \
+  --base-url http://localhost:50700 \
+  --server-pid <service-pid> \
+  --srt-probe \
+  --save
+```
+
+The harness records:
+
+- explicit model alias and explicit language/locale;
+- elapsed time, RTF, and speed ratio;
+- optional peak service RSS sampled from `ps` when `--server-pid` is passed;
+- JSON response-shape summary, including whether `segments` is missing, null,
+  empty, non-empty, or invalid;
+- segment monotonicity and zero/non-positive duration counts;
+- optional SRT cue count and monotonicity.
 
 Acceptance: Apple SpeechAnalyzer has a clear recommended role, even if it is ASR-only.
 

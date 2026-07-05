@@ -270,6 +270,29 @@ def test_should_submit_apple_speech_model_spec_to_service() -> None:
     mock_service.submit_pipeline.assert_not_awaited()
 
 
+def test_should_preserve_empty_segments_for_json_response() -> None:
+    apple_spec = real_lookup("apple-speech")
+    mock_service = _make_mock_service(
+        apple_spec.capabilities,
+        {"text": "apple result", "segments": [], "duration": 1.0, "language": "en-US"},
+        current_model_spec=apple_spec,
+    )
+
+    with (
+        patch("src.main.TranscriptionService", return_value=mock_service),
+        patch("src.main.lookup", return_value=apple_spec),
+        TestClient(app) as c,
+    ):
+        response = c.post(
+            "/v1/audio/transcriptions",
+            data={"model": "apple-speech", "language": "en-US", "output_format": "json"},
+            files={"file": _audio_file()},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["segments"] == []
+
+
 @pytest.mark.parametrize("language", ["auto", "   "])
 def test_should_reject_implicit_language_for_apple_speech(language: str) -> None:
     qwen_spec = real_lookup("qwen3-asr")
