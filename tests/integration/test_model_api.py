@@ -101,6 +101,8 @@ def test_openapi_transcription_docs_should_use_current_model_aliases() -> None:
     assert "passthrough" in model_description
     assert "fresh server default is `paraformer`" in model_description
     assert "model=apple-speech" in description
+    assert "pass `zh`, `zh-CN`, `en`, or `en-US`" in description
+    assert "Short codes `zh` and `en` are mapped to Apple locales internally" in description
     assert "'apple-speech'" in model_description
 
 

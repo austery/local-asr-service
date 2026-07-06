@@ -120,6 +120,12 @@ curl http://localhost:50700/v1/audio/transcriptions \
 curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
   -F "model=qwen3-asr"
+
+# Apple Speech ASR-only path (requires explicit language; short codes are preferred)
+curl http://localhost:50700/v1/audio/transcriptions \
+  -F "file=@audio.mp3;type=audio/mpeg" \
+  -F "model=apple-speech" \
+  -F "language=zh"
 ```
 
 **Request parameters:**
@@ -130,7 +136,7 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `output_format` | `json` | Output: `json`, `txt`, `srt` |
 | `response_format` | — | OpenAI alias: `verbose_json`, `text`, `vtt` |
 | `with_timestamp` | `false` | Prepend `[MM:SS]` to each line in txt mode |
-| `language` | `auto` | `zh`, `zh-CN`, `en`, `en-US`, `auto`; Apple Speech requires an explicit language and rejects `auto` |
+| `language` | `auto` | `zh`, `zh-CN`, `en`, `en-US`, `auto`; Apple Speech requires an explicit language, accepts `zh`/`en` as API-level short codes, and rejects `auto` |
 | `model` | — | Alias or full model path. Omit to keep current model. |
 
 **Supported Models (`model` parameter):**
@@ -141,7 +147,7 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `qwen3-asr` | MLX | mlx-audio/MLX Metal path; Chinese/English quality-first ASR |
 | `sensevoice-small` | FunASR | FunASR/PyTorch MPS path; speed-first language/emotion tags |
 | `qwen3-sortformer` | Pipeline | Experimental opt-in evaluation path for Qwen3-ASR + forced alignment + Sortformer |
-| `apple-speech` | Apple Speech | macOS 26+ SpeechAnalyzer sidecar; requires explicit `language` such as `zh-CN` or `en-US` |
+| `apple-speech` | Apple Speech | macOS 26+ SpeechAnalyzer sidecar; ASR-only path; requires explicit `language=zh/en` or `zh-CN/en-US`; short codes are mapped internally |
 
 `qwen3-sortformer` remains reachable only as an explicit experiment through
 `model=qwen3-sortformer`; it is not the default dictation path and is not the

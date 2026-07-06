@@ -144,7 +144,8 @@ async def create_transcription(
     language: str = Form(
         "auto",
         description=(
-            "Language code. Use 'zh'/'zh-CN' or 'en'/'en-US' for Apple Speech; "
+            "Language code. Use explicit 'zh'/'zh-CN' or 'en'/'en-US' for Apple Speech; "
+            "short codes are mapped to Apple locales internally. "
             "'auto' is only supported by engines with language detection."
         ),
     ),
@@ -164,7 +165,8 @@ async def create_transcription(
     - Pass `model=qwen3-asr` for single-speaker quality-first content.
     - Pass `model=qwen3-sortformer` for opt-in English long-form batch speaker separation.
     - Pass `model=apple-speech` for macOS 26+ Apple SpeechAnalyzer ASR-only sidecar transcription.
-      Apple Speech requires an explicit language or locale, such as `zh-CN` or `en-US`.
+      Apple Speech requires an explicit language; pass `zh`, `zh-CN`, `en`, or `en-US`.
+      Short codes `zh` and `en` are mapped to Apple locales internally. Do not pass `auto`.
     - `apple-dictation` remains hidden until the Swift runtime supports DictationTranscriber.
     - Omit `model` to use the server's currently loaded model.
     - `model=whisper-1` is accepted as an OpenAI-compatible passthrough value and

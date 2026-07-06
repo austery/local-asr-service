@@ -12,7 +12,7 @@
 | `paraformer` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | ✅ | Mandarin-focused default with CAM++ diarization |
 | `sensevoice-small` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/SenseVoiceSmall` | ❌ | Fast language/emotion tags, no timestamps |
 | `qwen3-asr` | mlx-audio (`load_model` + `generate_transcription` on MLX Metal) | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | Chinese/English quality-first ASR; language prompts are normalized before inference |
-| `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; requires explicit `zh`/`zh-CN` or `en`/`en-US`; Phase 3 recommendation evidence pending; no speaker labels without a separate diarization stage |
+| `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; requires explicit `language=zh/en` or `zh-CN/en-US`; short codes are mapped internally; recommended low-resource ASR-only option after Phase 3 long-audio review; no speaker labels |
 
 ## Pipeline Profiles
 
