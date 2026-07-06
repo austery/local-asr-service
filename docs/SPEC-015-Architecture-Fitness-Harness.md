@@ -1,7 +1,7 @@
 ---
-specId: SPEC-014
+specId: SPEC-015
 title: Architecture Fitness Harness
-status: 📝 草案 (Draft)
+status: ✅ 已完成 (Completed)
 priority: P3 - Quality
 creationDate: 2026-05-19
 lastUpdateDate: 2026-05-19
@@ -14,7 +14,7 @@ tags:
   - quality-gate
 ---
 
-# SPEC-014: Architecture Fitness Harness
+# SPEC-015: Architecture Fitness Harness
 
 ## 1. Goal
 
@@ -78,26 +78,26 @@ A dedicated unit test file [test_architecture_fitness.py](file:///Users/leipeng/
 ## 5. Implementation Phases
 
 ### Phase 1: Dependency Setup & Linter Configuration
-- [ ] Add `tach>=0.34.0` to `dependency-groups.dev` in [pyproject.toml](file:///Users/leipeng/Documents/Projects/local-asr-service/pyproject.toml).
-- [ ] Enable `C901` and `PLR` rules in Ruff's `select` list in `pyproject.toml`.
-- [ ] Run `uv run ruff check .` and fix or suppress any existing violations.
-- [ ] Run `uv sync`.
+- [x] Add `tach>=0.34.0` to `dependency-groups.dev` in [pyproject.toml](file:///Users/leipeng/Documents/Projects/local-asr-service/pyproject.toml).
+- [x] Enable `C901` and `PLR` rules in Ruff's `select` list in `pyproject.toml`.
+- [x] Run `uv run ruff check .` and fix or suppress any existing violations.
+- [x] Run `uv sync`.
 
 ### Phase 2: Tach Boundary Specification
-- [ ] Create [tach.toml](file:///Users/leipeng/Documents/Projects/local-asr-service/tach.toml) configuration.
-- [ ] Execute `uv run tach check` to verify existing imports and correct any architectural leaks.
+- [x] Create [tach.toml](file:///Users/leipeng/Documents/Projects/local-asr-service/tach.toml) configuration.
+- [x] Execute `uv run tach check` to verify existing imports and correct any architectural leaks.
 
 ### Phase 3: Custom Fitness Tests
-- [ ] Create [test_architecture_fitness.py](file:///Users/leipeng/Documents/Projects/local-asr-service/tests/unit/test_architecture_fitness.py).
-- [ ] Verify test suite execution: `uv run pytest tests/unit/test_architecture_fitness.py`.
+- [x] Create [test_architecture_fitness.py](file:///Users/leipeng/Documents/Projects/local-asr-service/tests/unit/test_architecture_fitness.py).
+- [x] Verify test suite execution: `uv run pytest tests/unit/test_architecture_fitness.py`.
 
 ---
 
 ## 6. Acceptance Criteria
 
-- [ ] `uv run tach check` passes successfully without dependency errors.
-- [ ] `uv run ruff check .` passes successfully, enforcing a maximum cyclomatic complexity of 10 and max statements of 50.
-- [ ] `uv run pytest tests/unit/test_architecture_fitness.py` passes successfully, verifying document sync and registry constraints.
+- [x] `uv run tach check` passes successfully without dependency errors.
+- [x] `uv run ruff check .` passes successfully, enforcing a maximum cyclomatic complexity of 10 and max statements of 50.
+- [x] `uv run pytest tests/unit/test_architecture_fitness.py` passes successfully, verifying document sync and registry constraints.
 
 ---
 
@@ -106,6 +106,7 @@ A dedicated unit test file [test_architecture_fitness.py](file:///Users/leipeng/
 | Date | Status | Note |
 |------|--------|------|
 | 2026-05-19 | 📝 草案 (Draft) | Initial draft |
+| 2026-07-06 | ✅ 已完成 (Completed) | Fully implemented, verified via Ruff, Tach, and Pytest fitness checks |
 
 ---
 

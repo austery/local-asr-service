@@ -2,9 +2,10 @@
 
 ## Project Overview
 A high-performance, local voice transcription service optimized for Apple Silicon (M-series) chips.
-Supports **dual engine architecture**:
+Supports **triple engine architecture**:
 - **FunASR Engine**: Alibaba FunASR (Paraformer) model via PyTorch MPS, supports Speaker Diarization.
 - **MLX Audio Engine**: Apple MLX native models (Qwen3-ASR, Whisper, etc.)
+- **Apple Speech Sidecar Engine**: Apple SpeechAnalyzer/SpeechTranscriber native APIs via Swift sidecar worker (ASR-only on macOS 26+).
 
 Provides an OpenAI Whisper-compatible HTTP API.
 The project follows Clean Architecture principles to separate API, scheduling, and inference logic.
@@ -78,6 +79,7 @@ The codebase is organized into layers:
   - `base_engine.py`: Engine Protocol (interface) + EngineCapabilities
   - `funasr_engine.py`: FunASR/Paraformer implementation (supports speaker diarization)
   - `mlx_engine.py`: MLX Audio implementation
+  - `apple_speech_engine.py`: Apple SpeechAnalyzer Swift sidecar engine
   - `model_registry.py`: Model alias registry (alias → ModelSpec mapping, SPEC-108)
   - `factory.py`: Engine factory (creates engine from config or ModelSpec)
 - **`src/adapters`**: Pure functions for text cleaning and audio processing.

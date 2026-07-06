@@ -1,10 +1,10 @@
 ---
 specId: SPEC-014
 title: Apple SpeechAnalyzer Local ASR Integration and Diarization Boundary Probe
-status: 📝 草案 (Draft)
+status: ✅ 已完成 (Completed)
 priority: P1 - Core Feature
 creationDate: 2026-07-03
-lastUpdateDate: 2026-07-04
+lastUpdateDate: 2026-07-06
 owner: User (AI-Assisted)
 relatedSpecs:
   - SPEC-011
@@ -772,16 +772,16 @@ diarization.
 
 ## 10. Acceptance criteria
 
-- [ ] AC-1: Swift worker builds and runs on the target macOS 26+ machine.
-- [ ] AC-2: Worker reports supported locales and module availability without crashing.
-- [ ] AC-3: Worker can allocate/download required speech assets for `zh-CN` and `en-US` when supported.
-- [ ] AC-4: File transcription returns stable JSON with finalized text.
-- [ ] AC-5: If timing is requested, the worker reports the real timing granularity: none, segment, word, or unknown.
-- [ ] AC-6: Python adapter exposes `model=apple-speech` through `/v1/audio/transcriptions`.
-- [ ] AC-7: No fake speaker labels are emitted by Apple-only mode.
-- [ ] AC-8: Diarized output is only returned when coverage and consistency gates pass.
-- [ ] AC-9: Unsupported OS, unsupported locale, missing asset, permission failure, and missing timing metadata all fail clearly.
-- [ ] AC-10: Benchmark results document where Apple beats or loses to Qwen3-ASR, FunASR, Soniox, and ElevenLabs.
+- [x] AC-1: Swift worker builds and runs on the target macOS 26+ machine.
+- [x] AC-2: Worker reports supported locales and module availability without crashing.
+- [x] AC-3: Worker can allocate/download required speech assets for `zh-CN` and `en-US` when supported.
+- [x] AC-4: File transcription returns stable JSON with finalized text.
+- [x] AC-5: If timing is requested, the worker reports the real timing granularity: none, segment, word, or unknown.
+- [x] AC-6: Python adapter exposes `model=apple-speech` through `/v1/audio/transcriptions`.
+- [x] AC-7: No fake speaker labels are emitted by Apple-only mode.
+- [x] AC-8: Diarized output is only returned when coverage and consistency gates pass.
+- [x] AC-9: Unsupported OS, unsupported locale, missing asset, permission failure, and missing timing metadata all fail clearly.
+- [x] AC-10: Benchmark results document where Apple beats or loses to Qwen3-ASR, FunASR, Soniox, and ElevenLabs.
 
 ## 11. Known risks
 
@@ -888,6 +888,7 @@ curl -X POST http://localhost:8000/v1/audio/transcriptions \
 |------|--------|------|
 | 2026-07-03 | 📝 草案 (Draft) | Initial Apple SpeechAnalyzer sidecar probe draft |
 | 2026-07-03 | 📝 草案 (Draft) | Added `speech-swift` reference boundary, narrowed Phase 0, and aligned Python file ownership with this repo's core engine layout |
+| 2026-07-06 | ✅ 已完成 (Completed) | Completed integration, verified via unit and integration tests and Phase 3 evaluation |
 
 ## 17. Final recommendation
 

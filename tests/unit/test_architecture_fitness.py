@@ -246,7 +246,7 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
     assert not unexpected_core, (
         f"Unexpected files found in src/core: {unexpected_core}. "
         f"To add a new ASR engine or adapter, you must document it in ADR-002, "
-        f"satisfy SPEC-014 rules, and update allowed_core_files list in this test."
+        f"satisfy SPEC-015 rules, and update allowed_core_files list in this test."
     )
 
     # Enforce src/adapters files

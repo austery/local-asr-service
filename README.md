@@ -45,9 +45,10 @@ local transcription and speaker diarization, added MLX/Qwen3-ASR for stronger
 Chinese/English transcription quality, and is now investigating how to add
 speaker separation without rebuilding the lower-level model stack.
 
-**Dual-engine architecture:**
+**Triple-engine architecture:**
 - **FunASR** — Paraformer (Chinese SOTA) + CAM++ speaker diarization
 - **MLX Audio** — Apple-native models (Qwen3-ASR, Whisper, etc.)
+- **Apple Speech** — macOS 26+ SpeechAnalyzer/SpeechTranscriber native APIs via Swift sidecar worker (ASR-only)
 
 **Runtime-aware model registration:** models are added through `ModelSpec` when
 they fit an existing runtime contract. New engines are only needed for new
