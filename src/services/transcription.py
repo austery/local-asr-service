@@ -171,29 +171,56 @@ class TranscriptionService:
             with open(temp_path, "wb") as buf:
                 shutil.copyfileobj(file.file, buf)
 
-            # Passthrough (model_spec=None) means "use the resident model" — so the
-            # dispatch check must resolve against the effective spec, not the raw
-            # per-request value. Otherwise a passthrough request silently falls
-            # through to the worker-subprocess path when apple-speech (sidecar-only,
-            # no subprocess) is the resident model.
-            effective_spec = model_spec if model_spec is not None else self._current_model_spec
-            if self._is_apple_speech_spec(effective_spec):
-                try:
-                    result = await self._submit_apple_speech_job(
+            if model_spec is not None:
+                # Explicit spec — caller-supplied, no shared mutable state to race.
+                if self._is_apple_speech_spec(model_spec):
+                    try:
+                        result = await self._submit_apple_speech_job(
+                            temp_file_path=temp_path,
+                            params=params,
+                            request_id=request_id,
+                        )
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                else:
+                    result = await self._submit_worker_job(
                         temp_file_path=temp_path,
                         params=params,
                         request_id=request_id,
+                        model_spec=model_spec,
+                        temp_dir=temp_dir,
                     )
-                finally:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
             else:
-                result = await self._submit_worker_job(
-                    temp_file_path=temp_path,
-                    params=params,
-                    request_id=request_id,
-                    model_spec=model_spec,
-                    temp_dir=temp_dir,
-                )
+                # Passthrough: _current_model_spec can be mutated mid-flight by a
+                # concurrent pipeline run, which holds _pipeline_lock for its whole
+                # duration (including its resident-model restore step) — every
+                # mutation of _current_model_spec goes through this same lock.
+                # Resolving inside it (instead of before waiting on it) guarantees
+                # the dispatch decision can't go stale before _enqueue_worker_job
+                # (invoked via pipeline_reserved=True, since we already hold the
+                # lock) acts on it.
+                route_to_sidecar = False
+                async with self._pipeline_lock:
+                    if self._is_apple_speech_spec(self._current_model_spec):
+                        route_to_sidecar = True
+                    else:
+                        result = await self._submit_worker_job(
+                            temp_file_path=temp_path,
+                            params=params,
+                            request_id=request_id,
+                            model_spec=None,
+                            temp_dir=temp_dir,
+                            pipeline_reserved=True,
+                        )
+                if route_to_sidecar:
+                    try:
+                        result = await self._submit_apple_speech_job(
+                            temp_file_path=temp_path,
+                            params=params,
+                            request_id=request_id,
+                        )
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
             return self._coerce_transcription_result(result)
 
         except BaseException:

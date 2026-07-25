@@ -138,6 +138,58 @@ async def test_submit_passthrough_routes_to_apple_speech_when_it_is_the_resident
 
 
 @pytest.mark.asyncio
+async def test_submit_passthrough_resolves_after_pipeline_lock_release_not_before() -> None:
+    """Regression: a passthrough request arriving while a pipeline holds
+    _pipeline_lock (mid-borrow of the resident slot for another model) must
+    resolve against the model that is actually resident once the lock is
+    released — not a stale snapshot of _current_model_spec taken before
+    waiting on the lock. Every mutation of _current_model_spec (ordinary
+    switches, and pipeline borrow/restore) happens while holding this lock,
+    so resolving passthrough dispatch outside of it is racy."""
+    service = TranscriptionService(
+        engine_type="funasr",
+        model_id="iic/default",
+        initial_model_spec=lookup("apple-speech"),
+    )
+    # Simulate an in-flight pipeline: it has temporarily borrowed the resident
+    # slot for qwen3-asr and holds _pipeline_lock for its whole run.
+    service._current_model_spec = lookup("qwen3-asr")
+    await service._pipeline_lock.acquire()
+
+    async def finish_pipeline_and_restore_apple_speech() -> None:
+        await asyncio.sleep(0.05)
+        service._current_model_spec = lookup("apple-speech")
+        service._pipeline_lock.release()
+
+    restore_task = asyncio.create_task(finish_pipeline_and_restore_apple_speech())
+    fake_engine = FakeAppleSpeechEngine()
+
+    with (
+        patch.object(service, "_get_apple_speech_engine", return_value=fake_engine),
+        patch.object(
+            service,
+            "_spawn_worker",
+            new=AsyncMock(
+                side_effect=RuntimeError(
+                    "Worker failed to load model: Unsupported engine_type: 'apple-speech'."
+                )
+            ),
+        ) as mock_spawn,
+    ):
+        result = await service.submit(
+            _upload(),
+            {"language": "en", "output_format": "json", "with_timestamp": False},
+            request_id="req-race",
+            model_spec=None,
+        )
+
+    await restore_task
+    assert isinstance(result, dict)
+    assert result["text"] == "apple result"
+    mock_spawn.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_submit_apple_speech_cleans_temp_dir_on_error() -> None:
     service = TranscriptionService(engine_type="funasr", model_id="iic/default")
     captured_path: Path | None = None
