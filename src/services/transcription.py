@@ -171,9 +171,13 @@ class TranscriptionService:
             with open(temp_path, "wb") as buf:
                 shutil.copyfileobj(file.file, buf)
 
-            if self._is_apple_speech_spec(model_spec):
-                if model_spec is None:
-                    raise RuntimeError("Apple Speech request requires a resolved model spec")
+            # Passthrough (model_spec=None) means "use the resident model" — so the
+            # dispatch check must resolve against the effective spec, not the raw
+            # per-request value. Otherwise a passthrough request silently falls
+            # through to the worker-subprocess path when apple-speech (sidecar-only,
+            # no subprocess) is the resident model.
+            effective_spec = model_spec if model_spec is not None else self._current_model_spec
+            if self._is_apple_speech_spec(effective_spec):
                 try:
                     result = await self._submit_apple_speech_job(
                         temp_file_path=temp_path,
@@ -1032,6 +1036,11 @@ class TranscriptionService:
         old_alias = self._current_model_spec.alias if self._current_model_spec else "unknown"
         self.logger.info(f"🔄 Switching worker model: {old_alias} → {new_spec.alias}")
         await self._shutdown_worker()
+        # Apple Speech is sidecar-only: no resident subprocess to spawn. Releasing
+        # the previous resident worker above is still required for memory safety.
+        if new_spec.engine_type == "apple-speech":
+            self._current_model_spec = new_spec
+            return
         await self._spawn_worker(new_spec)
 
     async def _shutdown_worker(self) -> None:

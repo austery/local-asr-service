@@ -31,6 +31,11 @@ def funasr_spec():
     return lookup("paraformer")
 
 
+@pytest.fixture
+def apple_speech_spec():
+    return lookup("apple-speech")
+
+
 def _make_upload() -> UploadFile:
     return UploadFile(file=BytesIO(b"fake audio"), filename="test.wav")
 
@@ -200,3 +205,21 @@ class TestModelSwitching:
             assert result["text"] == "recovered"  # type: ignore[index]
 
         await _stop_service(svc)
+
+
+@pytest.mark.asyncio
+class TestSwitchToAppleSpeechSidecar:
+    # Apple Speech is sidecar-only (no resident subprocess) — _switch_worker must not
+    # try to spawn one for it. _restore_resident_model relies on this: it calls
+    # _switch_worker unconditionally when restoring the pre-pipeline resident spec,
+    # which may be apple-speech.
+    async def test_switch_worker_to_apple_speech_does_not_spawn_subprocess(
+        self, funasr_spec, apple_speech_spec
+    ) -> None:
+        svc = _setup_service(funasr_spec)
+
+        with patch.object(svc, "_spawn_worker", new_callable=AsyncMock) as mock_spawn:
+            await svc._switch_worker(apple_speech_spec)
+
+        mock_spawn.assert_not_called()
+        assert svc.current_model_spec == apple_speech_spec

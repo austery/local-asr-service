@@ -106,6 +106,38 @@ async def test_submit_apple_speech_bypasses_multiprocessing_worker() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submit_passthrough_routes_to_apple_speech_when_it_is_the_resident_model() -> None:
+    """A passthrough request (no explicit model_spec) must resolve against the
+    current resident spec — not silently fall through to the worker-subprocess path
+    when that resident spec happens to be the apple-speech sidecar."""
+    service = TranscriptionService(
+        engine_type="funasr",
+        model_id="iic/default",
+        initial_model_spec=lookup("apple-speech"),
+    )
+    fake_engine = FakeAppleSpeechEngine()
+
+    with (
+        patch.object(service, "_get_apple_speech_engine", return_value=fake_engine),
+        patch.object(
+            service,
+            "_submit_worker_job",
+            new=AsyncMock(return_value={"text": "worker result", "segments": None}),
+        ) as worker_submit,
+    ):
+        result = await service.submit(
+            _upload(),
+            {"language": "en", "output_format": "json", "with_timestamp": False},
+            request_id="req-passthrough",
+            model_spec=None,
+        )
+
+    assert isinstance(result, dict)
+    assert result["text"] == "apple result"
+    worker_submit.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_submit_apple_speech_cleans_temp_dir_on_error() -> None:
     service = TranscriptionService(engine_type="funasr", model_id="iic/default")
     captured_path: Path | None = None
