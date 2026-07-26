@@ -171,25 +171,82 @@ class TranscriptionService:
             with open(temp_path, "wb") as buf:
                 shutil.copyfileobj(file.file, buf)
 
-            if self._is_apple_speech_spec(model_spec):
-                if model_spec is None:
-                    raise RuntimeError("Apple Speech request requires a resolved model spec")
-                try:
-                    result = await self._submit_apple_speech_job(
+            if model_spec is not None:
+                # Explicit spec — caller-supplied, no shared mutable state to race.
+                if self._is_apple_speech_spec(model_spec):
+                    try:
+                        result = await self._submit_apple_speech_job(
+                            temp_file_path=temp_path,
+                            params=params,
+                            request_id=request_id,
+                        )
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                else:
+                    result = await self._submit_worker_job(
                         temp_file_path=temp_path,
                         params=params,
                         request_id=request_id,
+                        model_spec=model_spec,
+                        temp_dir=temp_dir,
                     )
-                finally:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
             else:
-                result = await self._submit_worker_job(
-                    temp_file_path=temp_path,
-                    params=params,
-                    request_id=request_id,
-                    model_spec=model_spec,
-                    temp_dir=temp_dir,
-                )
+                # Passthrough: _current_model_spec can be mutated mid-flight by a
+                # concurrent pipeline run, which holds _pipeline_lock for its whole
+                # duration (including its resident-model restore step) — every
+                # mutation of _current_model_spec goes through this same lock.
+                # Resolving inside it (instead of before waiting on it) guarantees
+                # the dispatch decision can't go stale before _enqueue_worker_job
+                # acts on it.
+                #
+                # The lock is held only for the resolve+enqueue step, never for
+                # the worker's full transcription — mirroring _submit_worker_job's
+                # own non-reserved path, which releases _pipeline_lock before
+                # awaiting the job's future. Holding it longer would serialize
+                # every subsequent worker-path request behind this one's entire
+                # runtime, and _active_job_count() (checked before this lock is
+                # even reached) would undercount requests still waiting on it,
+                # defeating MAX_QUEUE_SIZE.
+                route_to_sidecar = False
+                worker_future: asyncio.Future[object] | None = None
+                async with self._pipeline_lock:
+                    if self._is_apple_speech_spec(self._current_model_spec):
+                        route_to_sidecar = True
+                    else:
+                        loop = asyncio.get_running_loop()
+                        worker_future = loop.create_future()
+                        try:
+                            await self._enqueue_worker_job(
+                                future=worker_future,
+                                temp_file_path=temp_path,
+                                params=params,
+                                request_id=request_id,
+                                model_spec=None,
+                                temp_dir=temp_dir,
+                                job_kind="transcribe",
+                                aligner_alias=None,
+                                diarizer_alias=None,
+                            )
+                        except BaseException:
+                            self._discard_request_state(request_id)
+                            raise
+
+                if route_to_sidecar:
+                    try:
+                        result = await self._submit_apple_speech_job(
+                            temp_file_path=temp_path,
+                            params=params,
+                            request_id=request_id,
+                        )
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                else:
+                    assert worker_future is not None  # not route_to_sidecar implies enqueue succeeded
+                    try:
+                        result = await worker_future
+                    except BaseException:
+                        self._discard_request_state(request_id)
+                        raise
             return self._coerce_transcription_result(result)
 
         except BaseException:
@@ -1032,6 +1089,11 @@ class TranscriptionService:
         old_alias = self._current_model_spec.alias if self._current_model_spec else "unknown"
         self.logger.info(f"🔄 Switching worker model: {old_alias} → {new_spec.alias}")
         await self._shutdown_worker()
+        # Apple Speech is sidecar-only: no resident subprocess to spawn. Releasing
+        # the previous resident worker above is still required for memory safety.
+        if new_spec.engine_type == "apple-speech":
+            self._current_model_spec = new_spec
+            return
         await self._spawn_worker(new_spec)
 
     async def _shutdown_worker(self) -> None:
