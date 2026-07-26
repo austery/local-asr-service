@@ -40,12 +40,12 @@ def _make_upload() -> UploadFile:
     return UploadFile(file=BytesIO(b"fake audio"), filename="test.wav")
 
 
-def _setup_service(spec) -> TranscriptionService:
+def _setup_service(spec, max_queue_size: int = 5) -> TranscriptionService:
     """Create a service with injected mock worker — no subprocess spawned."""
     svc = TranscriptionService(
         engine_type=spec.engine_type,
         model_id=spec.model_id,
-        max_queue_size=5,
+        max_queue_size=max_queue_size,
         initial_model_spec=spec,
         idle_timeout=0,
     )
@@ -223,3 +223,47 @@ class TestSwitchToAppleSpeechSidecar:
 
         mock_spawn.assert_not_called()
         assert svc.current_model_spec == apple_speech_spec
+
+
+@pytest.mark.asyncio
+class TestPassthroughQueueCapacity:
+    # Regression: submit()'s passthrough dispatch must hold _pipeline_lock only
+    # for the resolve+enqueue step, never for the duration of the worker's full
+    # transcription — otherwise every subsequent worker-path request serializes
+    # behind the first one's entire runtime, and _active_job_count() undercounts
+    # requests still waiting on the lock, defeating MAX_QUEUE_SIZE.
+    async def test_second_passthrough_request_enqueues_while_first_still_transcribing(
+        self, funasr_spec
+    ) -> None:
+        svc = _setup_service(funasr_spec, max_queue_size=2)
+        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
+
+        async def deliver(uid: str, result: object, delay: float) -> None:
+            await asyncio.sleep(delay)
+            svc._result_queue.put(("RESULT", uid, result))
+
+        asyncio.create_task(deliver("req-1", {"text": "one", "segments": None}, delay=0.2))
+        submit1 = asyncio.create_task(
+            svc.submit(_make_upload(), {}, request_id="req-1", model_spec=None)
+        )
+        await asyncio.sleep(0.05)  # req-1 should have enqueued and released the lock by now
+
+        asyncio.create_task(deliver("req-2", {"text": "two", "segments": None}, delay=0.05))
+        submit2 = asyncio.create_task(
+            svc.submit(_make_upload(), {}, request_id="req-2", model_spec=None)
+        )
+        await asyncio.sleep(0.05)  # req-2 should also have enqueued by now, not be lock-blocked
+
+        assert svc.queue_size == 2, (
+            "both requests must be counted in _pending while req-1 is still "
+            "transcribing — a passthrough request must not hold _pipeline_lock "
+            "past its own enqueue step"
+        )
+
+        r1 = await asyncio.wait_for(submit1, timeout=5.0)
+        r2 = await asyncio.wait_for(submit2, timeout=5.0)
+
+        assert r1["text"] == "one"  # type: ignore[index]
+        assert r2["text"] == "two"  # type: ignore[index]
+
+        await _stop_service(svc)
