@@ -13,12 +13,13 @@
 | `sensevoice-small` | FunASR (`funasr.AutoModel` on PyTorch MPS/CPU) | `iic/SenseVoiceSmall` | ❌ | Fast language/emotion tags, no timestamps |
 | `qwen3-asr` | mlx-audio (`load_model` + `generate_transcription` on MLX Metal) | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | Chinese/English quality-first ASR; language prompts are normalized before inference |
 | `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; requires explicit `language=zh/en` or `zh-CN/en-US`; short codes are mapped internally; recommended low-resource ASR-only option after Phase 3 long-audio review (verified strong low-resource candidate); no speaker labels without a separate diarization stage |
+| `moss-transcribe-diarize` | mlx-audio MLX | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | ✅ | Opt-in English continuous speech, at most 30 minutes; requires `language=en` |
 
-## Experimental MOSS
+## Bounded MOSS (Opt-in)
 
 `moss-transcribe-diarize` uses `OpenMOSS-Team/MOSS-Transcribe-Diarize` through
 mlx-audio 0.5.1. It is an explicit opt-in English speaker transcription path;
-it does not change the default model or retire existing aliases.
+it keeps the default Paraformer model and the standalone ASR model roles unchanged.
 
 ```bash
 curl http://127.0.0.1:50700/v1/audio/transcriptions \
@@ -54,11 +55,17 @@ The MOSS checkpoint is pinned to `704aa4a9c304e8520be88901e0d1960158ef5b15`, the
 
 See the [adapter contract](docs/plans/2026-09-07-moss-adapter-contract.md).
 
-## Pipeline Profiles
+## Retired Profiles
 
-| Alias | Components | Requestable | Notes |
-|-------|------------|:-----------:|-------|
-| `qwen3-sortformer` | `qwen3-asr` + `qwen3-forced-aligner` + `sortformer-diar` | ✅ experimental opt-in | Reachable for evaluation only. The current local pipeline is a deletion candidate, not a recommended meeting-transcript path. |
+`qwen3-sortformer` is no longer registered or requestable. It is omitted from
+`GET /v1/models`, and POST requests using this alias return 400. Standalone
+`qwen3-asr` remains supported. Lei requested retirement after accepting the
+bounded MOSS path; MOSS is not a replacement for unrestricted long recordings
+or cross-recording speaker identity.
+
+Historical pipeline evidence and generic alignment/diarization/worker code are
+retained. Internal pipeline infrastructure is not a supported public model.
+No model cache or downloaded weights are deleted by this change.
 
 ---
 
@@ -70,9 +77,9 @@ The project registers models by runtime contract, not by vendor name.
 - Different runtime API means a new engine adapter: for example, the independent `parakeet-mlx` package uses `from_pretrained(...).transcribe(...)`, so it should not be hidden inside `MlxAudioEngine` unless an adapter normalizes that contract.
 - Same Apple Silicon backend does not imply the same engine: MLX Metal, PyTorch MPS, CoreML/ANE, and CPU have different lifecycle and output contracts.
 - The service should wrap proven upstream runtime capabilities rather than
-  reimplementing model internals. For Qwen3 speaker separation, that means
-  reusing `mlx-audio` Qwen3-ASR, Qwen3-ForcedAligner, and Sortformer contracts
-  instead of inventing local timestamp or diarization model logic.
+  reimplementing model internals. MOSS uses one upstream transcription call
+  with a thin output validator; this service does not reconcile speakers
+  across recordings.
 
 ---
 
@@ -149,27 +156,18 @@ Early interpretation:
 | Spokenly local dictation fallback | `qwen3-asr` | Best current local path for low-latency single-speaker voice input through an OpenAI-compatible endpoint |
 | Apple-native low-resource local dictation/transcription on macOS 26+ | `apple-speech` | Recommended ASR-only low-resource path after Phase 3 long-audio evidence and user quality review; no speaker labels |
 | English/European-language throughput path | Re-evaluate Parakeet | Candidate after per-engine chunking and runtime validation |
-| Multi-speaker meeting today | `paraformer` | Best-verified long-form diarization path with CAM++ |
-| Experimental Apple-native English speaker-separation evaluation | `qwen3-sortformer` | Keeps the experiment callable, but current real-meeting evidence does not justify recommending it |
+| Mandarin multi-speaker meeting | `paraformer` | Best-verified long-form diarization path with CAM++ |
+| English multi-speaker continuous speech up to 30 minutes | `moss-transcribe-diarize` | User-accepted bounded text/speaker quality; explicit `language=en` |
 | Emotion / event tagging | `sensevoice-small` | Unique emotion/BGM tags |
 
-`qwen3-sortformer` is not just "Qwen3-ASR segments plus Sortformer." Local E2E
-testing showed Qwen3-ASR emits chunk-level segments for the tested English
-samples, which is too coarse for truthful speaker-labeled transcript output.
-The requestable experiment is therefore a three-stage pipeline: Qwen3-ASR text,
-Qwen3-ForcedAligner word timestamps, and Sortformer speaker turns.
+The retired Qwen3/forced-alignment/Sortformer experiment preserved stronger
+Qwen3 text on earlier samples but had costly, fragmented, incomplete speaker
+segments on a real meeting. Historical evidence remains in the evaluation
+records; it does not justify advertising that pipeline as a supported model.
 
-Current stance is intentionally conservative: callers must explicitly request
-`model=qwen3-sortformer`, and requestable status only keeps the experiment
-reachable. The 57-minute English probe showed stronger transcript text than
-Paraformer with materially slower runtime, but a later real English 1:1 meeting
-probe showed a worse product tradeoff: top-level Qwen3 text stayed more
-readable, while speaker-labeled segments lost coverage, fragmented heavily, and
-cost more unified memory than this lightweight gateway should normalize. This
-repo should not grow complex speaker embedding, alignment recovery, or
-diarization cleanup logic to rescue the path. Prefer a stronger upstream or
-open-source local diarized-ASR capability; remove this profile later if that
-replacement makes the experiment unnecessary.
+For PureSubs long audio, follow the [planned caller integration](docs/plans/2026-09-07-puresubs-moss-integration.md).
+Size-only splitting is insufficient, and speaker IDs from separate chunks
+must not be treated as global identities.
 
 ---
 

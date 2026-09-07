@@ -15,6 +15,10 @@ Why now: this verdict determines promotion scope and whether the existing pipeli
 Complete when: Lei reviews an isolated real-corpus probe and records Go, No-Go, or Defer with checkpoint/runtime identity, supported duration/languages, API evidence, and limitations; Chinese comparison is secondary.
 Evidence: [Roadmap, integration seams, and acceptance rubric](../../../docs/plans/2026-09-07-runtime-upgrades-and-moss-evaluation.md).
 
+## Delivery update — 2026-09-07
+
+PR #30 merged after review; local main and its frozen environment were synchronized at `55909f1`. Earlier comments and answers retain their evaluation-time scope. See the [changelog](../../../CHANGELOG.md) for current delivery status.
+
 ## Comments
 
 - 2026-09-07 — Isolated upstream probe started under the execution override. Runtime source is unchanged, all eight real-corpus transcription texts match, and remaining attribution/contract evidence continues separately. This claim does not resolve the runtime dependency or authorize promotion. Review windows were fixed before MOSS inference.

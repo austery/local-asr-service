@@ -194,7 +194,11 @@ def test_pipeline_profiles_declare_requestable_explicitly() -> None:
         ):
             calls.append(node)
 
-    assert len(calls) > 0, "No PipelineProfile instantiations found in pipeline_registry.py"
+    if not list_all_profiles():
+        assert calls == [], "An empty public registry must not construct hidden profiles"
+        return
+
+    assert len(calls) > 0, "Registered profiles must explicitly declare requestability"
 
     for call in calls:
         has_requestable = False

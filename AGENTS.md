@@ -55,7 +55,10 @@ uvicorn src.main:app --host 0.0.0.0 --port 50700 --workers 1
 ## Supported Models
 
 → See [MODELS.md](./MODELS.md) for the full model list, benchmark results, and selection guide.
-Active aliases: `paraformer`, `qwen3-asr`, `sensevoice-small`.
+Active aliases: `paraformer`, `qwen3-asr`, `sensevoice-small`, `apple-speech`, `moss-transcribe-diarize`.
+MOSS is opt-in, requires explicit English, accepts at most 1,800 seconds, and does not auto-split.
+`qwen3-sortformer` is retired from the public registry; retain independent `qwen3-asr` and historical pipeline evidence.
+See `CHANGELOG.md` and `docs/plans/2026-09-07-puresubs-moss-integration.md` for delivery state and the planned caller adaptation.
 
 ## Testing
 The project uses `pytest` for all levels of testing.

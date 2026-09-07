@@ -14,20 +14,8 @@ class PipelineProfile:
     requestable: bool = False
 
 
-_REGISTRY: dict[str, PipelineProfile] = {
-    "qwen3-sortformer": PipelineProfile(
-        alias="qwen3-sortformer",
-        transcription_alias="qwen3-asr",
-        alignment_alias="qwen3-forced-aligner",
-        diarization_alias="sortformer-diar",
-        description=(
-            "Experimental Qwen3-ASR plus Sortformer speaker-separation pipeline. "
-            "Requestable as an explicit opt-in batch path; not a default dictation model."
-        ),
-        capabilities=EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
-        requestable=True,
-    )
-}
+# No public pipeline profiles remain after retiring qwen3-sortformer.
+_REGISTRY: dict[str, PipelineProfile] = {}
 
 
 def lookup_profile(alias: str) -> PipelineProfile:

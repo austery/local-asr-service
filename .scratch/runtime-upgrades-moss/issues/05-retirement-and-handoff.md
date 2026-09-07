@@ -20,10 +20,18 @@ Evidence: [Roadmap and proposed implementation boundaries](../../../docs/plans/2
 - 2026-09-07 — Independent repository-reference audit and local candidate packaging started under the execution override. The proposed retirement list is empty because the existing pipeline remains requestable and no MOSS replacement has passed admission. This does not resolve the quality or final handoff approval gates. See [delivery handoff](../evidence/2026-09-07-delivery-handoff.md).
 
 
-## Answer
+## Original delivery answer (before PR publication)
 
 - The delivery has no production retirement: keep all current model aliases, the CAM++ patch, and the requestable experimental Qwen/Sortformer pipeline. No caller transition is required for the opt-in MOSS alias.
 - Lei requested three independently reviewable PRs: baseline/MLX, incremental FunASR dependencies, then MOSS for another agent's review. Runtime quality acceptance is already recorded.
 - Feature branches are reconciled non-destructively. FunASR's diff against MLX is only the declaration and lock; MOSS follows FunASR without dependency changes.
 - Preserve baseline environments, private corpus/evidence, worktrees, and the running original main checkout. Use a complete source/lock/checkpoint combination for rollback; no production environment was upgraded.
 - [Final handoff](../evidence/2026-09-07-delivery-handoff.md) records tests, implementation scope, and the remaining publication/CI/review steps. Explicit push approval is still required after showing the selected diffs.
+
+## Current answer — 2026-09-07
+
+- PRs #28–#30 merged after Lei confirmed external review acceptance. Local main and its frozen environment were synchronized at `55909f1`; 353 tests passed afterward.
+- Lei subsequently requested removal of the unused `qwen3-sortformer` entry. The current follow-up removes public registration and recommendations while retaining standalone `qwen3-asr`.
+- PureSubs source inspection found no direct reference to the retired alias. Preserve internal pipeline infrastructure/tests, historical evaluation artifacts, and downloaded weights; broad cleanup is not part of this retirement.
+- The [PureSubs MOSS roadmap](../../../docs/plans/2026-09-07-puresubs-moss-integration.md) records the next caller task. The current size-only chunker does not enforce MOSS's 1,800-second bound or cross-chunk speaker scope.
+- The [changelog](../../../CHANGELOG.md) separates merged runtime delivery from the unmerged documentation/retirement follow-up. No service restart or PureSubs implementation is implied by this document update.

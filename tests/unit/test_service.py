@@ -20,10 +20,24 @@ from fastapi import UploadFile
 
 from src.adapters.pipeline_chunking import ChunkWindow
 from src.core.alignment_port import AlignedWord
+from src.core.base_engine import EngineCapabilities
 from src.core.diarization_port import SpeakerTurn
 from src.core.model_registry import lookup
 from src.core.pipeline_registry import PipelineProfile
 from src.services.transcription import TranscriptionService, WorkerRemoteError
+
+
+def _test_pipeline_profile() -> PipelineProfile:
+    """Synthetic profile for retained pipeline infrastructure tests."""
+    return PipelineProfile(
+        alias="test-pipeline",
+        transcription_alias="qwen3-asr",
+        alignment_alias="qwen3-forced-aligner",
+        diarization_alias="sortformer-diar",
+        description="Test-only pipeline",
+        capabilities=EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
+        requestable=True,
+    )
 
 
 @pytest.fixture
@@ -55,10 +69,8 @@ def _setup_service(spec, max_queue_size: int = 2) -> TranscriptionService:
 
 def _legacy_segment_pipeline_profile(requestable: bool = False) -> PipelineProfile:
     """Use the pre-forced-alignment path for tests that exercise segment fallback behavior."""
-    from src.core.pipeline_registry import lookup_profile
-
     return replace(
-        lookup_profile("qwen3-sortformer"),
+        _test_pipeline_profile(),
         alignment_alias=None,
         requestable=requestable,
     )
@@ -231,10 +243,8 @@ async def test_decoupled_pipeline_should_align_speakers_and_restore_previous_mod
 
 @pytest.mark.asyncio
 async def test_decoupled_pipeline_should_align_words_to_speaker_turns(funasr_spec):
-    from src.core.pipeline_registry import lookup_profile
-
     svc = _setup_service(funasr_spec)
-    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    profile = _test_pipeline_profile()
 
     async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
         assert alias == "qwen3-asr"
@@ -375,10 +385,8 @@ async def test_long_form_pipeline_should_transcribe_each_chunk_with_its_own_audi
 
 @pytest.mark.asyncio
 async def test_long_form_pipeline_should_extract_transcribe_and_align_real_chunks(funasr_spec, tmp_path):
-    from src.core.pipeline_registry import lookup_profile
-
     svc = _setup_service(funasr_spec)
-    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    profile = _test_pipeline_profile()
     transcript = {"text": "full text", "segments": None, "language": "en"}
     extracted_windows: list[ChunkWindow] = []
     fake_chunker = MagicMock()
@@ -503,10 +511,8 @@ async def test_chunked_diarization_reconcile_should_keep_speaker_identity_across
 
 @pytest.mark.asyncio
 async def test_pipeline_should_fail_loudly_when_alignment_quality_gate_fails(funasr_spec, tmp_path):
-    from src.core.pipeline_registry import lookup_profile
-
     svc = _setup_service(funasr_spec)
-    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    profile = _test_pipeline_profile()
     collapsed = [AlignedWord(text=f"w{i}", start=245.04, end=245.04) for i in range(12)]
 
     async def fake_extract_chunks(temp_file_path, temp_dir, windows):
@@ -546,10 +552,8 @@ async def test_pipeline_should_fail_loudly_when_alignment_quality_gate_fails(fun
 
 @pytest.mark.asyncio
 async def test_pipeline_should_validate_alignment_quality_without_duration(funasr_spec):
-    from src.core.pipeline_registry import lookup_profile
-
     svc = _setup_service(funasr_spec)
-    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    profile = _test_pipeline_profile()
 
     async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
         return {"text": "hello world", "segments": None, "language": "en"}
@@ -573,10 +577,8 @@ async def test_pipeline_should_validate_alignment_quality_without_duration(funas
 
 @pytest.mark.asyncio
 async def test_pipeline_should_return_resolved_duration_when_transcript_lacks_duration(funasr_spec):
-    from src.core.pipeline_registry import lookup_profile
-
     svc = _setup_service(funasr_spec)
-    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    profile = _test_pipeline_profile()
 
     async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
         return {"text": "hello world", "segments": None, "language": "en"}
@@ -657,10 +659,8 @@ async def test_segment_alignment_failure_returns_transcript_and_restores_model(f
 
 @pytest.mark.asyncio
 async def test_forced_alignment_failure_propagates_and_restores_model(funasr_spec):
-    from src.core.pipeline_registry import lookup_profile
-
     svc = _setup_service(funasr_spec)
-    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    profile = _test_pipeline_profile()
 
     async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
         assert pipeline_reserved is True
@@ -886,10 +886,8 @@ async def test_align_with_alias_should_submit_alignment_job(funasr_spec):
 
 @pytest.mark.asyncio
 async def test_decoupled_pipeline_restore_failure_is_propagated(funasr_spec):
-    from src.core.pipeline_registry import lookup_profile
-
     svc = _setup_service(funasr_spec)
-    profile = lookup_profile("qwen3-sortformer")
+    profile = _test_pipeline_profile()
 
     async def fake_transcribe(temp_file_path, params, request_id, alias, pipeline_reserved=False):
         assert pipeline_reserved is True
@@ -913,10 +911,8 @@ async def test_decoupled_pipeline_restore_failure_is_propagated(funasr_spec):
 
 @pytest.mark.asyncio
 async def test_pipeline_should_hold_worker_reservation_until_restore(funasr_spec):
-    from src.core.pipeline_registry import lookup_profile
-
     svc = _setup_service(funasr_spec)
-    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    profile = _test_pipeline_profile()
     observed_current_specs: list[str | None] = []
 
     async def fake_submit_worker_job(**kwargs):
@@ -1108,10 +1104,8 @@ async def test_submit_pipeline_rejects_non_requestable_profile(funasr_spec):
 
 @pytest.mark.asyncio
 async def test_submit_pipeline_cleans_composite_request_state_on_error(funasr_spec):
-    from src.core.pipeline_registry import lookup_profile
-
     svc = _setup_service(funasr_spec)
-    profile = replace(lookup_profile("qwen3-sortformer"), requestable=True)
+    profile = _test_pipeline_profile()
     request_id = "req-pipeline"
     loop = asyncio.get_running_loop()
 
