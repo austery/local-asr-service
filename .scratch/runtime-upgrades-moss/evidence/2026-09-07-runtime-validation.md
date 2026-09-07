@@ -1,6 +1,6 @@
 # Runtime Upgrade Validation — 2026-09-07
 
-Status: In progress. All eight before/after real-corpus runs returned HTTP 200 with identical transcription text. Speaker-attribution repeatability, supplemental contract checks, and human quality acceptance remain open.
+Status: MLX Audio 0.5.1 accepted by Lei after listening review. Technical evidence and unmeasured quality limits are preserved below; see [acceptance record](2026-09-07-listening-acceptance-and-moss-followup.md).
 
 ## Scope and isolation
 
@@ -68,7 +68,7 @@ The CUDA optional-dependency marker normalization was reproduced in a separate c
 - Standards: no hard repository-standard violations in the dependency-only diff. The reviewer independently checked a resolvable dependency tree and `uv lock --check`.
 - Spec: acceptance remains partial while full evidence, real contract checks, baseline rollback, and quality review are incomplete. The CUDA drift concern is now explained by the controlled baseline re-resolution above. Do not turn this review into a completed acceptance claim.
 
-## Remaining acceptance work
+## Acceptance work before the user review
 
 - Supplemental contract and baseline-environment rollback checks completed; results below.
 - Baseline speaker repeat completed. One of four differences also occurs between baseline runs; the remaining three are not explained by that repeat and remain an attribution-review limitation.

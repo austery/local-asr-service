@@ -18,3 +18,5 @@ Evidence: [Roadmap, integration seams, and acceptance rubric](../../../docs/plan
 ## Comments
 
 - 2026-09-07 — Isolated upstream probe started under the execution override. Runtime source is unchanged, all eight real-corpus transcription texts match, and remaining attribution/contract evidence continues separately. This claim does not resolve the runtime dependency or authorize promotion. Review windows were fixed before MOSS inference.
+
+- 2026-09-07 — Lei judged reviewed MOSS recognition and speaker distinctions positively and requested duration/token-limit research. The previous No-Go recommendation was not adopted; keep this decision open and retain the candidate. See [listening acceptance and follow-up](../evidence/2026-09-07-listening-acceptance-and-moss-followup.md).

@@ -1,6 +1,6 @@
 # FunASR Runtime Validation — 2026-09-07
 
-Status: All eight real-corpus cases returned HTTP 200; quality acceptance remains unresolved because FunASR text changes. Contract and cost investigation results are recorded below. MOSS’s separate roadmap decision is pending.
+Status: FunASR 1.4.14 accepted by Lei after listening review. Keep the unchanged CAM++ patch and record measured cost increases; see [acceptance record](2026-09-07-listening-acceptance-and-moss-followup.md).
 
 ## Candidate and isolation
 
@@ -55,7 +55,7 @@ The private supplemental recorder initially mishandled SenseVoice's valid `segme
 SenseVoice peak RSS repeated at 4,508.41 MiB, versus 4,462.53 MiB initially and 3,242.11 MiB in the original baseline. The roughly 39% increase triggers cost review but is not an automatic quality-first rejection. The Chinese long runtime increased from 49.11 / 51.97 seconds in two old-runtime runs to 77.27 / 84.62 seconds in two candidate runs. The increase persists on repeat and exceeds the 20% review trigger. RSS is not complete Metal memory measurement. These are isolated observations rather than benchmark medians.
 
 
-## Current recommendation
+## Recommendation before the user review
 
 Keep FunASR 1.4.14 as an isolated candidate until transcript quality is reviewed; do not replace the accepted 1.2.7 environment on the strength of passing mocked tests. The unchanged-checkpoint upgrade is executable and preserves the tested service contracts and all four Qwen outputs, but changed FunASR recognition text and repeated cost increases prevent a complete non-regression acceptance claim. The CAM++ patch remains required and intact.
 
@@ -64,3 +64,7 @@ The final repeat returned HTTP 200 on SenseVoice, Paraformer short English, and 
 ## Independent dependency review
 
 Standards review found no hard repository-rule violation in the FunASR-only dependency diff and independently passed `uv lock --check`. Spec review found the dependency, unchanged-checkpoint, source, and retained-patch scope consistent with the accepted roadmap. Both reviews keep recognition-quality and cost acceptance open; neither grants rollout or push approval.
+
+## User acceptance
+
+Lei subsequently accepted the upgrade and judged recognition text improved after listening. The recommendation above is historical. See the [acceptance and timing record](2026-09-07-listening-acceptance-and-moss-followup.md); no numeric quality score or production rollout is implied.
