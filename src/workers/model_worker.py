@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import logging
 import queue
+import signal
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from multiprocessing import Queue
 from typing import TYPE_CHECKING, Any, Literal
@@ -23,7 +26,27 @@ if TYPE_CHECKING:
     from src.core.base_engine import ASREngine
     from src.core.diarization_port import DiarizationPort
 
+from src.core.model_registry import MOSS_MODEL_ID
+
 logger = logging.getLogger(__name__)
+MOSS_INFERENCE_TIMEOUT_SECONDS = 900.0
+
+
+@contextmanager
+def _inference_deadline(model_id: str) -> Iterator[None]:
+    """Bound MOSS inference inside this isolated worker, including native calls."""
+    if model_id != MOSS_MODEL_ID:
+        yield
+        return
+    # SIG_DFL lets the OS terminate even when a native inference call hangs.
+    # This worker owns its alarm; the parent's existing liveness check handles exit.
+    previous_handler = signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    signal.setitimer(signal.ITIMER_REAL, MOSS_INFERENCE_TIMEOUT_SECONDS)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 @dataclass
@@ -114,6 +137,17 @@ def _get_or_create_aligner(
     return aligner
 
 
+def _transcribe_with_deadline(engine: ASREngine, job: WorkerJob, model_id: str) -> object:
+    with _inference_deadline(model_id):
+        return engine.transcribe_file(
+            job.temp_file_path,
+            language=job.params.get("language", "auto"),
+            output_format=job.params.get("output_format", "txt"),
+            with_timestamp=job.params.get("with_timestamp", False),
+            use_itn=job.params.get("use_itn", True),
+        )
+
+
 def run_worker(
     job_queue: Queue[WorkerJob | None],
     result_queue: Queue[tuple[str, Any]],
@@ -171,6 +205,7 @@ def run_worker(
                         logger.warning("engine.release() failed during shutdown", exc_info=True)
                     sys.exit(0)
 
+                result: object
                 try:
                     if job.job_kind == "diarize":
                         alias = job.requested_diarizer_alias
@@ -195,13 +230,7 @@ def run_worker(
                             language=language,
                         )
                     elif job.job_kind == "transcribe":
-                        result = engine.transcribe_file(
-                            job.temp_file_path,
-                            language=job.params.get("language", "auto"),
-                            output_format=job.params.get("output_format", "txt"),
-                            with_timestamp=job.params.get("with_timestamp", False),
-                            use_itn=job.params.get("use_itn", True),
-                        )
+                        result = _transcribe_with_deadline(engine, job, model_id)
                     else:
                         raise ValueError(f"Unsupported job_kind: {job.job_kind}")
                     _put_result(result_queue, ("RESULT", job.uid, result))

@@ -1,8 +1,8 @@
 # Runtime Upgrade and MOSS Adoption Decision Map
 
 Label: wayfinder:map
-Status: open
-Assignee: unassigned
+Status: resolved
+Assignee: LeiP (Codex execution)
 
 ## Destination
 
@@ -10,14 +10,14 @@ An approved implementation handoff selecting reproducible runtime versions, deci
 
 ## Notes
 
-- Lei accepted the working roadmap on 2026-09-07. The [roadmap and source preflight](../../docs/plans/2026-09-07-runtime-upgrades-and-moss-evaluation.md) contain the evaluation defaults and delivery sequence; measured outcomes remain open. No second general plan-approval round is needed.
+- Lei accepted the working roadmap on 2026-09-07. The [roadmap and source preflight](../../docs/plans/2026-09-07-runtime-upgrades-and-moss-evaluation.md) contain the evaluation defaults and delivery sequence; outcomes are recorded below. No second general plan-approval round is needed.
 - Apply [Wayfinder](/Users/leipeng/Documents/global-skills/wayfinder/SKILL.md) and the accepted [Lightweight Local Speech Gateway Boundary](../../docs/ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md). Consult additional skills only when they materially help the selected decision.
 - Prioritize English long-form multi-speaker usability. Preserve Qwen3 single-speaker, Paraformer Chinese multi-speaker, SenseVoice, and Apple Speech roles unless a later explicit decision changes them.
 - Execution override (2026-09-07): Lei authorized upgrades and verification in isolated worktrees. Continue technical work autonomously across decision boundaries where evidence collection is independent; final quality acceptance still needs the stated evidence. Promotion judgments, pushes of new diffs, merges, and destructive cleanup retain their applicable approval gates.
 - Local tracker: child files under `issues/`; `Status: open` is unclaimed. Claim by setting `Assignee` to the driving developer and `Status: claimed` before work. Append the answer under `## Answer`, set `Status: resolved`, and add a named context link below. Keep answers to five bullets, linking detailed evidence.
 - Blocking is the local tracker's `Blocked by` convention. Scan children in numeric order; the frontier contains open, unassigned children whose blockers are all resolved. Use the title when referring to any ticket.
 - Track each substantive decision independently; the execution authorization permits continuing through multiple decisions when evidence is sufficient. A rejected runtime candidate can lead to MOSS No-Go/Defer and does not permanently block the independent FunASR decision.
-- The documentation branch `codex/runtime-upgrades-moss-roadmap` includes remote main through `2ff1a34db7d6999714b6df64a313c56e484bc171`. Work only in `/Users/leipeng/Documents/Projects/local-asr-service-worktrees/runtime-roadmap` or another isolated worktree; leave the running original main checkout and its environment untouched. The measured baseline and runtime comparisons are captured; Lei has accepted both runtime upgrades after listening; MOSS long-form admission remains open.
+- The documentation branch `codex/runtime-upgrades-moss-roadmap` includes remote main through `2ff1a34db7d6999714b6df64a313c56e484bc171`. Work only in `/Users/leipeng/Documents/Projects/local-asr-service-worktrees/runtime-roadmap` or another isolated worktree; leave the running original main checkout and its environment untouched. The measured baseline and runtime comparisons are captured; Lei has accepted both runtime upgrades after listening; MOSS bounded English admission is resolved; remote delivery remains pending.
 - These map/ticket files are the maintained, versioned local tracker. Original untracked copies in the running checkout are historical drafts. Preserve its existing untracked `transcript.json`.
 
 ## Decisions so far
@@ -25,6 +25,9 @@ An approved implementation handoff selecting reproducible runtime versions, deci
 - [Agree the evaluation corpus and acceptance gates](issues/01-evaluation-contract.md): the measured four-file basis and qualitative user review support the runtime decisions; numeric scores remain unmeasured.
 - [Select a MOSS-capable MLX Audio runtime without regressions](issues/02-mlx-runtime-compatibility.md): select MLX Audio 0.5.1 with the tested frozen lock.
 - [Select a FunASR runtime and determine the CAM++ patch disposition](issues/04-funasr-runtime-compatibility.md): select FunASR 1.4.14 / NumPy 1.26.4 and retain the CAM++ patch.
+
+- [Decide whether MOSS solves English long-form multi-speaker transcription](issues/03-moss-adoption.md): Go for bounded English recordings up to 30 minutes; broader duration/language claims deferred.
+- [Approve the retirement scope and implementation handoff](issues/05-retirement-and-handoff.md): empty retirement list; three separate PRs, with MOSS awaiting external review.
 
 ## Not yet specified
 
@@ -38,6 +41,8 @@ custom model conversion or diarization recovery frameworks; new model families b
 ## Current execution evidence
 
 - [MLX runtime comparison](evidence/2026-09-07-runtime-validation.md): eight identical transcription texts, preserved tested contracts, upgrade quality accepted by Lei; speaker intervals remain unscored individually.
-- [MOSS upstream probe](evidence/2026-09-07-moss-probe.md): two disjoint 30-minute samples pass bounded coverage checks; 40/60-minute inputs stop early at 16,376 output tokens. See [duration validation](evidence/2026-09-07-moss-duration-validation.md). The next scope is a provisional 30-minute English opt-in adapter with completeness rejection.
+- [MOSS upstream probe](evidence/2026-09-07-moss-probe.md): two disjoint 30-minute samples pass bounded coverage checks; 40/60-minute inputs stop early at 16,376 output tokens. See [duration validation](evidence/2026-09-07-moss-duration-validation.md). The implemented scope is a provisional 30-minute English opt-in adapter with completeness rejection; see [adapter admission](evidence/2026-09-07-moss-adapter-admission.md).
 - [FunASR candidate](evidence/2026-09-07-funasr-preflight.md): clean install and 308 existing tests pass; all real requests succeed; Lei accepted the changed text after listening; repeated cost increases remain disclosed.
-- All validation jobs are finished. Original main remains at `97028ba0a3b8c5774903ace18cb7fb29456d9bb5`. Candidate dependencies and evidence are frozen in local branches; no new push or production integration has occurred. See the [delivery handoff](evidence/2026-09-07-delivery-handoff.md) for the branch boundaries and remaining decisions.
+- All validation jobs are finished. Original main remains at `97028ba0a3b8c5774903ace18cb7fb29456d9bb5`. Candidate dependencies and evidence are frozen in local branches; no new push or production integration has occurred. See the [delivery handoff](evidence/2026-09-07-delivery-handoff.md) for the branch boundaries and remaining publication steps.
+
+The decision map is resolved. This is not a claim that PRs were published, merged, or deployed.

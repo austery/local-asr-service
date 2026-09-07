@@ -22,6 +22,14 @@ class EngineCapabilities:
     language_detect: bool = False
 
 
+class TranscriptionInputError(ValueError):
+    """Input falls outside an engine's supported operating scope."""
+
+
+class TranscriptionOutputError(ValueError):
+    """Upstream output fails the public transcription contract."""
+
+
 @runtime_checkable
 class ASREngine(Protocol):
     """
