@@ -1,6 +1,6 @@
 # Runtime Candidate Delivery Handoff — 2026-09-07
 
-Status: Both runtime upgrades accepted by Lei after listening. MOSS remains an experimental candidate under duration/early-stop investigation. No production promotion was performed.
+Status: Both runtime upgrades accepted by Lei after listening. MOSS duration testing supports a provisional 30-minute English experimental scope; the thin HTTP adapter is still unverified. No production promotion was performed.
 
 ## Delivery boundaries
 
@@ -20,7 +20,7 @@ Private logs, audio, complete responses, checkpoint manifests, probe scripts, an
 | Reconcile remote state without changing the running main checkout | Worktree base includes `2ff1a34`; original main remains `97028ba` | Established |
 | Freeze environment, checkpoints, corpus, and old runtime behavior | Original lock hash, Python/macOS/hardware identity, Qwen revision, 18 unchanged FunASR checkpoint/config hashes, four hashed corpus files, baseline HTTP outputs and rollback runs | Measured baseline established; reviewed human references and mixed/noisy coverage remain incomplete |
 | Upgrade MLX Audio with unchanged Qwen checkpoint and shared-runtime verification | [MLX report](2026-09-07-runtime-validation.md); 308 tests, static checks, eight identical texts, real contracts, rollback and lifecycle | Technical comparison completed and upgrade quality accepted by Lei; no interval-level accuracy score |
-| Evaluate MOSS on English long-form multi-speaker audio | [MOSS report](2026-09-07-moss-probe.md); short, medium and one-hour upstream runs using one pinned BF16 checkpoint | Current pairing fails completeness at 36:19 of 60:00; Lei requested continued investigation and retained the candidate |
+| Evaluate MOSS on English long-form multi-speaker audio | [MOSS report](2026-09-07-moss-probe.md); short, medium and one-hour upstream runs using one pinned BF16 checkpoint | Two disjoint 30-minute inputs pass bounded coverage checks; 40/60-minute inputs fail. Propose a 30-minute opt-in scope, pending thin-adapter verification |
 | Prove a thin MOSS HTTP adapter before promotion | Raw upstream long-form gate failed; no MOSS alias or adapter was introduced | Not reached; do not advertise capabilities or build a repair pipeline to claim success |
 | Independently upgrade FunASR with ASR/VAD/punctuation/CAM++ checkpoints fixed | [FunASR report](2026-09-07-funasr-preflight.md); clean install, 308 tests, eight real requests, unchanged hashes, preserved Qwen/pipeline contracts | Runtime accepted by Lei after listening; changed text and repeated cost increases are disclosed |
 | Determine CAM++ patch disposition | Both unpatched upstream call sites fail the None-timestamp reproducer; both repository-patched sites pass | Retain the existing patch unchanged |
@@ -53,6 +53,6 @@ For a future FunASR rollout rollback, select the MLX-only candidate's source and
 
 ## Decisions needed before rollout
 
-1. Continue MOSS duration/early-stop investigation; official 90-minute support is not a locally verified reliability guarantee. See [upstream research](2026-09-07-moss-upstream-limits.md).
+1. Certify the thin MOSS adapter for the proposed 30-minute English single-input scope, including duration/output limits, speaker/text normalization, incomplete-output rejection, and lifecycle. [Duration validation](2026-09-07-moss-duration-validation.md) directly records early EOS on the failing 40-minute input. The wider 30–60-minute goal remains unmet.
 2. Both runtime selections now have explicit qualitative user acceptance; see [acceptance and timing](2026-09-07-listening-acceptance-and-moss-followup.md). Numeric quality scores remain unmeasured.
 3. Finalize MOSS admission/adapter scope and the proposed empty retirement list. Show the selected diff and obtain explicit approval before any new push; main merge or deployment remains a separate action.

@@ -38,6 +38,6 @@ custom model conversion or diarization recovery frameworks; new model families b
 ## Current execution evidence
 
 - [MLX runtime comparison](evidence/2026-09-07-runtime-validation.md): eight identical transcription texts, preserved tested contracts, upgrade quality accepted by Lei; speaker intervals remain unscored individually.
-- [MOSS upstream probe](evidence/2026-09-07-moss-probe.md): the current 60-minute candidate stops at 36:19; Lei requested retaining MOSS and researching long-form limits; the earlier No-Go recommendation was not adopted.
+- [MOSS upstream probe](evidence/2026-09-07-moss-probe.md): two disjoint 30-minute samples pass bounded coverage checks; 40/60-minute inputs stop early at 16,376 output tokens. See [duration validation](evidence/2026-09-07-moss-duration-validation.md). The next scope is a provisional 30-minute English opt-in adapter with completeness rejection.
 - [FunASR candidate](evidence/2026-09-07-funasr-preflight.md): clean install and 308 existing tests pass; all real requests succeed; Lei accepted the changed text after listening; repeated cost increases remain disclosed.
 - All validation jobs are finished. Original main remains at `97028ba0a3b8c5774903ace18cb7fb29456d9bb5`. Candidate dependencies and evidence are frozen in local branches; no new push or production integration has occurred. See the [delivery handoff](evidence/2026-09-07-delivery-handoff.md) for the branch boundaries and remaining decisions.
