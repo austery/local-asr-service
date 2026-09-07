@@ -138,13 +138,15 @@ async def create_transcription(
             "and does not select Whisper; the fresh server default is `paraformer` "
             "unless ENGINE_TYPE or MODEL_ID overrides it. "
             "Use GET /v1/models for the live alias list. "
-            "Examples: 'paraformer', 'qwen3-asr', 'qwen3-sortformer', 'apple-speech'."
+            "For MOSS, also set language=en and upload at most 30 minutes of audio. "
+            "Examples: " + ", ".join(f"'{spec.alias}'" for spec in list_all()) + "."
         ),
     ),
     language: str = Form(
         "auto",
         description=(
-            "Language code. Use explicit 'zh'/'zh-CN' or 'en'/'en-US' for Apple Speech; "
+            "Language code. MOSS requires explicit 'en'; do not use 'auto'. "
+            "Use explicit 'zh'/'zh-CN' or 'en'/'en-US' for Apple Speech; "
             "short codes are mapped to Apple locales internally. "
             "'auto' is only supported by engines with language detection."
         ),
@@ -163,7 +165,14 @@ async def create_transcription(
     Model switching:
     - Pass `model=paraformer` for multi-speaker content (enables diarization).
     - Pass `model=qwen3-asr` for single-speaker quality-first content.
-    - Pass `model=qwen3-sortformer` for opt-in English long-form batch speaker separation.
+    - Pass `model=moss-transcribe-diarize` with `language=en` for English continuous-speech
+      recordings up to 30 minutes (1,800 seconds), with native speaker labels.
+      Longer input returns HTTP 400; MOSS does not automatically split recordings.
+      Speaker IDs apply only to one recording. File size does not determine audio duration.
+      Detectable truncation or an uncovered interval over 10 seconds returns HTTP 422;
+      legitimate long silence can also trigger this conservative check.
+      In Swagger, set `response_format=verbose_json` to inspect speaker segments.
+    - Pass `model=sensevoice-small` for language/emotion tags without timestamps.
     - Pass `model=apple-speech` for macOS 26+ Apple SpeechAnalyzer ASR-only sidecar transcription.
       Apple Speech requires an explicit language; pass `zh`, `zh-CN`, `en`, or `en-US`.
       Short codes `zh` and `en` are mapped to Apple locales internally. Do not pass `auto`.

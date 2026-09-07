@@ -17,8 +17,9 @@ An approved implementation handoff selecting reproducible runtime versions, deci
 - Local tracker: child files under `issues/`; `Status: open` is unclaimed. Claim by setting `Assignee` to the driving developer and `Status: claimed` before work. Append the answer under `## Answer`, set `Status: resolved`, and add a named context link below. Keep answers to five bullets, linking detailed evidence.
 - Blocking is the local tracker's `Blocked by` convention. Scan children in numeric order; the frontier contains open, unassigned children whose blockers are all resolved. Use the title when referring to any ticket.
 - Track each substantive decision independently; the execution authorization permits continuing through multiple decisions when evidence is sufficient. A rejected runtime candidate can lead to MOSS No-Go/Defer and does not permanently block the independent FunASR decision.
-- The documentation branch `codex/runtime-upgrades-moss-roadmap` includes remote main through `2ff1a34db7d6999714b6df64a313c56e484bc171`. Work only in `/Users/leipeng/Documents/Projects/local-asr-service-worktrees/runtime-roadmap` or another isolated worktree; leave the running original main checkout and its environment untouched. The measured baseline and runtime comparisons are captured; Lei has accepted both runtime upgrades after listening; MOSS bounded English admission is resolved; remote delivery remains pending.
-- These map/ticket files are the maintained, versioned local tracker. Original untracked copies in the running checkout are historical drafts. Preserve its existing untracked `transcript.json`.
+- PRs #28, #29, and #30 are merged. Local main and its frozen environment were synchronized at `55909f1` on Lei's request; 353 post-sync tests passed. Future edits stay in isolated worktrees.
+- These map/ticket files are the versioned decision tracker. The [changelog](../../CHANGELOG.md) and [current roadmap](../../docs/plans/2026-09-07-runtime-upgrades-and-moss-evaluation.md) distinguish merged delivery from follow-up work.
+
 
 ## Decisions so far
 
@@ -27,11 +28,11 @@ An approved implementation handoff selecting reproducible runtime versions, deci
 - [Select a FunASR runtime and determine the CAM++ patch disposition](issues/04-funasr-runtime-compatibility.md): select FunASR 1.4.14 / NumPy 1.26.4 and retain the CAM++ patch.
 
 - [Decide whether MOSS solves English long-form multi-speaker transcription](issues/03-moss-adoption.md): Go for bounded English recordings up to 30 minutes; broader duration/language claims deferred.
-- [Approve the retirement scope and implementation handoff](issues/05-retirement-and-handoff.md): empty retirement list; three separate PRs, with MOSS awaiting external review.
+- [Approve the retirement scope and implementation handoff](issues/05-retirement-and-handoff.md): the three PRs merged after review. Lei subsequently requested retirement of the unused `qwen3-sortformer` public entry in a separate follow-up; preserve standalone Qwen3 and historical evidence.
 
-## Not yet specified
+## Implementation follow-up
 
-Any additional compatibility or caller-transition decision exposed by the runtime/adoption evidence. Create a new ticket only when its question becomes precise and an independent approval or tracking boundary is needed; keep detailed implementation slicing for the handoff.
+The original admission decisions are resolved. The [PureSubs MOSS integration roadmap](../../docs/plans/2026-09-07-puresubs-moss-integration.md) is the next caller task: enforce actual chunk duration as well as size, preserve chunk-local speaker identity, and verify a real long recording. It is planned, not implemented. Swagger/documentation refresh and public profile retirement are being prepared in a separate ASR worktree and remain unmerged.
 
 ## Out of scope
 
@@ -43,6 +44,6 @@ custom model conversion or diarization recovery frameworks; new model families b
 - [MLX runtime comparison](evidence/2026-09-07-runtime-validation.md): eight identical transcription texts, preserved tested contracts, upgrade quality accepted by Lei; speaker intervals remain unscored individually.
 - [MOSS upstream probe](evidence/2026-09-07-moss-probe.md): two disjoint 30-minute samples pass bounded coverage checks; 40/60-minute inputs stop early at 16,376 output tokens. See [duration validation](evidence/2026-09-07-moss-duration-validation.md). The implemented scope is a provisional 30-minute English opt-in adapter with completeness rejection; see [adapter admission](evidence/2026-09-07-moss-adapter-admission.md).
 - [FunASR candidate](evidence/2026-09-07-funasr-preflight.md): clean install and 308 existing tests pass; all real requests succeed; Lei accepted the changed text after listening; repeated cost increases remain disclosed.
-- All validation jobs are finished. Original main remains at `97028ba0a3b8c5774903ace18cb7fb29456d9bb5`. Candidate dependencies and evidence are frozen in local branches; no new push or production integration has occurred. See the [delivery handoff](evidence/2026-09-07-delivery-handoff.md) for the branch boundaries and remaining publication steps.
+- All original evaluation jobs finished and the three reviewed PRs merged. The [delivery handoff](evidence/2026-09-07-delivery-handoff.md) is historical pre-publication evidence; see the [changelog](../../CHANGELOG.md) for the merge/synchronization state.
 
-The decision map is resolved. This is not a claim that PRs were published, merged, or deployed.
+The decision map is resolved. Caller migration and the current unmerged follow-up remain separate delivery work.

@@ -32,7 +32,7 @@ Non-goals:
   behavior in one default path.
 
 The preferred direction is to reuse strong upstream runtimes such as
-`mlx-audio` for Qwen3-ASR, Qwen3-ForcedAligner, and Sortformer, while this
+`mlx-audio` for Qwen3-ASR and MOSS speaker transcription, while this
 service owns the stable local HTTP contract and Apple Silicon memory boundary.
 
 ## Background
@@ -42,8 +42,7 @@ puresubs. The initial reference point was Whisper-style local API servers such
 as WhisperKit: useful server shape, but limited by Whisper-family model quality
 and behavior. The service then explored FunASR/SenseVoice and Paraformer for
 local transcription and speaker diarization, added MLX/Qwen3-ASR for stronger
-Chinese/English transcription quality, and is now investigating how to add
-speaker separation without rebuilding the lower-level model stack.
+Chinese/English transcription quality, and now includes bounded English MOSS speaker transcription through the upstream MLX runtime.
 
 **Triple-engine architecture:**
 - **FunASR** — Paraformer (Chinese SOTA) + CAM++ speaker diarization
@@ -54,7 +53,7 @@ speaker separation without rebuilding the lower-level model stack.
 they fit an existing runtime contract. New engines are only needed for new
 runtime APIs, not for every new model release.
 
-→ See [MODELS.md](./MODELS.md) for model list, benchmark results, and selection guide.
+→ See [MODELS.md](./MODELS.md) for model selection, [CHANGELOG.md](./CHANGELOG.md) for delivered changes, and the [runtime roadmap](docs/plans/2026-09-07-runtime-upgrades-and-moss-evaluation.md) for follow-up work.
 
 ---
 
@@ -83,7 +82,7 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 | Chinese/English quality-first single-speaker transcription | `qwen3-asr` | `ENGINE_TYPE=mlx uv run python -m src.main` |
 | Mandarin multi-speaker podcast / meeting today | `paraformer` (default) | `uv run python -m src.main` |
 | Bulk speed-first tags / language detection | `sensevoice-small` | `FUNASR_MODEL_ID=iic/SenseVoiceSmall uv run python -m src.main` |
-| Experimental Apple-native English speaker-separation evaluation | `qwen3-sortformer` | Explicit opt-in experiment only; not a recommended meeting-transcript path |
+| English multi-speaker continuous speech, at most 30 minutes | `moss-transcribe-diarize` | Per request: `model=moss-transcribe-diarize`, `language=en` |
 
 ## API & Web UI
 
@@ -91,8 +90,20 @@ First launch downloads the model automatically (~1-2GB, may take a few minutes).
 The easiest way to test the service without using the command line:
 1. Open **[http://localhost:50700/docs](http://localhost:50700/docs)** in your browser.
 2. Find the `POST /v1/audio/transcriptions` endpoint.
-3. Click **"Try it out"**, upload your audio file, and click **"Execute"**.
-4. You can view the result on screen or click the **"Download"** button to save it.
+3. Click **"Try it out"** and upload your audio file.
+4. Enter the exact alias in the free-text `model` field. For MOSS, use
+   `moss-transcribe-diarize`, set `language` to `en`, and use an English
+   continuous-speech recording no longer than 30 minutes.
+5. Set `response_format` to `verbose_json` to inspect `segments[].speaker`,
+   timestamps, and text, then click **"Execute"**.
+6. Inspect the response or download it. A MOSS input over 1,800 seconds returns
+   400; detectable incomplete output or a gap over 10 seconds returns 422.
+
+MOSS receives one complete recording per call and does not automatically split
+long uploads. A small compressed file can still exceed 30 minutes. Omitting
+`model` keeps the current model; `whisper-1` is also passthrough and does not
+select Whisper. Use `GET /v1/models` for the active aliases. A running server
+must load the updated application before `/docs` reflects source changes.
 
 ### CLI (curl)
 
@@ -122,6 +133,13 @@ curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
   -F "model=qwen3-asr"
 
+# English MOSS speaker transcription (one recording, at most 30 minutes)
+curl http://localhost:50700/v1/audio/transcriptions \
+  -F "file=@conversation.mp3;type=audio/mpeg" \
+  -F "model=moss-transcribe-diarize" \
+  -F "language=en" \
+  -F "response_format=verbose_json"
+
 # Apple Speech ASR-only path (requires explicit language; short codes are preferred)
 curl http://localhost:50700/v1/audio/transcriptions \
   -F "file=@audio.mp3;type=audio/mpeg" \
@@ -137,7 +155,7 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `output_format` | `json` | Output: `json`, `txt`, `srt` |
 | `response_format` | — | OpenAI alias: `verbose_json`, `text`, `vtt` |
 | `with_timestamp` | `false` | Prepend `[MM:SS]` to each line in txt mode |
-| `language` | `auto` | `zh`, `zh-CN`, `en`, `en-US`, `auto`; Apple Speech requires an explicit language, accepts `zh`/`en` as API-level short codes, and rejects `auto` |
+| `language` | `auto` | `zh`, `zh-CN`, `en`, `en-US`, `auto`; MOSS requires `en`; Apple Speech requires an explicit language, accepts `zh`/`en` as API-level short codes, and rejects `auto` |
 | `model` | — | Alias or full model path. Omit to keep current model. |
 
 **Supported Models (`model` parameter):**
@@ -147,19 +165,18 @@ curl http://localhost:50700/v1/audio/transcriptions \
 | `paraformer` | FunASR | FunASR/PyTorch MPS path; Mandarin-focused with CAM++ diarization |
 | `qwen3-asr` | MLX | mlx-audio/MLX Metal path; Chinese/English quality-first ASR |
 | `sensevoice-small` | FunASR | FunASR/PyTorch MPS path; speed-first language/emotion tags |
-| `qwen3-sortformer` | Pipeline | Experimental opt-in evaluation path for Qwen3-ASR + forced alignment + Sortformer |
+| `moss-transcribe-diarize` | MLX | Opt-in English speaker transcription, at most 30 minutes; requires `language=en` |
 | `apple-speech` | Apple Speech | macOS 26+ SpeechAnalyzer sidecar; ASR-only path; requires explicit `language=zh/en` or `zh-CN/en-US`; short codes are mapped internally |
 
-`qwen3-sortformer` remains reachable only as an explicit experiment through
-`model=qwen3-sortformer`; it is not the default dictation path and is not the
-recommended answer for English meeting transcripts. Early end-to-end validation
-showed that Qwen3-ASR's native segments are chunk-level, not reliable
-sentence/word timestamps, so this profile adds Qwen3-ForcedAligner word
-timestamps and Sortformer speaker turns before rebuilding speaker-labeled
-segments in this service. A later real English 1:1 meeting probe preserved the
-stronger Qwen3 transcript text but produced costly and unreliable
-speaker-labeled segments. Future progress should prefer stronger upstream local
-diarized-ASR capabilities over deeper pipeline-specific recovery logic here.
+`qwen3-sortformer` has been retired from the public API. It is absent from
+`GET /v1/models`, and explicit requests return 400. The standalone `qwen3-asr`
+model remains supported. Historical evaluation records and internal pipeline
+infrastructure remain for traceability and a separate reference-audited cleanup.
+
+PureSubs currently normalizes audio at a default 64 kbps and splits by a 24 MiB
+size threshold. This does not enforce MOSS's 30-minute bound: a 40-minute file
+is approximately 18.3 MiB. Long-video MOSS integration is **planned, not
+implemented**; see the [PureSubs handoff](docs/plans/2026-09-07-puresubs-moss-integration.md).
 
 ### Query models
 
@@ -199,7 +216,7 @@ APPLE_SPEECH_WORKER_PATH=apple-speech-worker/.build/debug/apple-speech-worker
 APPLE_SPEECH_WORKER_TIMEOUT_SEC=120
 APPLE_SPEECH_MAX_CONCURRENCY=1
 
-# Audio processing (MLX engine only)
+# Audio processing (generic MLX path; MOSS has a separate fixed 30-minute bound)
 MAX_AUDIO_DURATION_MINUTES=50   # Auto-chunk audio longer than this
 SILENCE_THRESHOLD_SEC=0.5
 SILENCE_NOISE_DB=-30dB
@@ -236,9 +253,9 @@ uv run python benchmarks/run.py --all --save --compare  # compare all models, sa
 ## Memory Management
 
 This service is designed for Apple Silicon M-series chips with unified memory.
-Single-model transcription can consume **17–23 GB** while active. Experimental
-multi-stage profiles such as `qwen3-sortformer` can cost more because ASR,
-alignment, diarization, and merge work are combined in one local pipeline.
+Memory use depends on the model. The established FunASR path can consume
+**17–23 GB** while active; see [MODELS.md](MODELS.md) for the separately measured
+MOSS allocator peaks and their measurement scope.
 
 ### Idle Model Offloading (SPEC-009 v2)
 
