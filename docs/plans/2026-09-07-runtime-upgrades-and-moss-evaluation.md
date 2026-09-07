@@ -1,6 +1,6 @@
 # Runtime Upgrades and MOSS Evaluation Roadmap
 
-Status: Accepted working roadmap; baseline measurement and runtime/model decisions remain open.
+Status: Accepted working roadmap; execution in progress in the isolated worktree. Final runtime/model acceptance remains open.
 Date: 2026-09-07
 Canonical decision map: [Runtime Upgrade and MOSS Adoption Decision Map](../../.scratch/runtime-upgrades-moss/map.md)
 
@@ -16,7 +16,7 @@ The supplied attachment was read in full: 527 lines containing a concluding road
 
 The main direction agrees with the accepted [Lightweight Local Speech Gateway Boundary](../ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md): upstream runtimes own inference; this repository owns API compatibility, capability gating, normalization, queueing, and resource isolation.
 
-This session performed source and metadata inspection only. No dependency resolution, installation, model download, inference, quality comparison, or test suite was run. Historical benchmark results are context, not a newly verified baseline.
+At initial roadmap authoring, only source and metadata inspection had been performed. Lei subsequently authorized upgrades and validation in the isolated worktree. Current execution evidence is recorded separately: [MLX runtime comparison](../../.scratch/runtime-upgrades-moss/evidence/2026-09-07-runtime-validation.md), [MOSS probe](../../.scratch/runtime-upgrades-moss/evidence/2026-09-07-moss-probe.md), and [FunASR validation](../../.scratch/runtime-upgrades-moss/evidence/2026-09-07-funasr-preflight.md). The initial state below remains the historical starting point; it is not the latest validation result.
 
 ## Why use Wayfinder
 

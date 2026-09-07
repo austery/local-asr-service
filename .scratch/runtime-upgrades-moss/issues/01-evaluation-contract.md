@@ -4,8 +4,8 @@ Parent: [Runtime Upgrade and MOSS Adoption Decision Map](../map.md)
 Label: wayfinder:grilling
 Type: grilling
 Mode: HITL
-Status: open
-Assignee: unassigned
+Status: claimed
+Assignee: LeiP (Codex execution)
 Blocked by: none
 
 ## Question
@@ -18,3 +18,5 @@ Evidence: [Roadmap and proposed evaluation contract](../../../docs/plans/2026-09
 ## Comments
 
 - 2026-09-07 — Lei accepted the roadmap and its working rubric and requested an isolated worktree. Do not repeat a general approval interview. Actual corpus selection, reviewed references, and a measured baseline are still required; this ticket is not resolved by document approval alone.
+
+- 2026-09-07 — Lei authorized execution in the isolated worktree, including upgrades and verification. Capture available baseline evidence now; missing human reference judgments remain explicit acceptance gaps, not reasons to stop independent installation and compatibility checks.

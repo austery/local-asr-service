@@ -4,8 +4,8 @@ Parent: [Runtime Upgrade and MOSS Adoption Decision Map](../map.md)
 Label: wayfinder:research
 Type: research
 Mode: AFK
-Status: open
-Assignee: unassigned
+Status: claimed
+Assignee: LeiP (Codex execution)
 Blocked by: 01
 
 ## Question
@@ -14,3 +14,7 @@ Can a released MOSS-capable MLX Audio runtime preserve the accepted Qwen3 and sh
 Why now: MOSS evaluation depends on a compatible runtime; changing one direct package may still move shared dependencies.
 Complete when: source/checkpoint compatibility, isolated frozen installation, lock diff, unchanged-model regression evidence, and rollback identify an accepted candidate or justify retaining the baseline.
 Evidence: [Roadmap and upstream preflight](../../../docs/plans/2026-09-07-runtime-upgrades-and-moss-evaluation.md).
+
+## Comments
+
+- 2026-09-07 — Technical upgrade/verification started under Lei's execution override while the baseline ticket continues gathering quality evidence. This does not resolve the baseline dependency or grant final runtime acceptance. See [current validation evidence](../evidence/2026-09-07-runtime-validation.md).

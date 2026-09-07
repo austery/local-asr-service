@@ -4,8 +4,8 @@ Parent: [Runtime Upgrade and MOSS Adoption Decision Map](../map.md)
 Label: wayfinder:prototype
 Type: prototype
 Mode: HITL
-Status: open
-Assignee: unassigned
+Status: claimed
+Assignee: LeiP (Codex execution)
 Blocked by: 02
 
 ## Question
@@ -14,3 +14,7 @@ Does MOSS meet the agreed English transcription, speaker, timestamp, completenes
 Why now: this verdict determines promotion scope and whether the existing pipeline has a useful replacement.
 Complete when: Lei reviews an isolated real-corpus probe and records Go, No-Go, or Defer with checkpoint/runtime identity, supported duration/languages, API evidence, and limitations; Chinese comparison is secondary.
 Evidence: [Roadmap, integration seams, and acceptance rubric](../../../docs/plans/2026-09-07-runtime-upgrades-and-moss-evaluation.md).
+
+## Comments
+
+- 2026-09-07 — Isolated upstream probe started under the execution override. Runtime source is unchanged, all eight real-corpus transcription texts match, and remaining attribution/contract evidence continues separately. This claim does not resolve the runtime dependency or authorize promotion. Review windows were fixed before MOSS inference.
