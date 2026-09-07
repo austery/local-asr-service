@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "fastapi>=0.121.3",
-    "funasr[llm]>=1.2.7",
+    "funasr[llm]>=1.4.14",
     "huggingface-hub>=0.26.0",
     "mlx-audio>=0.5.1",
     "python-dotenv>=1.0.0",
