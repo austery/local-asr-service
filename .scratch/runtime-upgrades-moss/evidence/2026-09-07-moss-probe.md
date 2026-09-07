@@ -1,6 +1,6 @@
 # MOSS Upstream Probe — 2026-09-07
 
-Status: Current long-form candidate fails the completeness gate. No-Go is recommended for this runtime/checkpoint pairing; Lei’s roadmap decision is pending. No production integration was performed.
+Status: Keep the experimental candidate and investigate long-form limits. Lei positively reviewed recognition/speaker quality and did not adopt the earlier No-Go recommendation. The recorded 60-minute coverage failure remains; see [follow-up](2026-09-07-listening-acceptance-and-moss-followup.md).
 
 ## Identity and isolation
 
@@ -43,3 +43,7 @@ The cleaned MOSS transcript contains 38,251 characters, versus 64,518 for Qwen a
 The probe was one upstream call for the whole recording, without this service's 50-minute chunking, so the result cannot be explained by the service's existing chunk-offset bug. The reason for early model termination is not established. There is no evidence yet that increasing the already-unreached budget, changing the wrapper, or splitting the recording would preserve recording-wide speaker identity and solve it.
 
 The private listening review is `.runtime-validation/moss-review/index.html`, with four local PCM WAV files, each verified to be exactly 60 seconds. The final two review windows intentionally show no MOSS segments. A user decision was requested: record this candidate as No-Go and proceed with FunASR, or prioritize investigating early termination first. Do not describe the entire MOSS model family as incapable based on one implementation/checkpoint/corpus result.
+
+## Subsequent user review and upstream research
+
+The initial No-Go recommendation was not adopted. Lei requested retaining MOSS and investigating duration/token limits. Official documentation advertises up to 90 minutes, while an open upstream issue reports approximately 16K early stopping across multiple backends. Do not label 36:19 as a fixed duration limit. See [upstream limits](2026-09-07-moss-upstream-limits.md).
