@@ -16,11 +16,6 @@ updates:
     # 版本约束：防止破坏性变更（SPEC-010）
     # 说明：dual-engine 设计（PyTorch + MLX），主版本升级需要完整测试
     ignore:
-      # mlx-audio 0.3.1 是 prerelease；0.4.0+ 可能有破坏性 API 变更
-      # 策略：等待 0.4.0 稳定版发布后，经过完整 E2E 测试再升级
-      - dependency-name: 'mlx-audio'
-        versions: ['>=0.4.0']
-
       # PyTorch：屏蔽主版本 3.0+（Apple Silicon Metal 兼容性未知）
       # 当前：2.9.1 稳定
       - dependency-name: 'torch'
