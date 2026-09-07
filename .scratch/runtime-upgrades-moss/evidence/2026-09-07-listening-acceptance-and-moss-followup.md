@@ -31,3 +31,7 @@ The output budget was 32,768 tokens and actual output was 16,376 tokens. The res
 Preserve the one-pass speaker context and do not add an unverified cross-chunk speaker reconciliation system. A bounded follow-up should record termination token/reason and test complete shorter inputs of different speech densities before proposing a local duration limit. Compare the same long recording using the official default prompt as a separate variable if investigating prompt sensitivity. Merely raising an unused budget or suppressing EOS is not a demonstrated fix. A completed shorter sample establishes sample-specific evidence, not a guarantee for every recording of that duration.
 
 Current runtime source and dependencies remain unchanged during this research follow-up. The public HTTP MOSS adapter and admission limits remain a separate implementation decision.
+
+## Completed duration follow-up
+
+Lei requested continued validation. [New controlled runs](2026-09-07-moss-duration-validation.md) support a provisional 30-minute English experimental scope: two disjoint 30-minute inputs reach their tails without the checked large speech gaps, while 40/60-minute inputs terminate early at 16,376 tokens. The 40-minute run directly records EOS 151645. Thin-adapter certification and the broader long-form goal remain open.

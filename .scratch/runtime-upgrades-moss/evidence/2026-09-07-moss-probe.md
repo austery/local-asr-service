@@ -47,3 +47,7 @@ The private listening review is `.runtime-validation/moss-review/index.html`, wi
 ## Subsequent user review and upstream research
 
 The initial No-Go recommendation was not adopted. Lei requested retaining MOSS and investigating duration/token limits. Official documentation advertises up to 90 minutes, while an open upstream issue reports approximately 16K early stopping across multiple backends. Do not label 36:19 as a fixed duration limit. See [upstream limits](2026-09-07-moss-upstream-limits.md).
+
+## Subsequent duration validation
+
+The [controlled duration follow-up](2026-09-07-moss-duration-validation.md) adds a successful 20-minute prefix and two disjoint 30-minute inputs. A 40-minute input fails at 35:12.52, with directly observed EOS token 151645 after exactly 16,376 output tokens. These results support a provisional 30-minute English experimental scope with completeness checks; they do not certify every recording of that duration or the full 30–60-minute goal.
