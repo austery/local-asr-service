@@ -195,6 +195,18 @@ To keep the boundary from drifting again, we enforce architectural constraints a
   gated, and prefer discovery-only until reachable evaluation is useful.
 - For Swift-native voice workflows, evaluate `speech-swift` first before adding Swift code generation or native app logic here.
 
+## MOSS bounded enablement (2026-09-07)
+
+The user's listening acceptance permits a separate opt-in MOSS adapter PR for
+English recordings up to 30 minutes. `src/adapters/moss_output.py` owns only
+pure output validation and formatting; inference stays in `MlxAudioEngine`
+through upstream mlx-audio. The worker applies a 900-second OS alarm to this
+model's inference. No new engine, model internals, silence/VAD model, or speaker
+reconciliation is introduced. Uncovered spans over 10 seconds are rejected
+conservatively, including legitimate long silence. See the
+[adapter contract](plans/2026-09-07-moss-adapter-contract.md) and the local duration
+validation evidence for the limits of this operating policy.
+
 ## Review History
 
 | Date | Reviewer | Note | Status |

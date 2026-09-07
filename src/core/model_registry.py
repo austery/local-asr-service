@@ -11,6 +11,8 @@ from typing import Literal
 from src.core.base_engine import EngineCapabilities
 
 EngineType = Literal["funasr", "mlx", "apple-speech"]
+MOSS_MODEL_ID = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
+MOSS_MODEL_REVISION = "704aa4a9c304e8520be88901e0d1960158ef5b15"
 
 # OpenAI-compat placeholder values that mean "use the server's current model"
 # Empty string is also passthrough: form data serialises None as "" in some clients
@@ -45,6 +47,13 @@ _REGISTRY: dict[str, ModelSpec] = {
             engine_type="mlx",
             description="Qwen3-ASR 1.7B 8-bit via mlx-audio runtime on MLX Metal. Quality-first English/Chinese/mixed-language transcription; no diarization.",
             capabilities=EngineCapabilities(timestamp=True, diarization=False, emotion_tags=False, language_detect=True),
+        ),
+        ModelSpec(
+            alias="moss-transcribe-diarize",
+            model_id=MOSS_MODEL_ID,
+            engine_type="mlx",
+            description="Experimental MOSS via mlx-audio. English continuous speech up to 30 minutes per recording; native speaker labels, no cross-recording identity matching. Requires language=en.",
+            capabilities=EngineCapabilities(timestamp=True, diarization=True),
         ),
         ModelSpec(
             alias="sensevoice-small",

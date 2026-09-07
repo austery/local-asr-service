@@ -17,7 +17,7 @@ from src.core.base_engine import EngineCapabilities
 from src.core.model_registry import lookup as real_lookup
 from src.core.pipeline_registry import lookup_profile
 from src.main import app
-from src.services.transcription import PipelineQualityError, TranscriptionService
+from src.services.transcription import PipelineQualityError, TranscriptionService, WorkerRemoteError
 
 
 def _make_mock_service(
@@ -512,3 +512,34 @@ def test_get_current_model_includes_alias(client) -> None:
     body = response.json()
     assert "model_alias" in body
     assert body["model_alias"] == "qwen3-asr"
+
+
+@pytest.mark.parametrize("model", ["moss-transcribe-diarize", "OpenMOSS-Team/MOSS-Transcribe-Diarize", "whisper-1"])
+def test_moss_api_preserves_speaker_segments(model: str) -> None:
+    spec = real_lookup("moss-transcribe-diarize")
+    payload = {"text": "Hello.", "duration": 1.0, "language": "en", "segments": [
+        {"start": 0.0, "end": 1.0, "text": "Hello.", "speaker": "S01"},
+    ]}
+    service = _make_mock_service(spec.capabilities, payload, spec)
+    with patch("src.main.TranscriptionService", return_value=service), TestClient(app) as client:
+        response = client.post("/v1/audio/transcriptions", files={"file": _audio_file()},
+                               data={"model": model, "language": "en"})
+        assert response.status_code == 200
+        assert response.json()["segments"][0]["speaker"] == "S01"
+        assert response.json()["model"] == "moss-transcribe-diarize"
+        models = {item["alias"]: item for item in client.get("/v1/models").json()["models"]}
+        assert models["moss-transcribe-diarize"]["capabilities"]["diarization"] is True
+
+
+@pytest.mark.parametrize(("error_type", "status"), [
+    ("TranscriptionInputError", 400), ("TranscriptionOutputError", 422), ("ValueError", 500),
+])
+def test_moss_worker_errors_have_bounded_http_responses(error_type: str, status: int) -> None:
+    spec = real_lookup("moss-transcribe-diarize")
+    service = _make_mock_service(spec.capabilities, None, spec)
+    service.submit.side_effect = WorkerRemoteError(error_type, "MOSS validation failure")
+    with patch("src.main.TranscriptionService", return_value=service), TestClient(app) as client:
+        response = client.post("/v1/audio/transcriptions", files={"file": _audio_file()},
+                               data={"model": spec.alias, "language": "en"})
+    assert response.status_code == status
+    assert ("MOSS validation failure" in response.text) is (status != 500)

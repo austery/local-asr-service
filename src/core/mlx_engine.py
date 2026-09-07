@@ -6,6 +6,8 @@ MLX Audio 推理引擎封装类。
 """
 
 import gc
+import math
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -18,7 +20,16 @@ except ImportError:
     load_model = None  # type: ignore
 
 from src.adapters.audio_chunking import AudioChunkingService
-from src.core.base_engine import EngineCapabilities
+from src.adapters.moss_output import format_moss_output, normalize_moss_output
+from src.core.base_engine import (
+    EngineCapabilities,
+    TranscriptionInputError,
+    TranscriptionOutputError,
+)
+from src.core.model_registry import MOSS_MODEL_ID, MOSS_MODEL_REVISION, lookup
+
+MOSS_MAX_DURATION_SECONDS = 1800.0
+MOSS_MAX_TOKENS = 32768
 
 # Per-model capability profiles (prefix-matched, longest prefix wins)
 _MLX_MODEL_CAPABILITIES: dict[str, EngineCapabilities] = {
@@ -89,6 +100,8 @@ _QWEN3_SUPPORTED_LANGUAGES = frozenset({
 
 def _resolve_mlx_capabilities(model_id: str) -> EngineCapabilities:
     """Resolve capabilities via longest-prefix match against model_id."""
+    if model_id == MOSS_MODEL_ID:
+        return lookup("moss-transcribe-diarize").capabilities
     best_match = ""
     best_caps = _MLX_DEFAULT_CAPS
     for prefix, caps in _MLX_MODEL_CAPABILITIES.items():
@@ -155,7 +168,8 @@ class MlxAudioEngine:
 
         try:
             start_time = time.time()
-            self.model = load_model(self.model_id)
+            load_options = {"revision": MOSS_MODEL_REVISION} if self.model_id == MOSS_MODEL_ID else {}
+            self.model = load_model(self.model_id, **load_options)
             duration = time.time() - start_time
             print(f"✅ MLX Model loaded successfully in {duration:.2f}s")
         except Exception as e:
@@ -163,6 +177,16 @@ class MlxAudioEngine:
             raise e
 
     def transcribe_file(
+        self, file_path: str, language: str = "auto", **kwargs: object
+    ) -> str | dict[str, object]:
+        """Use MOSS's whole-recording contract or the existing chunked path."""
+        if not self.model:
+            raise RuntimeError("Model not loaded! Call engine.load() first.")
+        if self.model_id == MOSS_MODEL_ID:
+            return self._transcribe_moss(file_path, language, kwargs)
+        return self._transcribe_chunked(file_path, language, **kwargs)
+
+    def _transcribe_chunked(
         self, file_path: str, language: str = "auto", **kwargs: Any
     ) -> str | dict[str, Any]:
         """
@@ -183,9 +207,6 @@ class MlxAudioEngine:
             txt 格式: 转录文本字符串
             json 格式: 包含 text 和 segments 的字典（说话人信息）
         """
-        if not self.model:
-            raise RuntimeError("Model not loaded! Call engine.load() first.")
-
         verbose = kwargs.get("verbose", False)
         # 支持三种参数名：output_format (service), format (mlx-audio), response_format (OpenAI)
         output_format = (
@@ -226,6 +247,7 @@ class MlxAudioEngine:
                         Path(chunk_path).unlink(missing_ok=True)
 
             # 步骤3: 根据格式合并结果
+            final_result: str | dict[str, object]
             if output_format == "json":
                 final_result = self._merge_json_results(results)
             else:
@@ -244,6 +266,41 @@ class MlxAudioEngine:
         except Exception as e:
             print(f"❌ MLX transcription failed: {e}")
             raise e
+
+    def _transcribe_moss(
+        self, file_path: str, language: str, options: dict[str, object]
+    ) -> str | dict[str, object]:
+        if language.strip().lower() not in {"en", "en-us", "en_us", "eng", "english"}:
+            raise TranscriptionInputError("MOSS currently requires explicit English input: language=en.")
+        output_format = options.get("output_format") or options.get("format") or options.get("response_format", "txt")
+        output_format = {"verbose_json": "json", "text": "txt"}.get(str(output_format), str(output_format))
+        if output_format not in {"json", "txt", "srt"}:
+            raise TranscriptionInputError("MOSS supports json, text, and srt output formats.")
+        duration = self.chunking_service.get_audio_duration(file_path)
+        if not math.isfinite(duration) or not 0 < duration <= MOSS_MAX_DURATION_SECONDS:
+            raise TranscriptionInputError("MOSS accepts recordings longer than 0 and at most 1800 seconds (30 minutes).")
+        # Let upstream decode the original file once. Its audio encoder chunking
+        # preserves one decoder call and one recording-wide speaker namespace.
+        # Place artifacts under the request-owned directory so parent cleanup
+        # also removes them after an OS deadline terminates this worker.
+        with tempfile.TemporaryDirectory(prefix="moss_output_", dir=Path(file_path).parent) as output_dir:
+            result = generate_transcription(
+                model=self.model,
+                audio=file_path,
+                output_path=str(Path(output_dir) / "transcript"),
+                format="json",
+                verbose=bool(options.get("verbose", False)),
+                max_tokens=MOSS_MAX_TOKENS,
+                temperature=0.0,
+                prefill_step_size=4096,
+            )
+            try:
+                normalized = normalize_moss_output(result, duration, MOSS_MAX_TOKENS)
+            except ValueError as exc:
+                raise TranscriptionOutputError(str(exc)) from exc
+        if output_format == "json":
+            return normalized
+        return format_moss_output(normalized, output_format, bool(options.get("with_timestamp", False)))
 
     def _merge_json_results(self, results: list[Any]) -> dict[str, Any]:
         """

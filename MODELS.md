@@ -14,6 +14,46 @@
 | `qwen3-asr` | mlx-audio (`load_model` + `generate_transcription` on MLX Metal) | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | Chinese/English quality-first ASR; language prompts are normalized before inference |
 | `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; requires explicit `language=zh/en` or `zh-CN/en-US`; short codes are mapped internally; recommended low-resource ASR-only option after Phase 3 long-audio review (verified strong low-resource candidate); no speaker labels without a separate diarization stage |
 
+## Experimental MOSS
+
+`moss-transcribe-diarize` uses `OpenMOSS-Team/MOSS-Transcribe-Diarize` through
+mlx-audio 0.5.1. It is an explicit opt-in English speaker transcription path;
+it does not change the default model or retire existing aliases.
+
+```bash
+curl http://127.0.0.1:50700/v1/audio/transcriptions \
+  -F file=@conversation.wav -F model=moss-transcribe-diarize \
+  -F language=en -F response_format=verbose_json
+```
+
+- **Input:** one recording, at most 30 minutes, explicit English. The model
+  receives the whole file in one call. Speaker IDs are local to that recording.
+- **Output:** clean `text`, timestamped `segments` with `speaker`, input
+  `duration`, and requested `language=en`. JSON, text (including optional
+  timestamps), and SRT use the existing API formats.
+- **Rejection:** input outside the operating scope returns 400. Detectable
+  truncation, malformed speaker/timestamp output, or any uncovered interval over
+  10 seconds returns 422. Continuous-speech recordings are the intended scope;
+  long legitimate silence can also trigger this conservative check. Endpoint
+  overruns up to 0.25 seconds are clamped to the recording duration.
+- **Budget:** 32,768 output tokens; a 900-second worker inference deadline.
+  Deadline termination follows the existing worker failure response (500),
+  fails queued jobs on that worker, and permits the next request to reload.
+- **Evidence:** two disjoint 30-minute All-In samples completed in 316 and 357
+  seconds, with MLX allocator peaks of 6.16 and 6.37 GiB on the evaluation Mac.
+  These are raw-model single runs; loading and API overhead are additional.
+  The user accepted transcription and speaker quality by listening. Numerical
+  WER/CER and speaker accuracy are unmeasured.
+- **Limit:** 30 minutes is a provisional service policy, not a universal model
+  maximum or a guarantee of complete output. Local 40/60-minute probes ended
+  early near 16K output tokens despite an unused 32K budget. Validation catches
+  structural failures, not every omission. There is no automatic splitting or
+  cross-recording speaker reconciliation.
+
+The MOSS checkpoint is pinned to `704aa4a9c304e8520be88901e0d1960158ef5b15`, the evaluated revision. Upstream output files live under the request temporary directory so parent cleanup removes them even after worker termination.
+
+See the [adapter contract](docs/plans/2026-09-07-moss-adapter-contract.md).
+
 ## Pipeline Profiles
 
 | Alias | Components | Requestable | Notes |

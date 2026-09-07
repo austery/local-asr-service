@@ -260,6 +260,7 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
         "pipeline_chunking.py",
         "segment_alignment.py",
         "text.py",
+        "moss_output.py",  # ADR-002: pure output validation; no model runtime or reconciliation.
     }
 
     current_adapters_files = {
