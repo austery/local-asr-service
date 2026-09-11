@@ -57,7 +57,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 50700 --workers 1
 → See [MODELS.md](./MODELS.md) for the full model list, benchmark results, and selection guide.
 Active aliases: `paraformer`, `qwen3-asr`, `sensevoice-small`, `apple-speech`, `moss-transcribe-diarize`.
 MOSS is opt-in, requires explicit English, accepts at most 1,800 seconds, and does not auto-split.
-`qwen3-sortformer` is retired from the public registry; retain independent `qwen3-asr` and historical pipeline evidence.
+`qwen3-sortformer` is retired from the public registry and production orchestration (SPEC-016); retain independent `qwen3-asr`, experimental adapters, and historical pipeline evidence. The live gateway submits transcription jobs only; do not restore pipeline borrow/restore logic.
 See `CHANGELOG.md` and `docs/plans/2026-09-07-puresubs-moss-integration.md` for delivery state and the planned caller adaptation.
 
 ## Testing
@@ -129,7 +129,7 @@ The TypeScript reference implementation (silence-based chunking) lives at
 - **Engine capabilities** are declared at startup via `EngineCapabilities` frozen dataclass (`src/core/base_engine.py`). API layer validates compatibility before queuing — do not bypass this.
 - **Monkey-patching third-party libraries** is acceptable in `funasr_engine.py` only, at module level, with a clear comment. Do not patch elsewhere.
 - **Temporary files** for uploads are written to disk (not held in memory) — see `src/services/transcription.py`. Always cleaned in `finally` blocks.
-- **Dynamic model switching** (SPEC-108): Per-request `model` field triggers hot-swap inside `_consume_loop`. `release()` always precedes `load()` (memory safety). Passthrough values (`None`, `""`, `"whisper-1"`) skip switching. See `src/core/model_registry.py` for the alias table.
+- **Dynamic model switching** (SPEC-108): Per-request `model` selection and enqueue are serialized by `_spawn_lock` in `_submit_resident_job` / `_enqueue_worker_job`. The lock is released before awaiting inference. `release()` always precedes `load()` (memory safety). Passthrough values (`None`, `""`, `"whisper-1"`) skip switching. See `src/core/model_registry.py` for the alias table.
 - **Model registry** (`src/core/model_registry.py`) is the single source of truth for supported model aliases. Add new models there first before referencing them anywhere else.
 - **Idle model offload** (SPEC-009 v2): The ASR model runs in an isolated child subprocess managed via `multiprocessing.Queue` IPC. When `MODEL_IDLE_TIMEOUT_SEC > 0`, the worker process self-terminates on idle, letting the OS reclaim all memory (including the PyTorch MPS Metal heap). Memory profile: ~150 MB startup, ~20-23 GB during transcription, <500 MB after idle timeout. Next incoming request spawns a new worker and reloads the model (~10-30s for FunASR, ~3-5s for MLX). Set to `0` to disable auto-termination (worker stays resident). Architecture: `src/workers/model_worker.py` (subprocess entry point), `src/services/transcription.py` (manager).
 
@@ -199,3 +199,12 @@ resource_tracker: There appear to be 9 leaked semaphore objects  # ← Warning
 **Bug**: Apple Speech is sidecar-only (a per-request Swift CLI subprocess, cached in `_apple_speech_engines`) — it has no resident multiprocessing worker. Two places in `TranscriptionService` didn't know that. `submit()` dispatched on the raw per-request `model_spec`, so a passthrough request (`model_spec=None`) while apple-speech was the resident spec fell through to the worker-subprocess path instead of the sidecar path. Separately, `_switch_worker()` unconditionally called `_spawn_worker()`, so `_restore_resident_model()` (called after a pipeline run temporarily borrows the worker) would try to spawn a subprocess for `engine_type="apple-speech"` and crash — `factory.py`'s `_create_by_type` only supports `funasr`/`mlx` by design, matching `config.EngineType`, which deliberately excludes sidecar-only runtimes (see `test_startup_engine_type_should_exclude_sidecar_only_runtimes`). Both paths are reachable simply by starting the server with `MODEL_ID=apple-speech`.
 
 **Fix**: `submit()` now dispatches on an `effective_spec` (the explicit `model_spec`, or `self._current_model_spec` for passthrough). `_switch_worker()` now short-circuits when the target spec's `engine_type == "apple-speech"`: it still releases the previous resident worker via `_shutdown_worker()` (memory safety), but skips `_spawn_worker()` and updates `_current_model_spec` directly. See `src/services/transcription.py:submit()` and `_switch_worker()`.
+
+### SPEC-016 Production Pipeline Retirement (2026-09-11)
+
+The pipeline-specific portions of the historical Apple Speech fix above are
+retired. `_submit_resident_job` resolves passthrough under `_spawn_lock`, then
+enqueues a transcription or dispatches the Apple sidecar. `_switch_worker` still
+releases the previous worker before spawning another; it never spawns an Apple
+Speech multiprocessing worker. `submit_pipeline`, pipeline reservation, and
+resident-model restoration are no longer part of `TranscriptionService`.

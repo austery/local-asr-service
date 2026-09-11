@@ -29,10 +29,7 @@ depends_on = [
 path = "src.services"
 depends_on = [
   "src.core",
-  "src.core.alignment_port",
-  "src.core.diarization_port",
   "src.core.apple_speech_port",
-  "src.adapters",
   "src.workers",
   "src.config",
 ]

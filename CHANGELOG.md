@@ -4,6 +4,12 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Remove the retired three-stage pipeline orchestration from production request
+  handling (SPEC-016). Keep independent experimental adapters, worker domains,
+  historical evidence, and active native diarization. Replace the broken pipeline
+  probe with a retirement notice. A single spawn lock now protects resident model
+  selection and enqueue; inference runs after that lock is released.
+
 - Retire the `qwen3-sortformer` public profile: remove discovery and reject
   explicit requests with 400. Standalone `qwen3-asr`, internal pipeline
   infrastructure, historical evidence, and downloaded weights are retained.
