@@ -210,9 +210,7 @@ class TestModelSwitching:
 @pytest.mark.asyncio
 class TestSwitchToAppleSpeechSidecar:
     # Apple Speech is sidecar-only (no resident subprocess) — _switch_worker must not
-    # try to spawn one for it. _restore_resident_model relies on this: it calls
-    # _switch_worker unconditionally when restoring the pre-pipeline resident spec,
-    # which may be apple-speech.
+    # try to spawn one for it. The previous worker must still be released.
     async def test_switch_worker_to_apple_speech_does_not_spawn_subprocess(
         self, funasr_spec, apple_speech_spec
     ) -> None:
@@ -227,7 +225,7 @@ class TestSwitchToAppleSpeechSidecar:
 
 @pytest.mark.asyncio
 class TestPassthroughQueueCapacity:
-    # Regression: submit()'s passthrough dispatch must hold _pipeline_lock only
+    # Regression: submit()'s passthrough dispatch must hold _spawn_lock only
     # for the resolve+enqueue step, never for the duration of the worker's full
     # transcription — otherwise every subsequent worker-path request serializes
     # behind the first one's entire runtime, and _active_job_count() undercounts
@@ -256,7 +254,7 @@ class TestPassthroughQueueCapacity:
 
         assert svc.queue_size == 2, (
             "both requests must be counted in _pending while req-1 is still "
-            "transcribing — a passthrough request must not hold _pipeline_lock "
+            "transcribing — a passthrough request must not hold _spawn_lock "
             "past its own enqueue step"
         )
 

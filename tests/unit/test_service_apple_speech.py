@@ -83,7 +83,7 @@ async def test_submit_apple_speech_bypasses_multiprocessing_worker() -> None:
         patch.object(service, "_get_apple_speech_engine", return_value=fake_engine),
         patch.object(
             service,
-            "_submit_worker_job",
+            "_submit_resident_job",
             new=AsyncMock(return_value={"text": "worker result", "segments": None}),
         ) as worker_submit,
     ):
@@ -121,8 +121,8 @@ async def test_submit_passthrough_routes_to_apple_speech_when_it_is_the_resident
         patch.object(service, "_get_apple_speech_engine", return_value=fake_engine),
         patch.object(
             service,
-            "_submit_worker_job",
-            new=AsyncMock(return_value={"text": "worker result", "segments": None}),
+            "_spawn_worker",
+            new=AsyncMock(side_effect=AssertionError("Sidecar must not spawn a resident worker")),
         ) as worker_submit,
     ):
         result = await service.submit(
@@ -138,30 +138,23 @@ async def test_submit_passthrough_routes_to_apple_speech_when_it_is_the_resident
 
 
 @pytest.mark.asyncio
-async def test_submit_passthrough_resolves_after_pipeline_lock_release_not_before() -> None:
-    """Regression: a passthrough request arriving while a pipeline holds
-    _pipeline_lock (mid-borrow of the resident slot for another model) must
-    resolve against the model that is actually resident once the lock is
-    released — not a stale snapshot of _current_model_spec taken before
-    waiting on the lock. Every mutation of _current_model_spec (ordinary
-    switches, and pipeline borrow/restore) happens while holding this lock,
-    so resolving passthrough dispatch outside of it is racy."""
+async def test_submit_passthrough_resolves_after_model_switch_lock_release() -> None:
+    """Passthrough must use the selected model after an in-progress switch."""
     service = TranscriptionService(
         engine_type="funasr",
         model_id="iic/default",
         initial_model_spec=lookup("apple-speech"),
     )
-    # Simulate an in-flight pipeline: it has temporarily borrowed the resident
-    # slot for qwen3-asr and holds _pipeline_lock for its whole run.
+    # Simulate a model switch holding the same lock used for admission.
     service._current_model_spec = lookup("qwen3-asr")
-    await service._pipeline_lock.acquire()
+    await service._spawn_lock.acquire()
 
-    async def finish_pipeline_and_restore_apple_speech() -> None:
+    async def finish_switch_to_apple_speech() -> None:
         await asyncio.sleep(0.05)
         service._current_model_spec = lookup("apple-speech")
-        service._pipeline_lock.release()
+        service._spawn_lock.release()
 
-    restore_task = asyncio.create_task(finish_pipeline_and_restore_apple_speech())
+    restore_task = asyncio.create_task(finish_switch_to_apple_speech())
     fake_engine = FakeAppleSpeechEngine()
 
     with (
@@ -212,7 +205,7 @@ async def test_submit_apple_speech_cleans_temp_dir_on_error() -> None:
         patch.object(service, "_get_apple_speech_engine", return_value=FailingEngine()),
         patch.object(
             service,
-            "_submit_worker_job",
+            "_submit_resident_job",
             new=AsyncMock(return_value={"text": "worker result", "segments": None}),
         ),
     ):
