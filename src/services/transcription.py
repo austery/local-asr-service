@@ -22,7 +22,7 @@ from src.services.execution import (
     TranscriptionResult,
     TranscriptionResultDict,
 )
-from src.services.worker_session import WorkerSession
+from src.services.worker_session import WorkerSession, finish_cleanup
 from src.workers.model_worker import WorkerJob
 from src.workers.transport import WorkerConfig
 
@@ -98,7 +98,12 @@ class TranscriptionService:
         """Gracefully stop worker subprocess and result reader."""
         self.is_running = False
         self._stopping = True
-        await self._session.close()
+        await finish_cleanup(self._stop_resident_session())
+
+    async def _stop_resident_session(self) -> None:
+        # Admission owns the entire close/start switch, not only either session call.
+        async with self._spawn_lock:
+            await self._session.close()
 
     async def submit(
         self,
@@ -275,6 +280,8 @@ class TranscriptionService:
 
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
+        if self._stopping:
+            raise RuntimeError("Service is stopping")
         effective_spec = model_spec or self._current_model_spec
         config = WorkerConfig(
             effective_spec.engine_type if effective_spec else self._engine_type,

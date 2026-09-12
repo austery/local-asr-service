@@ -38,7 +38,12 @@ class FakeTransport:
             self.on_send(job)
 
     def receive(self) -> object:
-        return self.messages.get_nowait()
+        try:
+            return self.messages.get_nowait()
+        except queue.Empty:
+            if not self.running:
+                raise RuntimeError("Worker process died unexpectedly") from None
+            raise
 
     def is_alive(self) -> bool:
         return self.running

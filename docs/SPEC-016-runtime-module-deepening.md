@@ -301,3 +301,46 @@ The worktree reuses the existing ignored `.venv` with `--no-sync`. Dependencies,
 main checkout, and the running HTTP server were not changed. PR #38 is the base;
 this phase does not merge it or deploy either phase. Typed job/options contracts
 and narrowing the service's legacy lint exemptions remain Phase 4.
+
+
+### PR #39 review remediation (reviewed head `c2ebe72`)
+
+The local `pr-reviews/pr-39v1.md` review reported two blockers. Both are accepted;
+the earlier passing suite did not establish these two interleavings.
+
+| Item | Reproduction | Correction and regression |
+| --- | --- | --- |
+| F1: a switch can start a replacement after stop returns | Controlled close/start gap admitted a replacement after stopping began; the report's same-loop-turn switch/stop sequence is retained as a regression | Stop holds the admission lock over the entire switch transaction. Cancellation waits for this lock and cleanup; the spawn path rechecks stopping after old-session disposal. Tests cover same-turn admission, the disposal gap, and cancelled stop. |
+| F2: `get_nowait` blocks on an incomplete process frame | Before the fix, a partial startup frame exceeded a 15-second external watchdog despite a 0.5-second startup deadline | A transport-owned reader thread decodes process frames and publishes only complete messages or terminal failure to a local thread queue. Event-loop polling reads only that local queue. |
+
+The result pipe's parent writer is closed immediately after process start: the
+child is its only producer, so child exit now yields EOF even mid-frame. Shutdown
+reaps the child first, joins the reader, then disposes queue endpoints and the
+parent feeder. A receiver that fails to join retains transport ownership and
+blocks replacement. This is an owned thread, not a detached executor read.
+
+The session consumes terminal transport errors after earlier complete messages;
+it no longer races process liveness against the reader decoding a final valid
+result. A two-megabyte successful result followed by producer exit is a control.
+The result tuple protocol and model-worker inference code remain unchanged.
+
+Watchdog regressions use real Queue serialization and interrupt its separate
+frame-header write. Startup and result modes cover producer exit and a producer
+that remains alive after the header; controls disable the fault. The waiting
+modes check heartbeat progress and timeout/cancellation. Every mode repeats three
+lifetimes and asserts no live child, feeder, or `ASRResultReader` thread remains.
+
+The original review supervisor (`run_partial_frames.py`) was also rerun unchanged:
+all four cases (startup/runtime, fault disabled/enabled) exited zero and printed
+`CLEANED`; both enabled faults delivered `RuntimeError`, with no watchdog timeout.
+The initial hand-written truncated-frame probe established the red case; durable
+regressions now use the review's normal-serializer fault injection method.
+
+Remediation validation: **367 passed in 49.33 seconds**, including the real
+Paraformer one-second silence E2E. The pre-existing unregistered `e2e` marker
+warning remains. Three shutdown regressions and six normal-serializer IPC modes
+were added (four faults and two controls); the complete 15-mode process matrix
+repeats each mode three times. Ruff, Tach, targeted mypy for both lifecycle
+Modules, diff check, and wheel/source builds passed. The 49-case focused
+service/session/process suite also passed before the full run. No dependency
+updates, main-branch edits, live-server restart, or merge were performed.

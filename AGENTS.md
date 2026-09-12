@@ -231,3 +231,12 @@ Replacement waits for old disposal, including cancellation. A cleanup failure ke
 ownership and blocks replacement. Apple Speech remains outside this lifetime.
 The historical `_pending`, `_temp_dirs`, and `_shutdown_worker` descriptions above
 record past fixes; those fields/methods are no longer service implementation seams.
+
+
+PR #39 review follow-up: shutdown must serialize with the entire service admission
+transaction, including the close/start gap, and retain that ownership when cancelled.
+Process queue reads belong to the transport-owned reader thread; `get_nowait` on a
+multiprocessing queue is not frame-nonblocking. Close the parent's duplicate result
+writer after spawn so producer exit delivers EOF; reap the child and join the
+receiver before closing queue endpoints. Poll only complete messages on the event
+loop, and preserve their order before the terminal channel error.

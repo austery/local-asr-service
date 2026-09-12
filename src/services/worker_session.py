@@ -84,14 +84,14 @@ class WorkerSession:
         return future
 
     async def close(self) -> None:
-        await _finish_cleanup(self._locked_close())
+        await finish_cleanup(self._locked_close())
 
     async def _locked_close(self) -> None:
         async with self._lifetime_lock:
             await self._dispose()
 
     async def _close(self) -> None:
-        await _finish_cleanup(self._dispose())
+        await finish_cleanup(self._dispose())
 
     async def _dispose(self) -> None:
         self._config = None
@@ -111,8 +111,6 @@ class WorkerSession:
             try:
                 message = transport.receive()
             except queue.Empty:
-                if not transport.is_alive():
-                    raise RuntimeError("Worker died during startup") from None
                 if asyncio.get_running_loop().time() >= deadline:
                     raise RuntimeError("Worker failed to start within startup timeout") from None
                 await asyncio.sleep(_POLL_SECONDS)
@@ -129,8 +127,6 @@ class WorkerSession:
                 try:
                     message = transport.receive()
                 except queue.Empty:
-                    if not transport.is_alive():
-                        raise RuntimeError("Worker process died unexpectedly") from None
                     await asyncio.sleep(_POLL_SECONDS)
                     continue
                 if message == ("IDLE_EXIT", None):
@@ -142,7 +138,7 @@ class WorkerSession:
             # Dispose even with no subsequent request. start/close join this task
             # before reusing the slot; cleanup failure keeps the transport owned.
             try:
-                await _finish_cleanup(asyncio.to_thread(transport.close))
+                await finish_cleanup(asyncio.to_thread(transport.close))
             except Exception:
                 # The next start/close retries disposal and exposes any failure.
                 logging.getLogger(__name__).exception("Worker disposal failed; retaining transport")
@@ -180,7 +176,7 @@ class WorkerSession:
         self._pending.clear()
 
 
-async def _finish_cleanup(operation: Coroutine[object, object, None]) -> None:
+async def finish_cleanup(operation: Coroutine[object, object, None]) -> None:
     """Delay caller cancellation until owned cleanup has finished, including retries."""
     cleanup = asyncio.create_task(operation)
     cancelled = False

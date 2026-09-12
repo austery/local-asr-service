@@ -164,3 +164,67 @@ async def test_stop_serializes_with_startup_and_rejects_later_admission() -> Non
     assert transport.closed
     with pytest.raises(RuntimeError, match="stopping"):
         await service.submit(upload(), {}, "late")
+
+
+@pytest.mark.parametrize("cancel_stop", [False, True])
+async def test_stop_owns_entire_model_switch_including_close_start_gap(cancel_stop: bool) -> None:
+    harness = WorkerHarness()
+    service = harness.service()
+    closed = asyncio.Event()
+    resume = asyncio.Event()
+    original_close = service._session.close
+    first_close = True
+
+    async def pause_after_close() -> None:
+        nonlocal first_close
+        await original_close()
+        if first_close:
+            first_close = False
+            closed.set()
+            await resume.wait()
+
+    with patch.object(service._session, "close", side_effect=pause_after_close):
+        switching = asyncio.create_task(service.submit(upload(), {}, "switch", lookup("qwen3-asr")))
+        await asyncio.wait_for(closed.wait(), 1)
+        stopping = asyncio.create_task(service.stop_worker())
+        await asyncio.sleep(0)
+        if cancel_stop:
+            stopping.cancel()
+        await asyncio.wait({stopping}, timeout=0.05)
+        try:
+            assert not stopping.done(), "shutdown returned inside close/start gap"
+        finally:
+            resume.set()
+            # Consume both tasks even when testing the broken implementation.
+            if harness.transports:
+                harness.transports[-1].messages.put(("ERROR", "switch", "terminated"))
+            try:
+                await asyncio.wait_for(switching, 1)
+            except (RuntimeError, TimeoutError):
+                pass
+            try:
+                await asyncio.wait_for(stopping, 1)
+            except asyncio.CancelledError:
+                assert cancel_stop
+            await original_close()
+    assert harness.transports == [], "a stopped service started the replacement"
+    assert not service.model_loaded
+
+
+async def test_same_turn_switch_and_stop_never_admit_a_replacement_after_stop() -> None:
+    harness = WorkerHarness()
+    service = harness.service()
+    initial = asyncio.create_task(service.submit(upload(), {}, "initial"))
+    old = await harness.next_transport()
+    await old.next_job()
+    switching = asyncio.create_task(service.submit(upload(), {}, "switch", lookup("qwen3-asr")))
+    stopping = asyncio.create_task(service.stop_worker())
+    await asyncio.wait_for(stopping, 1)
+    assert not service.model_loaded
+    assert old.closed
+    assert len(harness.transports) == 1
+    for request in (initial, switching):
+        with pytest.raises(RuntimeError, match="terminated|stopping"):
+            await asyncio.wait_for(request, 1)
+    assert len(harness.transports) == 1
+    assert service.queue_size == 0

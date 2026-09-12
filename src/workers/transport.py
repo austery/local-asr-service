@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import multiprocessing
+import queue
+import threading
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from typing import Protocol, cast
@@ -22,10 +24,16 @@ class ShutdownTimeouts:
     graceful: float = 5.0
     terminate: float = 3.0
     kill: float = 2.0
+    reader: float = 2.0
 
 
 class WorkerTransport(Protocol):
-    """Internal Seam: queue admission/polling and synchronous process disposal."""
+    """Internal Seam: admission, complete-message polling, synchronous disposal.
+
+    receive raises queue.Empty while awaiting data and RuntimeError on terminal
+    failure, after delivering prior complete messages. Process death alone must
+    not discard frames still being decoded by the receiver.
+    """
 
     def start(self) -> None: ...
     def send(self, job: WorkerJob) -> None: ...
@@ -40,6 +48,11 @@ class _QueueInternals(Protocol):
     _ignore_epipe: bool
     _reader: Connection
     _writer: Connection
+
+
+@dataclass(frozen=True)
+class _ReceiveFailure:
+    error: Exception
 
 
 class ProcessTransport:
@@ -66,15 +79,35 @@ class ProcessTransport:
         )
         self._timeouts = timeouts
         self._closed = False
+        self._received: queue.Queue[object] = queue.Queue()
+        self._receive_thread: threading.Thread | None = None
 
     def start(self) -> None:
         self._process.start()
+        # Only the child writes results. Closing the parent's duplicate writer
+        # makes child exit produce EOF, including midway through a framed message.
+        cast(_QueueInternals, self._results)._writer.close()
+        reader = threading.Thread(target=self._receive_messages, name="ASRResultReader", daemon=True)
+        reader.start()
+        self._receive_thread = reader
 
     def send(self, job: WorkerJob) -> None:
         self._jobs.put_nowait(job)
 
     def receive(self) -> object:
-        return self._results.get_nowait()
+        message = self._received.get_nowait()
+        if isinstance(message, _ReceiveFailure):
+            raise RuntimeError("Worker result channel closed or failed") from message.error
+        return message
+
+    def _receive_messages(self) -> None:
+        # Queue.get_nowait only polls for the beginning of a frame; decoding its
+        # body can still block. Only this owned thread reads the process pipe.
+        try:
+            while True:
+                self._received.put(self._results.get())
+        except Exception as exc:
+            self._received.put(_ReceiveFailure(exc))
 
     def is_alive(self) -> bool:
         return not self._closed and self._process.is_alive()
@@ -83,6 +116,7 @@ class ProcessTransport:
         if self._closed:
             return
         self._reap()
+        self._join_receiver()
         # No live consumer remains. Reading abandoned data can deadlock on a
         # lock held by the killed child, or on a partially consumed frame.
         # Close the reader instead: the parent's feeder exits on EPIPE, and
@@ -97,6 +131,15 @@ class ProcessTransport:
         self._closed = True
         del self._jobs
         del self._results
+
+    def _join_receiver(self) -> None:
+        # Reaping closes the last writer and wakes a partial/idle read with EOF.
+        # Never close a descriptor underneath a live receive thread or abandon it.
+        if self._receive_thread is not None:
+            self._receive_thread.join(timeout=self._timeouts.reader)
+            if self._receive_thread.is_alive():
+                raise RuntimeError("Worker result reader did not exit; retaining transport ownership")
+            self._receive_thread = None
 
     def _reap(self) -> None:
         if self._process.pid is None:

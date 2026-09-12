@@ -4,6 +4,11 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Fence shutdown across the entire resident model switch, including cancellation.
+  Decode process result frames in an owned reader thread so a producer exiting
+  mid-frame cannot freeze the event loop; reap and join before releasing IPC
+  resources (PR #39 review F1/F2).
+
 - Move resident worker startup, IPC, completion waiters, and resource disposal into
   a worker-session Module (SPEC-016 Phase 3). Reap failed starts, escalate after a
   timed join if still alive, and unblock the job feeder after its consumer exits.
