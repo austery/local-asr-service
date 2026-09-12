@@ -85,10 +85,10 @@ inference. This phase must not silently change the model-switch policy.
 
 ### Phase 3: Deepen worker lifecycle ownership
 
-- [ ] Introduce an internal worker-session Module that owns startup, IPC, exit,
+- [x] Introduce an internal worker-session Module that owns startup, IPC, exit,
   pending completions, and resource release; inject the process transport for tests.
-- [ ] Consolidate cleanup for normal exit, startup failure, timeout, and crash.
-- [ ] Keep Apple sidecar lifetime distinct; share an execution Interface only where
+- [x] Consolidate cleanup for normal exit, startup failure, timeout, and crash.
+- [x] Keep Apple sidecar lifetime distinct; share an execution Interface only where
   both production adapters have a real common contract.
 
 **Acceptance:** tests through the session Interface cover startup failure,
@@ -207,3 +207,97 @@ The internal Python return contract changes from a bare payload to
 stand-ins were migrated; the external HTTP response shape remains unchanged.
 The worktree shares the existing dependency environment via `.venv` and uses
 `--no-sync`. Neither dependency versions nor the running server were changed.
+
+## Phase 3 worker-session contract (2026-09-12)
+
+This phase is stacked on PR #38 (`11353c2`) in the isolated
+`refactor/worker-session` worktree. PR #38 remains a separate review/merge step.
+
+The previous shutdown implementation was reproduced with a process whose timed
+`join` returns while still alive: `kill()` was never called and the service
+cleared its process handle. Startup error branches also discarded the process
+without joining it or closing its queues. Ownership now stays in one Module:
+
+- `WorkerSession` owns startup/readiness, pending completions, its result reader,
+  and disposal. Its caller selects a `WorkerConfig`, awaits `start`, synchronously
+  enqueues under the admission lock, then awaits the returned future outside that
+  lock. Successful reuse of the same live configuration does not restart it.
+- The internal transport Seam has a real multiprocessing Adapter and a controlled
+  test Adapter. The service no longer holds process/queue/reader fields or pending
+  completion dictionaries. Upload directories remain owned by `submit`'s `finally`.
+- Startup failure, deadline, cancellation, idle exit, process death, and explicit
+  shutdown all dispose the owned transport. Readers are joined before replacement;
+  an old reader cannot consume a new startup handshake. No blocking executor
+  `Queue.get` is left behind on startup timeout.
+- Disposal waits for graceful exit, then checks liveness after both timed
+  terminate/join and kill/join. If the process survives, keep ownership and reject
+  replacement. Cancellation waits for cleanup before releasing lifetime ownership.
+- After the child is reaped, close the parent job-reader endpoint so a blocked
+  feeder exits on EPIPE, then close/join queues and close both endpoints. A killed
+  child can retain the Queue read lock or leave a partially consumed frame, so
+  draining through `Queue.get` is unsafe. An independent SIGSTOP-then-kill probe
+  reproduced this defect in the first implementation and is retained as a test.
+- This disposal uses CPython Queue's `_reader`, `_writer`, and `_ignore_epipe`
+  internals, isolated and typed in the transport Adapter. The flag is set before
+  any parent feeder starts; endpoint closure happens only after child reaping.
+  This avoids discarding the feeder with `cancel_join_thread`, which would hide a
+  leak. The trade-off is a CPython dependency: the real spawn probes are in CI and
+  must pass when upgrading Python. Local validation uses CPython 3.11.
+- Terminal/malformed messages fail pending jobs. Per-job legacy and typed errors
+  preserve their existing HTTP mapping. Apple sidecar lifetime remains separate.
+- Shutdown blocks later admission and waits for an already-starting resident
+  session. Explicit ModelSpec switches still close the old session even if two
+  specs reference identical weights. Cancelling a request releases its waiter/upload, not native
+  inference. Model switching still terminates outstanding jobs on the old model;
+  this phase does not introduce a drain-before-switch scheduling policy.
+
+Keeping lifecycle methods on the service with shared mutable queues was rejected:
+that would move code without transferring ownership. Replacing the multiprocessing
+wire protocol was also excluded; typed job payloads remain Phase 4 work.
+
+### Regression migration and acceptance
+
+The old suites installed private process handles, dictionaries, and reader tasks.
+They now exercise real submission/session behavior with the controlled transport.
+Repeated assertions across the old suites were consolidated; active scenarios
+remain represented as follows:
+
+| Previous obligation | Current behavioral evidence |
+| --- | --- |
+| Result/text delivery, remote error types, upload lifetime | `test_service.py` result/error parameter sets |
+| Queue full, internal admission, overflow before completion | `test_service.py` and real concurrent admission in `test_concurrency.py` |
+| Cancel waiting for lock, cancel explicit/passthrough, enqueue failure | `test_service.py` cancellation and cleanup cases |
+| Old reader must not consume new READY | `test_worker_session.py` replacement/late-result case |
+| Same-model reuse, selected model after switch, old-job termination | `test_dynamic_switching.py` |
+| Failed switch cleanup and recovery, Apple exclusion | `test_dynamic_switching.py` and unchanged Apple tests |
+| Lazy state, capabilities, idle/crash restart | `test_idle_offload.py` |
+| Selection/validation/response agreement | All 13 Phase 2 HTTP cases retained with the real session |
+
+Lightweight real-subprocess probes run in watchdog-isolated Python processes.
+Each performs three lifetimes and checks child reaping, absence of feeder threads,
+clean interpreter exit, and absence of resource-tracker warnings. Modes cover
+normal shutdown, idle, crash, load error, invalid startup, startup timeout,
+SIGTERM-resistant worker, a two-megabyte queued job with no consumer, and a
+SIGSTOP-paused consumer killed while waiting inside Queue.get. These
+probes do not load ML models. They establish lifecycle behavior for these cases,
+not long-audio inference or live-server acceptance.
+
+### Phase 3 validation and second review
+
+- Final full suite: **358 passed in 38.68 seconds**, including real Paraformer
+  one-second silence E2E. The pre-existing unregistered `e2e` marker warning remains.
+- Nine watchdog-isolated process modes, each repeated three times, passed. The
+  SIGSTOP case first failed during queue draining and passed after endpoint-based
+  disposal replaced it. These probes now run in CI alongside unit tests.
+- Ruff, Tach, `git diff --check`, and targeted mypy for `worker_session.py` and
+  `transport.py` passed. No new complexity exemptions or `Any` annotations.
+- `uv build --no-build-isolation` produced the wheel and source distribution.
+- The separate second review checked ownership transfer, cleanup cancellation,
+  same-weight/different-spec switching, failed replacement, sidecar exclusion, and
+  every active regression in the migration table. The killed-consumer read-lock
+  defect found during that pass was fixed and re-tested with a real process.
+
+The worktree reuses the existing ignored `.venv` with `--no-sync`. Dependencies,
+main checkout, and the running HTTP server were not changed. PR #38 is the base;
+this phase does not merge it or deploy either phase. Typed job/options contracts
+and narrowing the service's legacy lint exemptions remain Phase 4.

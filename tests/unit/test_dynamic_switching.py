@@ -1,267 +1,122 @@
-"""Unit tests for dynamic model switching in TranscriptionService (SPEC-108).
+"""Model selection and disposal ordering through real admission and session."""
 
-Cases preserved (adapted to subprocess architecture):
-  DS-1: Switch triggered when different model_spec submitted
-  DS-2: No switch when same model_spec submitted
-  DS-3: Result after switch is from the correct (new) model
-  DS-6: Temp directory cleaned up even when switch fails
-
-Release/load ordering tests removed — those invariants now live inside the
-worker subprocess and are covered by test_worker.py.
-"""
 import asyncio
-import multiprocessing
+from dataclasses import replace
 from io import BytesIO
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi import UploadFile
 
 from src.core.model_registry import lookup
-from src.services.transcription import TranscriptionService
+from tests.helpers.worker_transport import WorkerHarness
 
 
-@pytest.fixture
-def mlx_spec():
-    return lookup("qwen3-asr")
+def upload() -> UploadFile:
+    return UploadFile(file=BytesIO(b"audio"), filename="test.wav")
 
 
-@pytest.fixture
-def funasr_spec():
-    return lookup("paraformer")
+async def test_same_model_requests_reuse_worker() -> None:
+    harness = WorkerHarness()
+    service = harness.service()
+    try:
+        for uid in ("first", "second"):
+            task = asyncio.create_task(service.submit(upload(), {}, uid, lookup("paraformer")))
+            transport = await harness.next_transport() if uid == "first" else harness.transports[0]
+            job = await transport.next_job()
+            transport.messages.put(("RESULT", job.uid, uid))
+            assert (await asyncio.wait_for(task, 1)).payload == uid
+        assert len(harness.transports) == 1
+    finally:
+        await service.stop_worker()
 
 
-@pytest.fixture
-def apple_speech_spec():
-    return lookup("apple-speech")
+@pytest.mark.parametrize("same_weights", [False, True])
+async def test_switch_reaps_old_worker_and_fails_old_jobs_before_new_admission(
+    same_weights: bool,
+) -> None:
+    harness = WorkerHarness()
+    service = harness.service(lookup("qwen3-asr" if same_weights else "paraformer"))
+    target = replace(lookup("qwen3-asr"), alias="same-weights") if same_weights else lookup("qwen3-asr")
+    old = asyncio.create_task(service.submit(upload(), {}, "old"))
+    first = await harness.next_transport()
+    old_job = await first.next_job()
+    switched = asyncio.create_task(service.submit(upload(), {}, "new", target))
+    second = await harness.next_transport()
+    job = await second.next_job()
+    try:
+        assert first.closed
+        assert second.config.model_id == lookup("qwen3-asr").model_id
+        assert Path(job.temp_file_path).exists()
+        with pytest.raises(RuntimeError, match="terminated"):
+            await old
+        assert not Path(old_job.temp_file_path).parent.exists()
+        second.messages.put(("RESULT", job.uid, "switched result"))
+        result = await asyncio.wait_for(switched, 1)
+        assert result.payload == "switched result"
+        assert result.model == target.alias
+        assert service.current_model_spec == target
+    finally:
+        await service.stop_worker()
 
 
-def _make_upload() -> UploadFile:
-    return UploadFile(file=BytesIO(b"fake audio"), filename="test.wav")
-
-
-def _setup_service(spec, max_queue_size: int = 5) -> TranscriptionService:
-    """Create a service with injected mock worker — no subprocess spawned."""
-    svc = TranscriptionService(
-        engine_type=spec.engine_type,
-        model_id=spec.model_id,
-        max_queue_size=max_queue_size,
-        initial_model_spec=spec,
-        idle_timeout=0,
-    )
-    svc.is_running = True
-    mock_proc = MagicMock()
-    mock_proc.is_alive.return_value = True
-    svc._worker = mock_proc
-    svc._job_queue = multiprocessing.Queue()
-    svc._result_queue = multiprocessing.Queue()
-    return svc
-
-
-async def _stop_service(svc: TranscriptionService) -> None:
-    svc.is_running = False
-    if svc._result_reader_task and not svc._result_reader_task.done():
-        svc._result_reader_task.cancel()
-        try:
-            await svc._result_reader_task
-        except asyncio.CancelledError:
-            pass
-
-
-@pytest.mark.asyncio
-class TestSameModelRequests:
-    # DS-2: consecutive same-model requests must not re-trigger _switch_worker
-    async def test_should_return_result_when_same_model_requested_twice(
-        self, funasr_spec
-    ) -> None:
-        svc = _setup_service(funasr_spec)
-        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
-
-        async def deliver(uid: str, result: object) -> None:
-            await asyncio.sleep(0.05)
-            svc._result_queue.put(("RESULT", uid, result))
-
-        with patch.object(svc, "_switch_worker", new_callable=AsyncMock) as mock_switch:
-            asyncio.create_task(deliver("req-1", {"text": "hello", "segments": None, "duration": 1.0}))
-            r1 = (await asyncio.wait_for(
-                svc.submit(_make_upload(), {}, request_id="req-1", model_spec=funasr_spec),
-                timeout=5.0,
-            )).payload
-            asyncio.create_task(deliver("req-2", {"text": "world", "segments": None, "duration": 1.0}))
-            r2 = (await asyncio.wait_for(
-                svc.submit(_make_upload(), {}, request_id="req-2", model_spec=funasr_spec),
-                timeout=5.0,
-            )).payload
-
-        await _stop_service(svc)
-
-        mock_switch.assert_not_called()
-        assert isinstance(r1, dict)
-        assert isinstance(r2, dict)
-
-
-@pytest.mark.asyncio
-class TestModelSwitching:
-    # DS-1: _switch_worker must be called when a different model_spec is requested
-    async def test_switch_triggered_for_different_model(
-        self, funasr_spec, mlx_spec
-    ) -> None:
-        svc = _setup_service(funasr_spec)
-        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
-
-        async def fake_switch(spec: object) -> None:
-            svc._current_model_spec = spec  # type: ignore[assignment]
-
-        async def deliver(uid: str, result: object) -> None:
-            await asyncio.sleep(0.05)
-            svc._result_queue.put(("RESULT", uid, result))
-
-        with patch.object(svc, "_switch_worker", side_effect=fake_switch) as mock_switch:
-            asyncio.create_task(deliver("req-1", {"text": "hello", "segments": None, "duration": 1.0}))
-            await asyncio.wait_for(
-                svc.submit(_make_upload(), {}, request_id="req-1", model_spec=mlx_spec),
-                timeout=5.0,
-            )
-            mock_switch.assert_called_once_with(mlx_spec)
-
-        await _stop_service(svc)
-
-    # DS-3: result returned after switch must come from the new model
-    async def test_result_after_switch_is_correct(
-        self, funasr_spec, mlx_spec
-    ) -> None:
-        svc = _setup_service(funasr_spec)
-        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
-        expected = {"text": "switched result", "segments": None, "duration": 2.0}
-
-        async def fake_switch(spec: object) -> None:
-            svc._current_model_spec = spec  # type: ignore[assignment]
-
-        async def deliver(uid: str, result: object) -> None:
-            await asyncio.sleep(0.05)
-            svc._result_queue.put(("RESULT", uid, result))
-
-        with patch.object(svc, "_switch_worker", side_effect=fake_switch):
-            asyncio.create_task(deliver("req-1", expected))
-            result = (await asyncio.wait_for(
-                svc.submit(_make_upload(), {}, request_id="req-1", model_spec=mlx_spec),
-                timeout=5.0,
-            )).payload
-
-        await _stop_service(svc)
-
-        assert result == expected
-        assert svc.current_model_spec == mlx_spec, (
-            "_current_model_spec must be updated atomically after a successful switch"
-        )
-
-    # DS-6: temp directory is cleaned up even when _switch_worker raises
-    async def test_temp_file_cleaned_up_when_switch_fails(
-        self, funasr_spec, mlx_spec
-    ) -> None:
-        svc = _setup_service(funasr_spec)
-
-        async def failing_switch(spec: object) -> None:
-            raise RuntimeError("switch failed")
-
-        with patch.object(svc, "_switch_worker", side_effect=failing_switch):
+async def test_failed_switch_cleans_upload_and_recovers_previous_selection(tmp_path: Path) -> None:
+    harness = WorkerHarness()
+    harness.configure = lambda t: setattr(t, "start_error", RuntimeError("switch failed"))
+    service = harness.service()
+    task_dir = tmp_path / "request"
+    task_dir.mkdir()
+    try:
+        with patch("src.services.transcription.tempfile.mkdtemp", return_value=str(task_dir)):
             with pytest.raises(RuntimeError, match="switch failed"):
-                await svc.submit(_make_upload(), {}, request_id="req-1", model_spec=mlx_spec)
-
-        assert len(svc._temp_dirs) == 0, "All temp dirs must be cleaned up after a failed switch"
-        assert "req-1" not in svc._pending, "Pending future must be removed after failure"
-
-    # DS-5: Service stays operational after a failed model switch
-    async def test_service_recovers_after_failed_switch(
-        self, funasr_spec, mlx_spec
-    ) -> None:
-        """DS-5: Service stays operational after a failed model switch."""
-        svc = _setup_service(funasr_spec)
-        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
-
-        call_count = {"n": 0}
-
-        async def sometimes_failing_switch(spec: object) -> None:
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                raise RuntimeError("transient switch error")
-            svc._current_model_spec = spec  # type: ignore[assignment]
-
-        async def deliver(uid: str, result: object) -> None:
-            await asyncio.sleep(0.05)
-            svc._result_queue.put(("RESULT", uid, result))
-
-        with patch.object(svc, "_switch_worker", side_effect=sometimes_failing_switch):
-            # First request with new model_spec fails
-            with pytest.raises(RuntimeError, match="transient switch error"):
-                await svc.submit(_make_upload(), {}, request_id="req-fail", model_spec=mlx_spec)
-
-            # Second request succeeds — service has not wedged
-            asyncio.create_task(deliver("req-ok", {"text": "recovered", "segments": None, "duration": 1.0}))
-            result = (await asyncio.wait_for(
-                svc.submit(_make_upload(), {}, request_id="req-ok", model_spec=None),
-                timeout=5.0,
-            )).payload
-            assert result["text"] == "recovered"  # type: ignore[index]
-
-        await _stop_service(svc)
+                await service.submit(upload(), {}, "failed", lookup("qwen3-asr"))
+        assert not task_dir.exists()
+        assert harness.transports[0].closed
+        assert service.queue_size == 0
+        assert service.current_model_spec == lookup("paraformer")
+        harness.configure = None
+        task = asyncio.create_task(service.submit(upload(), {}, "retry"))
+        await harness.next_transport()  # failed generation
+        transport = await harness.next_transport()
+        job = await transport.next_job()
+        assert transport.config.model_id == lookup("paraformer").model_id
+        transport.messages.put(("RESULT", job.uid, "recovered"))
+        assert (await asyncio.wait_for(task, 1)).payload == "recovered"
+    finally:
+        await service.stop_worker()
 
 
-@pytest.mark.asyncio
-class TestSwitchToAppleSpeechSidecar:
-    # Apple Speech is sidecar-only (no resident subprocess) — _switch_worker must not
-    # try to spawn one for it. The previous worker must still be released.
-    async def test_switch_worker_to_apple_speech_does_not_spawn_subprocess(
-        self, funasr_spec, apple_speech_spec
-    ) -> None:
-        svc = _setup_service(funasr_spec)
+async def test_switch_to_apple_speech_releases_resident_without_spawning() -> None:
+    harness = WorkerHarness()
+    service = harness.service()
+    task = asyncio.create_task(service.submit(upload(), {}, "resident"))
+    transport = await harness.next_transport()
+    await transport.next_job()
+    await service._switch_worker(lookup("apple-speech"))
+    with pytest.raises(RuntimeError, match="terminated"):
+        await task
+    assert transport.closed
+    assert len(harness.transports) == 1
+    assert not service.model_loaded
+    assert service.current_model_spec == lookup("apple-speech")
+    await service.stop_worker()
 
-        with patch.object(svc, "_spawn_worker", new_callable=AsyncMock) as mock_spawn:
-            await svc._switch_worker(apple_speech_spec)
 
-        mock_spawn.assert_not_called()
-        assert svc.current_model_spec == apple_speech_spec
-
-
-@pytest.mark.asyncio
-class TestPassthroughQueueCapacity:
-    # Regression: submit()'s passthrough dispatch must hold _spawn_lock only
-    # for the resolve+enqueue step, never for the duration of the worker's full
-    # transcription — otherwise every subsequent worker-path request serializes
-    # behind the first one's entire runtime, and _active_job_count() undercounts
-    # requests still waiting on the lock, defeating MAX_QUEUE_SIZE.
-    async def test_second_passthrough_request_enqueues_while_first_still_transcribing(
-        self, funasr_spec
-    ) -> None:
-        svc = _setup_service(funasr_spec, max_queue_size=2)
-        svc._result_reader_task = asyncio.create_task(svc._result_reader_loop())
-
-        async def deliver(uid: str, result: object, delay: float) -> None:
-            await asyncio.sleep(delay)
-            svc._result_queue.put(("RESULT", uid, result))
-
-        asyncio.create_task(deliver("req-1", {"text": "one", "segments": None}, delay=0.2))
-        submit1 = asyncio.create_task(
-            svc.submit(_make_upload(), {}, request_id="req-1", model_spec=None)
-        )
-        await asyncio.sleep(0.05)  # req-1 should have enqueued and released the lock by now
-
-        asyncio.create_task(deliver("req-2", {"text": "two", "segments": None}, delay=0.05))
-        submit2 = asyncio.create_task(
-            svc.submit(_make_upload(), {}, request_id="req-2", model_spec=None)
-        )
-        await asyncio.sleep(0.05)  # req-2 should also have enqueued by now, not be lock-blocked
-
-        assert svc.queue_size == 2, (
-            "both requests must be counted in _pending while req-1 is still "
-            "transcribing — a passthrough request must not hold _spawn_lock "
-            "past its own enqueue step"
-        )
-
-        r1 = (await asyncio.wait_for(submit1, timeout=5.0)).payload
-        r2 = (await asyncio.wait_for(submit2, timeout=5.0)).payload
-
-        assert r1["text"] == "one"  # type: ignore[index]
-        assert r2["text"] == "two"  # type: ignore[index]
-
-        await _stop_service(svc)
+async def test_second_passthrough_enqueues_while_first_still_transcribing() -> None:
+    harness = WorkerHarness()
+    service = harness.service(capacity=2)
+    first = asyncio.create_task(service.submit(upload(), {}, "first"))
+    transport = await harness.next_transport()
+    first_job = await transport.next_job()
+    second = asyncio.create_task(service.submit(upload(), {}, "second"))
+    second_job = await transport.next_job()
+    try:
+        assert service.queue_size == 2
+        assert not first.done()
+        transport.messages.put(("RESULT", second_job.uid, "two"))
+        transport.messages.put(("RESULT", first_job.uid, "one"))
+        assert (await asyncio.wait_for(first, 1)).payload == "one"
+        assert (await asyncio.wait_for(second, 1)).payload == "two"
+    finally:
+        await service.stop_worker()

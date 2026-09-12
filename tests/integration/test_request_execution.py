@@ -5,7 +5,6 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI, UploadFile
@@ -16,7 +15,10 @@ from src.core.base_engine import TranscriptionInputError
 from src.core.model_registry import ModelSpec, lookup
 from src.services.execution import ExecutionResult
 from src.services.transcription import TranscriptionService
+from src.services.worker_session import WorkerSession
 from src.workers.model_worker import WorkerJob
+from src.workers.transport import WorkerConfig
+from tests.helpers.worker_transport import FakeTransport
 
 
 @dataclass
@@ -32,8 +34,9 @@ class ControlledService(TranscriptionService):
     """Replace only worker transport; retain routing, validation, enqueue, and cleanup."""
 
     def __init__(self, spec: ModelSpec, control: WorkerControl) -> None:
-        super().__init__(spec.engine_type, spec.model_id, initial_model_spec=spec)
         self.control = control
+        super().__init__(spec.engine_type, spec.model_id, initial_model_spec=spec,
+                         worker_session=WorkerSession(self._make_transport))
 
     async def submit(
         self, file: UploadFile, params: dict[str, object], request_id: str = "unknown",
@@ -43,29 +46,31 @@ class ControlledService(TranscriptionService):
             self.control.admitted.set()
         return await super().submit(file, params, request_id, model_spec)
 
-    async def _shutdown_worker(self) -> None:
-        self._worker = None
+    def _make_transport(self, config: WorkerConfig) -> FakeTransport:
+        control = self.control
 
-    async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
-        self.control.starting.set()
-        await self.control.release.wait()
-        if self.control.fail_start:
-            self.control.fail_start = False
-            raise RuntimeError("controlled startup failure")
-        self._current_model_spec = model_spec or self.current_model_spec
-        worker = MagicMock()
-        worker.is_alive.return_value = True
-        self._worker = worker
-        jobs = MagicMock()
-        jobs.put_nowait.side_effect = self._deliver
-        self._job_queue = jobs
+        class ControlledTransport(FakeTransport):
+            def start(self) -> None:
+                self.running = True
+                control.starting.set()
 
-    def _deliver(self, job: WorkerJob) -> None:
+            def receive(self) -> object:
+                if self.ready and control.release.is_set():
+                    self.ready = False
+                    if control.fail_start:
+                        control.fail_start = False
+                        return ("LOAD_ERROR", "controlled startup failure")
+                    return ("READY", None)
+                return super().receive()
+
+        transport = ControlledTransport(config)
+        transport.on_send = lambda job: self._deliver(transport, job)
+        return transport
+
+    def _deliver(self, transport: FakeTransport, job: WorkerJob) -> None:
         assert self.current_model_spec is not None
         self.control.jobs.append((self.current_model_spec.alias, job))
-        asyncio.get_running_loop().call_soon(
-            self._resolve_future, job.uid, {"text": "controlled result"},
-        )
+        transport.messages.put(("RESULT", job.uid, {"text": "controlled result"}))
 
 
 def _app(service: TranscriptionService) -> FastAPI:
@@ -105,7 +110,11 @@ async def _switch_and_request(
             with pytest.raises(RuntimeError, match="controlled startup failure"):
                 await switch
         else:
-            await switch
+            try:
+                await switch
+            except RuntimeError as exc:
+                # A later explicit switch still terminates the old generation.
+                assert "terminated" in str(exc) and data.get("model") == "qwen3-asr"
         assert service.queue_size == 0
         assert all(not Path(job.temp_file_path).parent.exists() for _, job in control.jobs)
         return response, control
@@ -116,6 +125,7 @@ async def _switch_and_request(
                 task.cancel()
                 with suppress(asyncio.CancelledError, RuntimeError):
                     await task
+        await service.stop_worker()
 
 
 @pytest.mark.asyncio
@@ -215,15 +225,14 @@ async def test_custom_model_returns_its_full_path_identity() -> None:
         )
     assert response.status_code == 200
     assert response.json()["model"] == "mlx-community/custom"
+    await service.stop_worker()
 
 
 @pytest.mark.asyncio
 async def test_completion_identity_survives_a_later_runtime_change() -> None:
     class LaterSwitchService(ControlledService):
-        def _resolve_future(
-            self, uid: str, result: object | None = None, error: Exception | None = None,
-        ) -> None:
-            super()._resolve_future(uid, result, error)
+        def _deliver(self, transport: FakeTransport, job: WorkerJob) -> None:
+            super()._deliver(transport, job)
             self._current_model_spec = lookup("sensevoice-small")
 
     control = WorkerControl()
@@ -237,3 +246,4 @@ async def test_completion_identity_survives_a_later_runtime_change() -> None:
     assert service.current_model_spec == lookup("sensevoice-small")
     assert response.status_code == 200
     assert response.json()["model"] == "qwen3-asr"
+    await service.stop_worker()

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from src.config import MAX_UPLOAD_SIZE_MB
 from src.core.base_engine import TranscriptionInputError
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
-from src.services.transcription import WorkerRemoteError
+from src.services.worker_session import WorkerRemoteError
 
 logger = logging.getLogger(__name__)
 
