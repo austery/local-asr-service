@@ -4,7 +4,7 @@ title: Runtime Module Deepening
 status: Ready for Implementation
 priority: P3 - Quality
 creationDate: 2026-09-11
-lastUpdateDate: 2026-09-11
+lastUpdateDate: 2026-09-12
 relatedSpecs:
   - ADR-002
   - SPEC-009
@@ -71,12 +71,12 @@ orchestration framework is introduced.
 
 ### Phase 2: Resolve each request's execution model once
 
-- [ ] Reproduce whether admission-time capability checks and enqueue-time model
+- [x] Reproduce whether admission-time capability checks and enqueue-time model
   selection can diverge under concurrent switching.
-- [ ] Specify passthrough timing explicitly, including switch failure and requests
+- [x] Specify passthrough timing explicitly, including switch failure and requests
   already queued. Decide between an admission snapshot and enqueue-time resolution
   before introducing an immutable execution plan.
-- [ ] Make capability validation, execution, and response model identity share that
+- [x] Make capability validation, execution, and response model identity share that
   plan. Preserve early validation and custom-model behavior.
 
 **Acceptance:** a deterministic concurrent test proves the selected model,
@@ -110,8 +110,9 @@ requires updating caller tests that inspect its locks or dictionaries.
 
 ## Delivery evidence
 
-Phase 1 is implemented and locally verified, awaiting PR review and integration.
-Phases 2–4 remain planned, not implemented.
+Phase 1 merged in PR #37. The following table records its validation.
+Phase 2 is implemented in a separate worktree; its validation is recorded below.
+Phases 3–4 remain planned, not implemented.
 
 | Check | Result |
 |---|---|
@@ -143,3 +144,66 @@ registration stays after worker readiness; explicit Apple requests retain their
 independent sidecar path. No blocking issue was found in that pass. Existing
 model-identity timing and lifecycle failure-path concerns remain Phase 2/3 work,
 not claims fixed by this retirement.
+
+## Phase 2 execution contract (2026-09-12)
+
+Phase 1 merged as PR #37 at `d0f29bf`. Phase 2 uses the separate
+`refactor/request-execution` worktree and does not alter the running server.
+
+A controlled switch from Paraformer to SenseVoice reproduced a successful HTTP
+response labelled `paraformer` although the queued job used `sensevoice-small`.
+The route captured identity before waiting for the spawn lock. Capability checks
+read the same stale snapshot and can accept unsupported timestamp requests.
+
+Chosen contract:
+
+- Explicit selection is fixed by the request. Validate it before waiting for a
+  worker or copying the upload; explicit Apple requests retain independent dispatch.
+- Passthrough selection occurs after acquiring the spawn lock, as before. Resolve
+  an immutable execution plan there, validate its capabilities before enqueue or
+  worker startup, and carry its identity through completion. Do not turn a
+  passthrough into an explicit switch to an earlier snapshot.
+- `submit` returns a typed completion containing the normalized payload and the
+  actual model identity. HTTP rendering reads that completion, not mutable runtime
+  state. There is one submission Interface, not a second compatibility method.
+- Move request capability checks into this execution Module. HTTP still validates
+  uploads, resolves aliases, maps response formats, and maps input errors to 400.
+  Passthrough capability errors may wait for an in-progress switch, but never run
+  inference. Explicit invalid requests still fail immediately.
+- Preserve custom-model conservative capabilities, remote error status mapping,
+  queue capacity, and the existing behavior that a model switch terminates old
+  worker requests. Changes to that scheduling policy belong to a separate design.
+
+An admission-time snapshot was rejected: passing that snapshot as an explicit
+model could switch back to an earlier model and cancel other queued requests.
+Fixing only response metadata was rejected because validation could still target
+a different model from inference.
+
+Acceptance uses event-controlled concurrent tests through HTTP plus the real
+submission path with a fake worker transport; no timing sleeps or real model are
+needed to reproduce the interleaving. Check both supported-to-unsupported and
+unsupported-to-supported timestamp transitions, actual response identity, explicit
+selection stability, language gating, and custom-model behavior.
+
+### Phase 2 validation and review
+
+- Full worktree suite: **338 passed in 38.33 seconds**, including real Paraformer
+  one-second silence E2E; the existing unregistered `e2e` marker warning remains.
+- Thirteen new event-controlled execution cases cover concurrent selection,
+  capability transitions in both directions, switch failure, explicit pinning,
+  pre-worker rejection, Apple language validation, custom paths, and identity
+  after a later runtime change. No active tests were removed.
+- Ruff, Tach, and `git diff --check` passed. Targeted mypy for
+  `src/services/execution.py` passed with imported modules followed silently;
+  this is not a whole-repository type-check claim.
+- Wheel and source distribution built with `uv build --no-build-isolation`.
+- A separate second review pass checked that passthrough never becomes an explicit
+  historical-model switch, validation precedes enqueue, registration still follows
+  worker readiness, and completion metadata is independent of runtime mutations.
+  Existing worker shutdown, crash recovery, and queue policy remain Phase 3 scope.
+
+The internal Python return contract changes from a bare payload to
+`ExecutionResult(payload, model)`. The single production caller and all test
+stand-ins were migrated; the external HTTP response shape remains unchanged.
+The worktree shares the existing dependency environment via `.venv` and uses
+`--no-sync`. Neither dependency versions nor the running server were changed.

@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from contextlib import suppress
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal
 
 from fastapi import UploadFile
 
@@ -20,17 +20,14 @@ from src.core.apple_speech_engine import AppleSpeechEngine, AppleSpeechEngineCon
 from src.core.apple_speech_port import AppleSpeechModule
 from src.core.base_engine import EngineCapabilities
 from src.core.model_registry import ModelSpec
+from src.services.execution import (
+    ExecutionPlan,
+    ExecutionResult,
+    TranscriptionResult,
+    TranscriptionResultDict,
+)
 from src.workers.model_worker import WorkerJob, run_worker
 
-
-class TranscriptionResultDict(TypedDict, total=False):
-    text: str
-    segments: list[dict[str, object]] | None
-    duration: float
-    language: str
-
-
-TranscriptionResult = str | TranscriptionResultDict
 WorkerStartupMessage = tuple[Literal["READY"], None] | tuple[Literal["LOAD_ERROR"], str]
 WorkerResultMessage = (
     tuple[Literal["RESULT"], str, object]
@@ -132,7 +129,11 @@ class TranscriptionService:
         params: dict[str, object],
         request_id: str = "unknown",
         model_spec: ModelSpec | None = None,
-    ) -> TranscriptionResult:
+    ) -> ExecutionResult:
+        params = dict(params)
+        explicit_plan = ExecutionPlan.select(model_spec, self._model_id) if model_spec is not None else None
+        if explicit_plan is not None:
+            explicit_plan.validate(params)
         if self._active_job_count() >= self._max_queue_size:
             self.logger.warning(f"[{request_id}] Queue full, rejecting request")
             raise RuntimeError("Service busy: Queue is full.")
@@ -145,19 +146,19 @@ class TranscriptionService:
                 shutil.copyfileobj(file.file, buf)
 
             # Explicit sidecar requests do not wait for resident-worker startup.
-            if self._is_apple_speech_spec(model_spec):
+            if explicit_plan is not None and self._is_apple_speech_spec(explicit_plan.spec):
                 result = await self._submit_apple_speech_job(
                     temp_file_path=temp_path, params=params, request_id=request_id,
                 )
+                return ExecutionResult(self._coerce_transcription_result(result), explicit_plan.model)
             else:
-                result = await self._submit_resident_job(
+                return await self._submit_resident_job(
                     temp_file_path=temp_path,
                     params=params,
                     request_id=request_id,
-                    model_spec=model_spec,
+                    plan=explicit_plan,
                     temp_dir=temp_dir,
                 )
-            return self._coerce_transcription_result(result)
         finally:
             self._discard_request_state(request_id)
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -167,31 +168,34 @@ class TranscriptionService:
         temp_file_path: str,
         params: dict[str, object],
         request_id: str,
-        model_spec: ModelSpec | None,
+        plan: ExecutionPlan | None,
         temp_dir: str | None = None,
-    ) -> object:
+    ) -> ExecutionResult:
         future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
         try:
             # Select passthrough under the same lock that protects model switches.
             # Release it after enqueue, so waiting for inference never serializes
             # admission of other requests or hides them from queue_size.
             async with self._spawn_lock:
-                effective_spec = model_spec or self._current_model_spec
-                route_to_sidecar = self._is_apple_speech_spec(effective_spec)
+                selected = plan or ExecutionPlan.select(self._current_model_spec, self._model_id)
+                selected.validate(params)
+                route_to_sidecar = self._is_apple_speech_spec(selected.spec)
                 if not route_to_sidecar:
                     await self._enqueue_worker_job(
                         future=future,
                         temp_file_path=temp_file_path,
                         params=params,
                         request_id=request_id,
-                        model_spec=model_spec,
+                        model_spec=plan.spec if plan is not None else None,
                         temp_dir=temp_dir,
                     )
             if route_to_sidecar:
-                return await self._submit_apple_speech_job(
+                result = await self._submit_apple_speech_job(
                     temp_file_path=temp_file_path, params=params, request_id=request_id,
                 )
-            return await future
+            else:
+                result = await future
+            return ExecutionResult(self._coerce_transcription_result(result), selected.model)
         except BaseException:
             self._discard_request_state(request_id)
             raise

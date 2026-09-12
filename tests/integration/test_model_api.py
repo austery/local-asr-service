@@ -7,14 +7,18 @@ by unit tests.
 """
 
 from io import BytesIO
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
 from src.core.base_engine import EngineCapabilities
+from src.core.model_registry import ModelSpec
 from src.core.model_registry import lookup as real_lookup
 from src.main import app
+from src.services.execution import ExecutionPlan, ExecutionResult, TranscriptionResult
 from src.services.transcription import TranscriptionService, WorkerRemoteError
 
 
@@ -27,7 +31,18 @@ def _make_mock_service(
     service = MagicMock(spec=TranscriptionService)
     type(service).capabilities = PropertyMock(return_value=capabilities)
     service.current_model_spec = current_model_spec
-    service.submit = AsyncMock(return_value=submit_result)
+    async def submit(
+        file: UploadFile, params: dict[str, object], request_id: str = "unknown",
+        model_spec: ModelSpec | None = None,
+    ) -> ExecutionResult:
+        selected = model_spec or current_model_spec
+        if not isinstance(selected, ModelSpec):
+            selected = ModelSpec("test-model", "test-model", "funasr", "Test runtime", capabilities)
+        plan = ExecutionPlan.select(selected, "test-model")
+        plan.validate(params)
+        return ExecutionResult(cast(TranscriptionResult, submit_result), plan.model)
+
+    service.submit = AsyncMock(side_effect=submit)
     service.start_worker = AsyncMock()
     service.stop_worker = AsyncMock()
     type(service).queue_size = PropertyMock(return_value=0)
@@ -296,7 +311,6 @@ def test_should_reject_implicit_language_for_apple_speech(language: str) -> None
     detail = response.json()["detail"]
     assert "apple-speech" in detail
     assert "explicit language" in detail
-    mock_service.submit.assert_not_awaited()
 
 
 def test_should_reject_implicit_language_when_current_model_is_apple_speech() -> None:
@@ -321,7 +335,6 @@ def test_should_reject_implicit_language_when_current_model_is_apple_speech() ->
     assert response.status_code == 400
     assert "apple-speech" in response.json()["detail"]
     assert "explicit language" in response.json()["detail"]
-    mock_service.submit.assert_not_awaited()
 
 
 # MA-5

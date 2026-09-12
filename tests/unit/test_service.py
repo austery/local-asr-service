@@ -71,10 +71,10 @@ class TestTranscriptionService:
 
         asyncio.create_task(deliver())
         try:
-            result = await asyncio.wait_for(
+            result = (await asyncio.wait_for(
                 svc.submit(_make_upload(), {"language": "zh", "output_format": "json"}, request_id="req-1"),
                 timeout=5.0,
-            )
+            )).payload
         finally:
             await _stop_service(svc)
 
@@ -92,10 +92,10 @@ class TestTranscriptionService:
 
         asyncio.create_task(deliver())
         try:
-            result = await asyncio.wait_for(
+            result = (await asyncio.wait_for(
                 svc.submit(_make_upload(), {"output_format": "txt"}, request_id="req-2"),
                 timeout=5.0,
-            )
+            )).payload
         finally:
             await _stop_service(svc)
 
@@ -194,7 +194,7 @@ async def test_submit_resident_job_enforces_queue_limit_for_internal_callers(fun
                 temp_file_path="audio.wav",
                 params={},
                 request_id="req-internal",
-                model_spec=funasr_spec,
+                plan=None,
             ),
             timeout=0.2,
         )
@@ -210,7 +210,7 @@ async def test_submit_resident_job_cleans_pending_when_wait_is_cancelled(funasr_
             temp_file_path="audio.wav",
             params={},
             request_id=request_id,
-            model_spec=funasr_spec,
+            plan=None,
         )
     )
     try:
@@ -307,7 +307,7 @@ async def test_cancelled_submission_cleans_upload_and_allows_next_request(
         next_task = asyncio.create_task(svc.submit(_make_upload(), {}, "next", selected))
         next_job = await _next_job(svc)
         svc._resolve_future(next_job.uid, result={"text": "recovered"})
-        result = await asyncio.wait_for(next_task, timeout=1.0)
+        result = (await asyncio.wait_for(next_task, timeout=1.0)).payload
         assert isinstance(result, dict) and result["text"] == "recovered"
         assert not Path(next_job.temp_file_path).parent.exists()
     finally:
@@ -328,7 +328,7 @@ async def test_pending_submission_rejects_overflow_before_first_result(
             await svc.submit(_make_upload(), {}, "overflow")
         assert not task.done()
         svc._resolve_future(job.uid, result="first result")
-        assert await asyncio.wait_for(task, timeout=1.0) == "first result"
+        assert (await asyncio.wait_for(task, timeout=1.0)).payload == "first result"
         assert svc.queue_size == 0
     finally:
         task.cancel()

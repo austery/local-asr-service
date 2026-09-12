@@ -87,7 +87,7 @@ class TestTranscriptionServiceSubprocess:
         asyncio.create_task(_deliver_result())
 
         with patch.object(service, "_spawn_worker", side_effect=_fake_spawn):
-            result = await service.submit(_make_upload(), {"language": "auto", "output_format": "json"}, request_id="req-1")
+            result = (await service.submit(_make_upload(), {"language": "auto", "output_format": "json"}, request_id="req-1")).payload
 
         assert result == expected_result
         await service.stop_worker()

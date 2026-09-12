@@ -4,6 +4,11 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Resolve passthrough requests once under the admission lock, validate that selected
+  model before queuing, and return its identity with the transcript (SPEC-016 Phase
+  2). Concurrent switches no longer leave response metadata or timestamp gating
+  tied to an earlier model. Explicit requests remain pinned and validate immediately.
+
 - Remove the retired three-stage pipeline orchestration from production request
   handling (SPEC-016). Keep independent experimental adapters, worker domains,
   historical evidence, and active native diarization. Replace the broken pipeline

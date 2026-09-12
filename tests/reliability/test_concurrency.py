@@ -88,10 +88,10 @@ class TestReliability:
                         timeout=5.0,
                     )
 
-                result = await asyncio.wait_for(
+                result = (await asyncio.wait_for(
                     service.submit(_make_upload(), {}, request_id="req-2"),
                     timeout=5.0,
-                )
+                )).payload
                 assert service.model_loaded is True
         finally:
             await service.stop_worker()

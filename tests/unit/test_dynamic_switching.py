@@ -83,15 +83,15 @@ class TestSameModelRequests:
 
         with patch.object(svc, "_switch_worker", new_callable=AsyncMock) as mock_switch:
             asyncio.create_task(deliver("req-1", {"text": "hello", "segments": None, "duration": 1.0}))
-            r1 = await asyncio.wait_for(
+            r1 = (await asyncio.wait_for(
                 svc.submit(_make_upload(), {}, request_id="req-1", model_spec=funasr_spec),
                 timeout=5.0,
-            )
+            )).payload
             asyncio.create_task(deliver("req-2", {"text": "world", "segments": None, "duration": 1.0}))
-            r2 = await asyncio.wait_for(
+            r2 = (await asyncio.wait_for(
                 svc.submit(_make_upload(), {}, request_id="req-2", model_spec=funasr_spec),
                 timeout=5.0,
-            )
+            )).payload
 
         await _stop_service(svc)
 
@@ -143,10 +143,10 @@ class TestModelSwitching:
 
         with patch.object(svc, "_switch_worker", side_effect=fake_switch):
             asyncio.create_task(deliver("req-1", expected))
-            result = await asyncio.wait_for(
+            result = (await asyncio.wait_for(
                 svc.submit(_make_upload(), {}, request_id="req-1", model_spec=mlx_spec),
                 timeout=5.0,
-            )
+            )).payload
 
         await _stop_service(svc)
 
@@ -198,10 +198,10 @@ class TestModelSwitching:
 
             # Second request succeeds — service has not wedged
             asyncio.create_task(deliver("req-ok", {"text": "recovered", "segments": None, "duration": 1.0}))
-            result = await asyncio.wait_for(
+            result = (await asyncio.wait_for(
                 svc.submit(_make_upload(), {}, request_id="req-ok", model_spec=None),
                 timeout=5.0,
-            )
+            )).payload
             assert result["text"] == "recovered"  # type: ignore[index]
 
         await _stop_service(svc)
@@ -258,8 +258,8 @@ class TestPassthroughQueueCapacity:
             "past its own enqueue step"
         )
 
-        r1 = await asyncio.wait_for(submit1, timeout=5.0)
-        r2 = await asyncio.wait_for(submit2, timeout=5.0)
+        r1 = (await asyncio.wait_for(submit1, timeout=5.0)).payload
+        r2 = (await asyncio.wait_for(submit2, timeout=5.0)).payload
 
         assert r1["text"] == "one"  # type: ignore[index]
         assert r2["text"] == "two"  # type: ignore[index]

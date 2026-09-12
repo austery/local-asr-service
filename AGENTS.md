@@ -126,7 +126,7 @@ The TypeScript reference implementation (silence-based chunking) lives at
 `/Users/leipeng/Documents/Projects/puresubs/packages/automation-engine-ytdlp/src/transcription/AudioChunkingService.ts`.
 
 ## Architecture Decisions
-- **Engine capabilities** are declared at startup via `EngineCapabilities` frozen dataclass (`src/core/base_engine.py`). API layer validates compatibility before queuing — do not bypass this.
+- **Engine capabilities** are declared at startup via `EngineCapabilities` frozen dataclass (`src/core/base_engine.py`). HTTP submissions validate compatibility through the execution Module before worker startup or queuing — do not bypass this. Explicit requests validate immediately; passthrough requests validate the model selected under `_spawn_lock` (SPEC-016 Phase 2).
 - **Monkey-patching third-party libraries** is acceptable in `funasr_engine.py` only, at module level, with a clear comment. Do not patch elsewhere.
 - **Temporary files** for uploads are written to disk (not held in memory) — see `src/services/transcription.py`. Always cleaned in `finally` blocks.
 - **Dynamic model switching** (SPEC-108): Per-request `model` selection and enqueue are serialized by `_spawn_lock` in `_submit_resident_job` / `_enqueue_worker_job`. The lock is released before awaiting inference. `release()` always precedes `load()` (memory safety). Passthrough values (`None`, `""`, `"whisper-1"`) skip switching. See `src/core/model_registry.py` for the alias table.
@@ -144,12 +144,14 @@ Integration tests must mock `TranscriptionService` at the **class level**, not t
 **Correct pattern:**
 ```python
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from src.services.execution import ExecutionResult
 
 def _make_mock_service(capabilities, submit_result, current_model_spec=None):
     service = MagicMock(spec=TranscriptionService)
     type(service).capabilities = PropertyMock(return_value=capabilities)
     service.current_model_spec = current_model_spec
-    service.submit = AsyncMock(return_value=submit_result)   # ← AsyncMock, not MagicMock
+    # Use the identity of the model executed by the fake, not mutable state after submit.
+    service.submit = AsyncMock(return_value=ExecutionResult(submit_result, "test-model"))
     service.start_worker = AsyncMock()
     service.stop_worker = AsyncMock()
     type(service).queue_size = PropertyMock(return_value=0)
@@ -208,3 +210,13 @@ enqueues a transcription or dispatches the Apple sidecar. `_switch_worker` still
 releases the previous worker before spawning another; it never spawns an Apple
 Speech multiprocessing worker. `submit_pipeline`, pipeline reservation, and
 resident-model restoration are no longer part of `TranscriptionService`.
+
+### SPEC-016 Request Execution Contract (2026-09-12)
+
+`TranscriptionService.submit` returns `ExecutionResult(payload, model)`. HTTP
+rendering must use this identity instead of sampling `current_model_spec` before
+or after awaiting. Explicit requests create one immutable `ExecutionPlan` before
+waiting; passthrough creates it under `_spawn_lock` and does not trigger a switch
+to an admission-time snapshot. Language/timestamp validation is part of execution
+admission and raises `TranscriptionInputError` before startup or enqueue. Internal
+Python callers and test doubles must consume or return the typed completion.

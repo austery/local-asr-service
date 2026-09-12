@@ -11,6 +11,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from src.config import MAX_UPLOAD_SIZE_MB
+from src.core.base_engine import TranscriptionInputError
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
 from src.services.transcription import WorkerRemoteError
 
@@ -107,11 +108,6 @@ def _resolve_model(model: str | None) -> ModelSpec | None:
         return lookup(model)  # type: ignore[arg-type]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
-
-
-def _is_implicit_language(language: str) -> bool:
-    normalized = language.strip()
-    return not normalized or normalized.lower() == "auto"
 
 
 @router.post("/v1/audio/transcriptions", response_model=None)
@@ -223,63 +219,11 @@ async def create_transcription(
     effective_format = response_format if response_format is not None else output_format
     effective_format = _RESPONSE_FORMAT_MAP.get(effective_format, effective_format)
 
-    spec_for_language_validation = resolved_spec
-    if spec_for_language_validation is None:
-        current_spec = request.app.state.service.current_model_spec
-        if isinstance(current_spec, ModelSpec):
-            spec_for_language_validation = current_spec
-
-    if (
-        isinstance(spec_for_language_validation, ModelSpec)
-        and spec_for_language_validation.engine_type == "apple-speech"
-        and _is_implicit_language(language)
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "model=apple-speech requires an explicit language or locale; "
-                "pass 'zh', 'zh-CN', 'en', or 'en-US' instead of 'auto'."
-            ),
-        )
-
-    # 5. Capability pre-validation (fail fast before queuing)
-    #    If the request specifies a model, validate against ITS declared capabilities
-    #    so the client gets an early 400 without waiting for the switch.
-    #    Fall back to the current engine only for passthrough requests (model=None).
-    if resolved_spec is not None:
-        caps = resolved_spec.capabilities
-    else:
-        caps = request.app.state.service.capabilities
-
-    model_label: str = (
-        resolved_spec.alias
-        if isinstance(resolved_spec, ModelSpec)
-        else str(getattr(request.app.state, "model_id", "unknown"))
-    )
     service = request.app.state.service
-
-    if effective_format == "srt" and not caps.timestamp:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"SRT format requires timestamp support, but '{model_label}' "
-                f"does not produce timestamps. "
-                f"Use output_format=json or output_format=txt instead."
-            ),
-        )
-
-    if with_timestamp and not caps.timestamp:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"with_timestamp=true requires timestamp support, but '{model_label}' "
-                f"does not produce timestamps."
-            ),
-        )
-
     logger.info(
-        f"[{request_id}] Processing file: {file.filename} "
-        f"({file_size_mb:.2f}MB, format={effective_format}, model={model_label})"
+        "[%s] Processing file: %s (%.2fMB, format=%s, requested_model=%s)",
+        request_id, file.filename, file_size_mb, effective_format,
+        resolved_spec.alias if resolved_spec is not None else "current",
     )
 
     try:
@@ -289,27 +233,16 @@ async def create_transcription(
             "with_timestamp": with_timestamp,
         }
 
-        # Determine response model alias BEFORE awaiting:
-        #   - Explicit switch: use resolved_spec (always correct regardless of queue ordering).
-        #   - Passthrough: capture current spec now; reading it after await is racy because
-        #     another concurrent request may trigger a switch while this job is queued.
-        spec_for_response: ModelSpec | None = (
-            resolved_spec
-            if resolved_spec is not None
-            else service.current_model_spec
-        )
-
-        result = await service.submit(
+        execution = await service.submit(
             file,
             params,
             request_id=request_id,
             model_spec=resolved_spec,
         )
 
-        if isinstance(spec_for_response, ModelSpec):
-            response_model = spec_for_response.alias
-        else:
-            response_model = str(getattr(request.app.state, "model_id", "unknown"))
+        result = execution.payload
+        response_model = execution.model
+        logger.info("[%s] Completed transcription with model=%s", request_id, response_model)
 
         if effective_format == "srt":
             return PlainTextResponse(
@@ -374,6 +307,9 @@ async def create_transcription(
                 model=response_model,
                 segments=None,
             )
+
+    except TranscriptionInputError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
     except WorkerRemoteError as e:
         status = {"TranscriptionInputError": 400, "TranscriptionOutputError": 422}.get(e.exc_type_name)
