@@ -19,7 +19,8 @@ from src.core.model_registry import ModelSpec
 from src.core.model_registry import lookup as real_lookup
 from src.main import app
 from src.services.execution import ExecutionPlan, ExecutionResult, TranscriptionResult
-from src.services.transcription import TranscriptionService, WorkerRemoteError
+from src.services.transcription import TranscriptionService
+from src.services.worker_session import WorkerRemoteError
 
 
 def _make_mock_service(
