@@ -41,5 +41,5 @@ jobs:
       - name: Run Tach Boundary Checks
         run: uv run tach check
 
-      - name: Run Unit Tests
-        run: uv run pytest tests/unit
+      - name: Run Unit and Worker Lifetime Tests
+        run: uv run pytest tests/unit tests/reliability/test_worker_session_process.py

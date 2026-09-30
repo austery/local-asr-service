@@ -126,12 +126,12 @@ The TypeScript reference implementation (silence-based chunking) lives at
 `/Users/leipeng/Documents/Projects/puresubs/packages/automation-engine-ytdlp/src/transcription/AudioChunkingService.ts`.
 
 ## Architecture Decisions
-- **Engine capabilities** are declared at startup via `EngineCapabilities` frozen dataclass (`src/core/base_engine.py`). API layer validates compatibility before queuing — do not bypass this.
+- **Engine capabilities** are declared at startup via `EngineCapabilities` frozen dataclass (`src/core/base_engine.py`). HTTP submissions validate compatibility through the execution Module before worker startup or queuing — do not bypass this. Explicit requests validate immediately; passthrough requests validate the model selected under `_spawn_lock` (SPEC-016 Phase 2).
 - **Monkey-patching third-party libraries** is acceptable in `funasr_engine.py` only, at module level, with a clear comment. Do not patch elsewhere.
 - **Temporary files** for uploads are written to disk (not held in memory) — see `src/services/transcription.py`. Always cleaned in `finally` blocks.
 - **Dynamic model switching** (SPEC-108): Per-request `model` selection and enqueue are serialized by `_spawn_lock` in `_submit_resident_job` / `_enqueue_worker_job`. The lock is released before awaiting inference. `release()` always precedes `load()` (memory safety). Passthrough values (`None`, `""`, `"whisper-1"`) skip switching. See `src/core/model_registry.py` for the alias table.
 - **Model registry** (`src/core/model_registry.py`) is the single source of truth for supported model aliases. Add new models there first before referencing them anywhere else.
-- **Idle model offload** (SPEC-009 v2): The ASR model runs in an isolated child subprocess managed via `multiprocessing.Queue` IPC. When `MODEL_IDLE_TIMEOUT_SEC > 0`, the worker process self-terminates on idle, letting the OS reclaim all memory (including the PyTorch MPS Metal heap). Memory profile: ~150 MB startup, ~20-23 GB during transcription, <500 MB after idle timeout. Next incoming request spawns a new worker and reloads the model (~10-30s for FunASR, ~3-5s for MLX). Set to `0` to disable auto-termination (worker stays resident). Architecture: `src/workers/model_worker.py` (subprocess entry point), `src/services/transcription.py` (manager).
+- **Idle model offload** (SPEC-009 v2): The ASR model runs in an isolated child subprocess managed via `multiprocessing.Queue` IPC. When `MODEL_IDLE_TIMEOUT_SEC > 0`, the worker process self-terminates on idle, letting the OS reclaim all memory (including the PyTorch MPS Metal heap). Memory profile: ~150 MB startup, ~20-23 GB during transcription, <500 MB after idle timeout. Next incoming request spawns a new worker and reloads the model (~10-30s for FunASR, ~3-5s for MLX). Set to `0` to disable auto-termination (worker stays resident). Architecture: `src/workers/model_worker.py` (subprocess entry point), `src/services/worker_session.py` (lifetime ownership), `src/workers/transport.py` (process/queue Adapter), `src/services/transcription.py` (admission).
 
 ## Testing Notes
 - Run `uv run python -m pytest` for all tests. E2E tests (`tests/e2e/`) require the real model to be downloaded and are slow.
@@ -144,12 +144,14 @@ Integration tests must mock `TranscriptionService` at the **class level**, not t
 **Correct pattern:**
 ```python
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from src.services.execution import ExecutionResult
 
 def _make_mock_service(capabilities, submit_result, current_model_spec=None):
     service = MagicMock(spec=TranscriptionService)
     type(service).capabilities = PropertyMock(return_value=capabilities)
     service.current_model_spec = current_model_spec
-    service.submit = AsyncMock(return_value=submit_result)   # ← AsyncMock, not MagicMock
+    # Use the identity of the model executed by the fake, not mutable state after submit.
+    service.submit = AsyncMock(return_value=ExecutionResult(submit_result, "test-model"))
     service.start_worker = AsyncMock()
     service.stop_worker = AsyncMock()
     type(service).queue_size = PropertyMock(return_value=0)
@@ -208,3 +210,33 @@ enqueues a transcription or dispatches the Apple sidecar. `_switch_worker` still
 releases the previous worker before spawning another; it never spawns an Apple
 Speech multiprocessing worker. `submit_pipeline`, pipeline reservation, and
 resident-model restoration are no longer part of `TranscriptionService`.
+
+### SPEC-016 Request Execution Contract (2026-09-12)
+
+`TranscriptionService.submit` returns `ExecutionResult(payload, model)`. HTTP
+rendering must use this identity instead of sampling `current_model_spec` before
+or after awaiting. Explicit requests create one immutable `ExecutionPlan` before
+waiting; passthrough creates it under `_spawn_lock` and does not trigger a switch
+to an admission-time snapshot. Language/timestamp validation is part of execution
+admission and raises `TranscriptionInputError` before startup or enqueue. Internal
+Python callers and test doubles must consume or return the typed completion.
+
+### SPEC-016 Worker Session Ownership (2026-09-12)
+
+`WorkerSession.start/enqueue/close` own resident startup, IPC, completion waiters,
+and disposal. `TranscriptionService` retains selection/admission and upload cleanup;
+it must not access multiprocessing handles or queues. Tests inject a transport
+through `WorkerSession`, rather than installing service-private process state.
+Replacement waits for old disposal, including cancellation. A cleanup failure keeps
+ownership and blocks replacement. Apple Speech remains outside this lifetime.
+The historical `_pending`, `_temp_dirs`, and `_shutdown_worker` descriptions above
+record past fixes; those fields/methods are no longer service implementation seams.
+
+
+PR #39 review follow-up: shutdown must serialize with the entire service admission
+transaction, including the close/start gap, and retain that ownership when cancelled.
+Process queue reads belong to the transport-owned reader thread; `get_nowait` on a
+multiprocessing queue is not frame-nonblocking. Close the parent's duplicate result
+writer after spawn so producer exit delivers EOF; reap the child and join the
+receiver before closing queue endpoints. Poll only complete messages on the event
+loop, and preserve their order before the terminal channel error.

@@ -4,6 +4,22 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Fence shutdown across the entire resident model switch, including cancellation.
+  Decode process result frames in an owned reader thread so a producer exiting
+  mid-frame cannot freeze the event loop; reap and join before releasing IPC
+  resources (PR #39 review F1/F2).
+
+- Move resident worker startup, IPC, completion waiters, and resource disposal into
+  a worker-session Module (SPEC-016 Phase 3). Reap failed starts, escalate after a
+  timed join if still alive, and unblock the job feeder after its consumer exits.
+  Serialize replacement with cleanup even when its caller is cancelled. Apple
+  sidecar lifetime and model-switch scheduling policy remain unchanged.
+
+- Resolve passthrough requests once under the admission lock, validate that selected
+  model before queuing, and return its identity with the transcript (SPEC-016 Phase
+  2). Concurrent switches no longer leave response metadata or timestamp gating
+  tied to an earlier model. Explicit requests remain pinned and validate immediately.
+
 - Remove the retired three-stage pipeline orchestration from production request
   handling (SPEC-016). Keep independent experimental adapters, worker domains,
   historical evidence, and active native diarization. Replace the broken pipeline

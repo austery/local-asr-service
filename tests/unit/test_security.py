@@ -3,11 +3,14 @@ Unit tests for security features (SPEC-006).
 Tests file size limits, MIME type validation, and error message sanitization.
 Updated for SPEC-007 API changes (removed clean_tags, added output_format).
 """
+
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from fastapi import HTTPException
+
+from src.services.execution import ExecutionResult
 
 
 class TestFileSizeLimit:
@@ -30,11 +33,11 @@ class TestFileSizeLimit:
         # Mock request
         request = MagicMock()
         request.state.request_id = "test-request-id"
-        request.app.state.service.submit = AsyncMock(return_value={
+        request.app.state.service.submit = AsyncMock(return_value=ExecutionResult({
             "text": "test",
             "duration": 1.0,
             "segments": None
-        })
+        }, "test-model"))
         request.app.state.model_id = "test-model"
 
         # Execute - 不应抛出异常
@@ -103,11 +106,11 @@ class TestMIMETypeValidation:
             # Mock request
             request = MagicMock()
             request.state.request_id = "test-request-id"
-            request.app.state.service.submit = AsyncMock(return_value={
+            request.app.state.service.submit = AsyncMock(return_value=ExecutionResult({
                 "text": "test",
                 "duration": 1.0,
                 "segments": None
-            })
+            }, "test-model"))
             request.app.state.model_id = "test-model"
 
             # Execute - 不应抛出异常
@@ -305,11 +308,11 @@ class TestRequestIDGeneration:
         request.state.request_id = expected_request_id
 
         # Mock service
-        submit_mock = AsyncMock(return_value={
+        submit_mock = AsyncMock(return_value=ExecutionResult({
             "text": "test",
             "duration": 1.0,
             "segments": None
-        })
+        }, "test-model"))
         request.app.state.service.submit = submit_mock
         request.app.state.model_id = "test-model"
 

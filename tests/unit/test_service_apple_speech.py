@@ -87,12 +87,12 @@ async def test_submit_apple_speech_bypasses_multiprocessing_worker() -> None:
             new=AsyncMock(return_value={"text": "worker result", "segments": None}),
         ) as worker_submit,
     ):
-        result = await service.submit(
+        result = (await service.submit(
             _upload(),
             {"language": "en", "output_format": "json", "with_timestamp": False},
             request_id="req-1",
             model_spec=lookup("apple-speech"),
-        )
+        )).payload
 
     assert isinstance(result, dict)
     assert result["text"] == "apple result"
@@ -125,12 +125,12 @@ async def test_submit_passthrough_routes_to_apple_speech_when_it_is_the_resident
             new=AsyncMock(side_effect=AssertionError("Sidecar must not spawn a resident worker")),
         ) as worker_submit,
     ):
-        result = await service.submit(
+        result = (await service.submit(
             _upload(),
             {"language": "en", "output_format": "json", "with_timestamp": False},
             request_id="req-passthrough",
             model_spec=None,
-        )
+        )).payload
 
     assert isinstance(result, dict)
     assert result["text"] == "apple result"
@@ -169,12 +169,12 @@ async def test_submit_passthrough_resolves_after_model_switch_lock_release() -> 
             ),
         ) as mock_spawn,
     ):
-        result = await service.submit(
+        result = (await service.submit(
             _upload(),
             {"language": "en", "output_format": "json", "with_timestamp": False},
             request_id="req-race",
             model_spec=None,
-        )
+        )).payload
 
     await restore_task
     assert isinstance(result, dict)
