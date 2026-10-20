@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <3.13"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -862,7 +862,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.121.3" },
     { name = "funasr", extras = ["llm"], specifier = ">=1.4.14" },
     { name = "huggingface-hub", specifier = ">=0.26.0" },
-    { name = "mlx-audio", specifier = ">=0.5.1" },
+    { name = "mlx-audio", specifier = ">=0.5.9" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "torch", specifier = ">=2.11.0,<3.0" },
@@ -1018,7 +1018,7 @@ wheels = [
 
 [[package]]
 name = "mlx-audio"
-version = "0.5.1"
+version = "0.5.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -1030,9 +1030,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "transformers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/6b/117ed0a7e8375d615fbcc7cb96b54a1cf8dbadb3954e8a392ca082a8509f/mlx_audio-0.5.1.tar.gz", hash = "sha256:67d11c213504306477a59290a1b2b5185cc0c85cbb2730ed84e9ee170864c98a", size = 1637158, upload-time = "2026-08-31T19:39:48.566Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/4a/ea4746d0c14b75d835dd5164d0e8bba19598248cb29831c0c8e8b98310b9/mlx_audio-0.5.9.tar.gz", hash = "sha256:ad2862464d2d5b8ab4b9394a226d044e7022da594329427ef16ca8e93c08e6b5", size = 1776885, upload-time = "2026-10-13T18:37:33.452Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/53/4b979a2564d9107b3dbccdb7f809ad4ebc65e3d4e6a14f69c100fd82ba35/mlx_audio-0.5.1-py3-none-any.whl", hash = "sha256:55ff0949d8c5750b9d779872dbaa874cf30ca21a04d282f7a4c3acc66962e45c", size = 1977073, upload-time = "2026-08-31T19:39:47.154Z" },
+    { url = "https://files.pythonhosted.org/packages/57/3c/5864cf8c30661049db2ed22d6c2ab1137691f3f49df3c1fd4c7b885953da/mlx_audio-0.5.9-py3-none-any.whl", hash = "sha256:fa662cf24cbca69cdd912612cdb677e65f77c6329a95906cc80b50e5b4689d6b", size = 2136508, upload-time = "2026-10-13T18:37:31.225Z" },
 ]
 
 [[package]]
