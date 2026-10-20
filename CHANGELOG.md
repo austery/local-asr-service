@@ -4,6 +4,11 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Prepare mlx-audio 0.5.9 with unchanged model weights and adapters.
+  The isolated comparison found equivalent outputs and no clear performance
+  benefit; existing MOSS language/coverage failures remain. Runtime activation
+  is deferred to the owner. See [upgrade evidence](docs/2026-10-19-mlx-audio-059-upgrade.md).
+
 - Remove the retired three-stage pipeline orchestration from production request
   handling (SPEC-016). Keep independent experimental adapters, worker domains,
   historical evidence, and active native diarization. Replace the broken pipeline
