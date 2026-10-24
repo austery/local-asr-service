@@ -4,6 +4,18 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Prepare mlx-audio 0.6.1 and map Qwen public `language=auto` to upstream
+  automatic detection (`None`). Detect language independently after a silent
+  first chunk; preserve explicit-language and other MLX model contracts.
+  Add mocked adapter coverage and a real cached-weight silent-first-chunk
+  regression. Service activation remains owner-controlled. See
+  [upgrade evidence](docs/2026-10-22-mlx-audio-061-upgrade.md).
+
+- Prepare mlx-audio 0.5.9 with unchanged model weights and adapters.
+  The isolated comparison found equivalent outputs and no clear performance
+  benefit; existing MOSS language/coverage failures remain. Runtime activation
+  is deferred to the owner. See [upgrade evidence](docs/2026-10-19-mlx-audio-059-upgrade.md).
+
 - Fence shutdown across the entire resident model switch, including cancellation.
   Decode process result frames in an owned reader thread so a producer exiting
   mid-frame cannot freeze the event loop; reap and join before releasing IPC
