@@ -37,10 +37,11 @@ class TestMlxCapabilities:
 
 
 class TestMlxLanguageNormalization:
-    def test_should_preserve_auto_for_qwen3_asr(self) -> None:
+    @pytest.mark.parametrize("language", ["auto", " AUTO "])
+    def test_should_map_auto_to_none_for_qwen3_asr(self, language: str) -> None:
         from src.core.mlx_engine import _normalize_mlx_language
 
-        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "auto") == "auto"
+        assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", language) is None
 
     def test_should_map_english_code_for_qwen3_asr(self) -> None:
         from src.core.mlx_engine import _normalize_mlx_language
@@ -75,10 +76,11 @@ class TestMlxLanguageNormalization:
 
         assert _normalize_mlx_language("mlx-community/Qwen3-ASR-1.7B-8bit", "yue") == "Cantonese"
 
-    def test_should_preserve_language_for_non_qwen_mlx_model(self) -> None:
+    @pytest.mark.parametrize("language", ["en", "auto"])
+    def test_should_preserve_language_for_non_qwen_mlx_model(self, language: str) -> None:
         from src.core.mlx_engine import _normalize_mlx_language
 
-        assert _normalize_mlx_language("mlx-community/whisper-large-v3", "en") == "en"
+        assert _normalize_mlx_language("mlx-community/whisper-large-v3", language) == language
 
     def test_should_reject_unknown_language_for_qwen3_asr(self) -> None:
         from src.core.mlx_engine import _normalize_mlx_language
@@ -241,13 +243,13 @@ class TestMlxAudioEngine:
         assert result == "First part Second part Third part"
         assert mock_generate_transcription.call_count == 3
 
-    def test_transcribe_should_forward_auto_language_for_qwen3_asr(
+    def test_transcribe_should_request_detection_for_qwen3_asr_auto(
         self,
         mock_load_model,
         mock_generate_transcription,
         mock_chunking_service,
     ):
-        """Qwen3-ASR should preserve the public auto-language contract."""
+        """The public auto default must use upstream automatic language detection."""
         from src.core.mlx_engine import MlxAudioEngine
 
         mock_model = MagicMock()
@@ -268,8 +270,33 @@ class TestMlxAudioEngine:
             audio="test.wav",
             format="txt",
             verbose=False,
-            language="auto",
+            language=None,
         )
+
+    def test_transcribe_should_keep_speech_after_empty_first_chunk(
+        self,
+        mock_load_model: MagicMock,
+        mock_generate_transcription: MagicMock,
+        mock_chunking_service: MagicMock,
+    ) -> None:
+        from src.core.mlx_engine import MlxAudioEngine
+
+        segments = [
+            {"text": "", "language": "None", "start": 0.0, "end": 1200.0},
+            {"text": "Later speech", "language": "English", "start": 1200.0, "end": 1260.0},
+        ]
+        mock_generate_transcription.return_value = MagicMock(
+            text=" Later speech", segments=segments, language=["None", "English"],
+        )
+        engine = MlxAudioEngine()
+        engine.load()
+
+        result = engine.transcribe_file("test.wav", output_format="json")
+
+        assert isinstance(result, dict)
+        assert result["text"] == "Later speech"
+        assert result["segments"] == segments
+        assert mock_generate_transcription.call_args.kwargs["language"] is None
 
     def test_transcribe_with_verbose(
         self,
@@ -300,7 +327,7 @@ class TestMlxAudioEngine:
             audio="test.wav",
             format="txt",
             verbose=True,
-            language="auto",
+            language=None,
         )
 
     def test_transcribe_should_honor_output_format_alias(
@@ -336,7 +363,7 @@ class TestMlxAudioEngine:
             audio="test.wav",
             format="json",
             verbose=False,
-            language="auto",
+            language=None,
         )
 
     def test_release(self, mock_load_model, mock_gc, mock_chunking_service):

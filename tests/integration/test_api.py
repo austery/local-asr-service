@@ -1,10 +1,14 @@
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
 from src.core.base_engine import EngineCapabilities
+from src.core.model_registry import ModelSpec
 from src.main import app
+from src.services.execution import ExecutionPlan, ExecutionResult, TranscriptionResult
 from src.services.transcription import TranscriptionService
 
 _PARAFORMER_RESULT = {
@@ -26,7 +30,18 @@ def _make_mock_service(
     service = MagicMock(spec=TranscriptionService)
     type(service).capabilities = PropertyMock(return_value=capabilities)
     service.current_model_spec = None
-    service.submit = AsyncMock(return_value=submit_result)
+    async def submit(
+        file: UploadFile, params: dict[str, object], request_id: str = "unknown",
+        model_spec: ModelSpec | None = None,
+    ) -> ExecutionResult:
+        selected = model_spec or None
+        if not isinstance(selected, ModelSpec):
+            selected = ModelSpec("test-model", "test-model", "funasr", "Test runtime", capabilities)
+        plan = ExecutionPlan.select(selected, "test-model")
+        plan.validate(params)
+        return ExecutionResult(cast(TranscriptionResult, submit_result), plan.model)
+
+    service.submit = AsyncMock(side_effect=submit)
     service.start_worker = AsyncMock()
     service.stop_worker = AsyncMock()
     type(service).queue_size = PropertyMock(return_value=0)
