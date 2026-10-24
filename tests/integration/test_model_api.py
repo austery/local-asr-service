@@ -6,31 +6,21 @@ The API layer (routes.py) is tested in isolation; subprocess worker logic is cov
 by unit tests.
 """
 
-from dataclasses import replace
 from io import BytesIO
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
 from src.core.base_engine import EngineCapabilities
+from src.core.model_registry import ModelSpec
 from src.core.model_registry import lookup as real_lookup
-from src.core.pipeline_registry import PipelineProfile
 from src.main import app
-from src.services.transcription import PipelineQualityError, TranscriptionService, WorkerRemoteError
-
-
-def _test_pipeline_profile() -> PipelineProfile:
-    """Synthetic profile for retained pipeline infrastructure tests."""
-    return PipelineProfile(
-        alias="test-pipeline",
-        transcription_alias="qwen3-asr",
-        alignment_alias="qwen3-forced-aligner",
-        diarization_alias="sortformer-diar",
-        description="Test-only pipeline",
-        capabilities=EngineCapabilities(timestamp=True, diarization=True, language_detect=True),
-        requestable=True,
-    )
+from src.services.execution import ExecutionPlan, ExecutionResult, TranscriptionResult
+from src.services.transcription import TranscriptionService
+from src.services.worker_session import WorkerRemoteError
 
 
 def _make_mock_service(
@@ -42,8 +32,18 @@ def _make_mock_service(
     service = MagicMock(spec=TranscriptionService)
     type(service).capabilities = PropertyMock(return_value=capabilities)
     service.current_model_spec = current_model_spec
-    service.submit = AsyncMock(return_value=submit_result)
-    service.submit_pipeline = AsyncMock(return_value=submit_result)
+    async def submit(
+        file: UploadFile, params: dict[str, object], request_id: str = "unknown",
+        model_spec: ModelSpec | None = None,
+    ) -> ExecutionResult:
+        selected = model_spec or current_model_spec
+        if not isinstance(selected, ModelSpec):
+            selected = ModelSpec("test-model", "test-model", "funasr", "Test runtime", capabilities)
+        plan = ExecutionPlan.select(selected, "test-model")
+        plan.validate(params)
+        return ExecutionResult(cast(TranscriptionResult, submit_result), plan.model)
+
+    service.submit = AsyncMock(side_effect=submit)
     service.start_worker = AsyncMock()
     service.stop_worker = AsyncMock()
     type(service).queue_size = PropertyMock(return_value=0)
@@ -141,7 +141,6 @@ def test_should_return_model_list_on_get_models(client) -> None:
     assert "sensevoice-small" in aliases
 
 
-
 def test_models_endpoint_should_replace_retired_profile_with_moss(client) -> None:
     response = client.get("/v1/models")
 
@@ -199,33 +198,6 @@ def test_should_return_400_when_unknown_model_provided(client) -> None:
     assert "Unknown model" in response.json()["detail"]
 
 
-def test_should_return_501_for_non_requestable_pipeline_profile() -> None:
-    qwen_spec = real_lookup("qwen3-asr")
-    mock_service = _make_mock_service(
-        qwen_spec.capabilities,
-        {"text": "unused", "segments": None, "duration": 1.0},
-        current_model_spec=qwen_spec,
-    )
-    non_requestable_profile = replace(_test_pipeline_profile(), requestable=False)
-
-    with (
-        patch("src.main.TranscriptionService", return_value=mock_service),
-        patch("src.main.lookup", return_value=qwen_spec),
-        patch("src.api.routes.lookup_profile", return_value=non_requestable_profile),
-        TestClient(app) as c,
-    ):
-        response = c.post(
-            "/v1/audio/transcriptions",
-            data={"model": "test-pipeline"},
-            files={"file": _audio_file()},
-        )
-
-    assert response.status_code == 501
-    assert "not enabled" in response.json()["detail"]
-    mock_service.submit.assert_not_called()
-    mock_service.submit_pipeline.assert_not_awaited()
-
-
 def test_should_reject_retired_qwen3_sortformer_before_queuing() -> None:
     qwen_spec = real_lookup("qwen3-asr")
     mock_service = _make_mock_service(
@@ -252,7 +224,6 @@ def test_should_reject_retired_qwen3_sortformer_before_queuing() -> None:
     assert response.status_code == 400
     assert "Unknown model" in response.json()["detail"]
     mock_service.submit.assert_not_called()
-    mock_service.submit_pipeline.assert_not_awaited()
 
 
 def test_should_submit_apple_speech_model_spec_to_service() -> None:
@@ -292,7 +263,6 @@ def test_should_submit_apple_speech_model_spec_to_service() -> None:
     assert response.json()["segments"][0]["speaker"] is None
     submitted_spec = mock_service.submit.await_args.kwargs["model_spec"]
     assert submitted_spec.alias == "apple-speech"
-    mock_service.submit_pipeline.assert_not_awaited()
 
 
 def test_should_preserve_empty_segments_for_json_response() -> None:
@@ -342,8 +312,6 @@ def test_should_reject_implicit_language_for_apple_speech(language: str) -> None
     detail = response.json()["detail"]
     assert "apple-speech" in detail
     assert "explicit language" in detail
-    mock_service.submit.assert_not_awaited()
-    mock_service.submit_pipeline.assert_not_awaited()
 
 
 def test_should_reject_implicit_language_when_current_model_is_apple_speech() -> None:
@@ -368,67 +336,6 @@ def test_should_reject_implicit_language_when_current_model_is_apple_speech() ->
     assert response.status_code == 400
     assert "apple-speech" in response.json()["detail"]
     assert "explicit language" in response.json()["detail"]
-    mock_service.submit.assert_not_awaited()
-    mock_service.submit_pipeline.assert_not_awaited()
-
-
-def test_should_submit_pipeline_profile_when_explicitly_requestable() -> None:
-    qwen_spec = real_lookup("qwen3-asr")
-    mock_service = _make_mock_service(
-        qwen_spec.capabilities,
-        {
-            "text": "pipeline result",
-            "segments": [{"text": "hello", "start": 0.0, "end": 1.0, "speaker": "Speaker A"}],
-            "duration": 1.0,
-        },
-        current_model_spec=qwen_spec,
-    )
-    requestable_profile = _test_pipeline_profile()
-
-    with (
-        patch("src.main.TranscriptionService", return_value=mock_service),
-        patch("src.main.lookup", return_value=qwen_spec),
-        patch("src.api.routes.lookup_profile", return_value=requestable_profile),
-        TestClient(app) as c,
-    ):
-        response = c.post(
-            "/v1/audio/transcriptions",
-            data={"model": "test-pipeline", "output_format": "json"},
-            files={"file": _audio_file()},
-        )
-
-    assert response.status_code == 200
-    assert response.json()["model"] == "test-pipeline"
-    mock_service.submit.assert_not_called()
-    mock_service.submit_pipeline.assert_awaited_once()
-
-
-def test_should_return_422_when_pipeline_quality_gate_fails() -> None:
-    qwen_spec = real_lookup("qwen3-asr")
-    mock_service = _make_mock_service(
-        qwen_spec.capabilities,
-        {"text": "unused", "segments": None, "duration": 1.0},
-        current_model_spec=qwen_spec,
-    )
-    mock_service.submit_pipeline = AsyncMock(
-        side_effect=PipelineQualityError("alignment quality gate failed: tail timestamp collapse")
-    )
-    requestable_profile = _test_pipeline_profile()
-
-    with (
-        patch("src.main.TranscriptionService", return_value=mock_service),
-        patch("src.main.lookup", return_value=qwen_spec),
-        patch("src.api.routes.lookup_profile", return_value=requestable_profile),
-        TestClient(app) as c,
-    ):
-        response = c.post(
-            "/v1/audio/transcriptions",
-            data={"model": "test-pipeline", "output_format": "json"},
-            files={"file": _audio_file()},
-        )
-
-    assert response.status_code == 422
-    assert "alignment quality gate failed" in response.json()["detail"]
 
 
 # MA-5

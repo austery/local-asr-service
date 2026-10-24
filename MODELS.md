@@ -63,8 +63,10 @@ See the [adapter contract](docs/plans/2026-09-07-moss-adapter-contract.md).
 bounded MOSS path; MOSS is not a replacement for unrestricted long recordings
 or cross-recording speaker identity.
 
-Historical pipeline evidence and generic alignment/diarization/worker code are
-retained. Internal pipeline infrastructure is not a supported public model.
+Historical pipeline evidence and independent alignment/diarization/worker code are
+retained. The gateway no longer contains three-stage pipeline orchestration or
+resident-model borrow/restore logic (SPEC-016). The former long-form probe exits
+with a retirement notice; historical source is available at `d4104f0`.
 No model cache or downloaded weights are deleted by this change.
 
 ---

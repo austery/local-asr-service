@@ -105,6 +105,15 @@ A model or pipeline can become requestable only when all conditions are true:
 
 Discovery-only aliases are allowed, but they must remain non-requestable until the above gate passes.
 
+## Production orchestration retirement (2026-09-11)
+
+SPEC-016 removes the three-stage pipeline from the live gateway after the public
+registry retirement. The scope-audit and experimental-reachability sections below
+record the 2026-05 decisions, not current requestability. Independent adapters,
+worker job domains, and historical evaluation reports remain; production requests
+only submit transcription jobs. Reviving orchestration requires a new reviewed
+use case rather than re-adding a profile to the empty registry.
+
 ## Scope Audit Findings
 
 The 2026-05-19 boundary review found that the project has started to approach the edge of the lightweight-gateway boundary, mainly through the `qwen3-sortformer` experiment:

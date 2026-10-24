@@ -11,9 +11,9 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from src.config import MAX_UPLOAD_SIZE_MB
+from src.core.base_engine import TranscriptionInputError
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
-from src.core.pipeline_registry import PipelineProfile, list_all_profiles, lookup_profile
-from src.services.transcription import PipelineQualityError, WorkerRemoteError
+from src.services.worker_session import WorkerRemoteError
 
 logger = logging.getLogger(__name__)
 
@@ -108,21 +108,6 @@ def _resolve_model(model: str | None) -> ModelSpec | None:
         return lookup(model)  # type: ignore[arg-type]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
-
-
-def _resolve_pipeline_profile(model: str | None) -> PipelineProfile | None:
-    """Resolve a pipeline alias, returning None for non-pipeline model values."""
-    if is_passthrough(model):
-        return None
-    try:
-        return lookup_profile(model)  # type: ignore[arg-type]
-    except KeyError:
-        return None
-
-
-def _is_implicit_language(language: str) -> bool:
-    normalized = language.strip()
-    return not normalized or normalized.lower() == "auto"
 
 
 @router.post("/v1/audio/transcriptions", response_model=None)
@@ -227,85 +212,18 @@ async def create_transcription(
 
     file.file.seek(0)
 
-    # 3. Resolve model/pipeline aliases. Some pipeline profiles may remain
-    # discoverable but not requestable while their runtime contract is validated.
-    resolved_profile = _resolve_pipeline_profile(model)
-    if resolved_profile is not None and not resolved_profile.requestable:
-        raise HTTPException(
-            status_code=501,
-            detail=(
-                f"Pipeline profile '{resolved_profile.alias}' is discoverable "
-                "but not enabled for POST yet."
-            ),
-        )
-
-    resolved_spec = None if resolved_profile is not None else _resolve_model(model)
+    # 3. Resolve the requested model. Retired aliases fail before submission.
+    resolved_spec = _resolve_model(model)
 
     # 4. Resolve effective output format
     effective_format = response_format if response_format is not None else output_format
     effective_format = _RESPONSE_FORMAT_MAP.get(effective_format, effective_format)
 
-    spec_for_language_validation = resolved_spec
-    if spec_for_language_validation is None and resolved_profile is None:
-        current_spec = request.app.state.service.current_model_spec
-        if isinstance(current_spec, ModelSpec):
-            spec_for_language_validation = current_spec
-
-    if (
-        isinstance(spec_for_language_validation, ModelSpec)
-        and spec_for_language_validation.engine_type == "apple-speech"
-        and _is_implicit_language(language)
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "model=apple-speech requires an explicit language or locale; "
-                "pass 'zh', 'zh-CN', 'en', or 'en-US' instead of 'auto'."
-            ),
-        )
-
-    # 5. Capability pre-validation (fail fast before queuing)
-    #    If the request specifies a model, validate against ITS declared capabilities
-    #    so the client gets an early 400 without waiting for the switch.
-    #    Fall back to the current engine only for passthrough requests (model=None).
-    if resolved_spec is not None:
-        caps = resolved_spec.capabilities
-    elif resolved_profile is not None:
-        caps = resolved_profile.capabilities
-    else:
-        caps = request.app.state.service.capabilities
-
-    model_label: str = (
-        resolved_spec.alias
-        if isinstance(resolved_spec, ModelSpec)
-        else resolved_profile.alias
-        if isinstance(resolved_profile, PipelineProfile)
-        else str(getattr(request.app.state, "model_id", "unknown"))
-    )
     service = request.app.state.service
-
-    if effective_format == "srt" and not caps.timestamp:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"SRT format requires timestamp support, but '{model_label}' "
-                f"does not produce timestamps. "
-                f"Use output_format=json or output_format=txt instead."
-            ),
-        )
-
-    if with_timestamp and not caps.timestamp:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"with_timestamp=true requires timestamp support, but '{model_label}' "
-                f"does not produce timestamps."
-            ),
-        )
-
     logger.info(
-        f"[{request_id}] Processing file: {file.filename} "
-        f"({file_size_mb:.2f}MB, format={effective_format}, model={model_label})"
+        "[%s] Processing file: %s (%.2fMB, format=%s, requested_model=%s)",
+        request_id, file.filename, file_size_mb, effective_format,
+        resolved_spec.alias if resolved_spec is not None else "current",
     )
 
     try:
@@ -315,37 +233,16 @@ async def create_transcription(
             "with_timestamp": with_timestamp,
         }
 
-        # Determine response model alias BEFORE awaiting:
-        #   - Explicit switch: use resolved_spec (always correct regardless of queue ordering).
-        #   - Passthrough: capture current spec now; reading it after await is racy because
-        #     another concurrent request may trigger a switch while this job is queued.
-        spec_for_response: ModelSpec | PipelineProfile | None = (
-            resolved_profile
-            if resolved_profile is not None
-            else resolved_spec
-            if resolved_spec is not None
-            else service.current_model_spec
+        execution = await service.submit(
+            file,
+            params,
+            request_id=request_id,
+            model_spec=resolved_spec,
         )
 
-        if resolved_profile is not None:
-            result = await service.submit_pipeline(
-                file,
-                params,
-                request_id=request_id,
-                profile=resolved_profile,
-            )
-        else:
-            result = await service.submit(
-                file,
-                params,
-                request_id=request_id,
-                model_spec=resolved_spec,
-            )
-
-        if isinstance(spec_for_response, ModelSpec | PipelineProfile):
-            response_model = spec_for_response.alias
-        else:
-            response_model = str(getattr(request.app.state, "model_id", "unknown"))
+        result = execution.payload
+        response_model = execution.model
+        logger.info("[%s] Completed transcription with model=%s", request_id, response_model)
 
         if effective_format == "srt":
             return PlainTextResponse(
@@ -411,9 +308,8 @@ async def create_transcription(
                 segments=None,
             )
 
-    except PipelineQualityError as e:
-        logger.warning(f"[{request_id}] Pipeline quality gate failed: {e}", exc_info=True)
-        raise HTTPException(status_code=422, detail=str(e)) from None
+    except TranscriptionInputError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
     except WorkerRemoteError as e:
         status = {"TranscriptionInputError": 400, "TranscriptionOutputError": 422}.get(e.exc_type_name)
@@ -466,22 +362,8 @@ async def list_models(request: Request) -> ModelsResponse:
         )
         for spec in list_all()
     ]
-    profile_entries = [
-        ModelInfo(
-            alias=profile.alias,
-            model_id=f"{profile.transcription_alias}+{profile.diarization_alias}",
-            engine_type="pipeline",
-            description=profile.description,
-            capabilities={
-                k: v for k, v in asdict(profile.capabilities).items()
-            },
-            requestable=profile.requestable,
-        )
-        for profile in list_all_profiles()
-    ]
-
     return ModelsResponse(
-        models=sorted(model_entries + profile_entries, key=lambda item: item.alias),
+        models=sorted(model_entries, key=lambda item: item.alias),
         current=current_alias,
     )
 

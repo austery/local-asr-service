@@ -9,8 +9,6 @@ from pathlib import Path
 from src.core.model_registry import list_all as list_all_models
 from src.core.pipeline_registry import list_all_profiles
 
-ALLOWED_JOB_KINDS = ("transcribe", "align", "diarize")
-
 # Layer 2 Hard Gate: maximum block nesting depth allowed in any src/ function.
 # Set conservatively at 5; tighten once orchestrator refactors land.
 _MAX_NESTING_DEPTH = 5
@@ -54,17 +52,6 @@ def _workspace_root() -> Path:
 
 def _parse_python_file(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-
-
-def _literal_values(annotation: ast.expr | None) -> set[str]:
-    if not isinstance(annotation, ast.Subscript):
-        return set()
-    if not isinstance(annotation.value, ast.Name) or annotation.value.id != "Literal":
-        return set()
-
-    slice_node = annotation.slice
-    values = slice_node.elts if isinstance(slice_node, ast.Tuple) else [slice_node]
-    return {node.value for node in values if isinstance(node, ast.Constant) and isinstance(node.value, str)}
 
 
 def _getenv_default_string(node: ast.AST, variable_name: str) -> str:
@@ -279,92 +266,6 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
     )
 
 
-def _check_function_def_job_kind(
-    node: ast.AsyncFunctionDef | ast.FunctionDef,
-    allowed_kinds: tuple[str, ...],
-) -> None:
-    if node.name not in ("_submit_worker_job", "_enqueue_worker_job"):
-        return
-    job_kind_idx = -1
-    job_kind_arg: ast.arg | None = None
-    for idx, arg in enumerate(node.args.args):
-        if arg.arg == "job_kind":
-            job_kind_idx = idx
-            job_kind_arg = arg
-            break
-    if job_kind_idx == -1:
-        return
-
-    literal_values = _literal_values(job_kind_arg.annotation if job_kind_arg else None)
-    assert literal_values == set(allowed_kinds), (
-        f"{node.name} job_kind annotation must be exactly Literal{allowed_kinds}; "
-        f"got {literal_values}."
-    )
-
-    defaults_start_idx = len(node.args.args) - len(node.args.defaults)
-    if job_kind_idx >= defaults_start_idx:
-        default_node = node.args.defaults[job_kind_idx - defaults_start_idx]
-        if isinstance(default_node, ast.Constant):
-            assert default_node.value in allowed_kinds, (
-                f"Default value '{default_node.value}' for job_kind in {node.name} "
-                f"must be one of {allowed_kinds}."
-            )
-
-
-def _check_call_job_kind(node: ast.Call, allowed_kinds: tuple[str, ...]) -> None:
-    func_name = ""
-    if isinstance(node.func, ast.Attribute):
-        func_name = node.func.attr
-    elif isinstance(node.func, ast.Name):
-        func_name = node.func.id
-
-    if func_name not in ("_submit_worker_job", "_enqueue_worker_job"):
-        return
-
-    job_kind_node = None
-    for kw in node.keywords:
-        if kw.arg == "job_kind":
-            job_kind_node = kw.value
-            break
-
-    if job_kind_node is None:
-        idx = 5 if func_name == "_submit_worker_job" else 6
-        if len(node.args) > idx:
-            job_kind_node = node.args[idx]
-
-    if job_kind_node is not None:
-        if isinstance(job_kind_node, ast.Constant):
-            val = job_kind_node.value
-            assert val in allowed_kinds, (
-                f"Disallowed job_kind '{val}' passed to {func_name} at line {node.lineno}. "
-                f"Must be one of {allowed_kinds}."
-            )
-        elif isinstance(job_kind_node, ast.Name) and job_kind_node.id == "job_kind":
-            # Legitimate parameter forwarding from _submit_worker_job to _enqueue_worker_job
-            pass
-        else:
-            raise AssertionError(
-                f"Non-constant/dynamic expression passed for job_kind to {func_name} "
-                f"at line {node.lineno}. The job_kind must be a compile-time string literal "
-                f"within {allowed_kinds} or direct parameter forwarding of 'job_kind'."
-            )
-
-
-def test_transcription_service_job_domains() -> None:
-    """Verify that the job kind domains in TranscriptionService are strictly limited to transcribe/align/diarize."""
-    workspace_root = _workspace_root()
-    service_path = workspace_root / "src" / "services" / "transcription.py"
-    assert service_path.exists(), "transcription.py does not exist"
-
-    tree = _parse_python_file(service_path)
-
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
-            _check_function_def_job_kind(node, ALLOWED_JOB_KINDS)
-        elif isinstance(node, ast.Call):
-            _check_call_job_kind(node, ALLOWED_JOB_KINDS)
-
-
 def test_config_defaults_do_not_point_to_pipeline_profiles() -> None:
     """Ensure config defaults stay on registered model runtimes, not opt-in pipeline profiles."""
     workspace_root = _workspace_root()
@@ -507,3 +408,27 @@ def test_max_block_depth_elif_vs_else_if() -> None:
         "else: if must be counted as depth 2 (else body + inner if); got shallower — "
         "check the col_offset heuristic in _max_block_depth"
     )
+
+
+def test_gateway_only_submits_transcription_jobs() -> None:
+    """Experimental worker domains must not leak into the live gateway."""
+    root = _workspace_root()
+    forbidden = {
+        "src.core.pipeline_registry", "src.core.alignment_port",
+        "src.core.diarization_port", "src.adapters.pipeline_chunking",
+        "src.adapters.segment_alignment",
+    }
+    job_calls: list[ast.Call] = []
+    for relative_path in ("src/api/routes.py", "src/services/transcription.py"):
+        tree = _parse_python_file(root / relative_path)
+        imports = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+        assert not imports & forbidden, f"Retired pipeline dependency in {relative_path}"
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "WorkerJob":
+                job_calls.append(node)
+    assert job_calls, "No production transcription dispatch found"
+    for call in job_calls:
+        keywords = {kw.arg: kw.value for kw in call.keywords}
+        kind = keywords.get("job_kind")
+        assert isinstance(kind, ast.Constant) and kind.value == "transcribe"
+        assert not {"requested_aligner_alias", "requested_diarizer_alias"} & keywords.keys()
