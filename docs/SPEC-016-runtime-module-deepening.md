@@ -4,7 +4,7 @@ title: Runtime Module Deepening
 status: Ready for Implementation
 priority: P3 - Quality
 creationDate: 2026-09-11
-lastUpdateDate: 2026-09-11
+lastUpdateDate: 2026-09-12
 relatedSpecs:
   - ADR-002
   - SPEC-009
@@ -71,12 +71,12 @@ orchestration framework is introduced.
 
 ### Phase 2: Resolve each request's execution model once
 
-- [ ] Reproduce whether admission-time capability checks and enqueue-time model
+- [x] Reproduce whether admission-time capability checks and enqueue-time model
   selection can diverge under concurrent switching.
-- [ ] Specify passthrough timing explicitly, including switch failure and requests
+- [x] Specify passthrough timing explicitly, including switch failure and requests
   already queued. Decide between an admission snapshot and enqueue-time resolution
   before introducing an immutable execution plan.
-- [ ] Make capability validation, execution, and response model identity share that
+- [x] Make capability validation, execution, and response model identity share that
   plan. Preserve early validation and custom-model behavior.
 
 **Acceptance:** a deterministic concurrent test proves the selected model,
@@ -85,10 +85,10 @@ inference. This phase must not silently change the model-switch policy.
 
 ### Phase 3: Deepen worker lifecycle ownership
 
-- [ ] Introduce an internal worker-session Module that owns startup, IPC, exit,
+- [x] Introduce an internal worker-session Module that owns startup, IPC, exit,
   pending completions, and resource release; inject the process transport for tests.
-- [ ] Consolidate cleanup for normal exit, startup failure, timeout, and crash.
-- [ ] Keep Apple sidecar lifetime distinct; share an execution Interface only where
+- [x] Consolidate cleanup for normal exit, startup failure, timeout, and crash.
+- [x] Keep Apple sidecar lifetime distinct; share an execution Interface only where
   both production adapters have a real common contract.
 
 **Acceptance:** tests through the session Interface cover startup failure,
@@ -110,8 +110,9 @@ requires updating caller tests that inspect its locks or dictionaries.
 
 ## Delivery evidence
 
-Phase 1 is implemented and locally verified, awaiting PR review and integration.
-Phases 2–4 remain planned, not implemented.
+Phase 1 merged in PR #37. The following table records its validation.
+Phase 2 is implemented in a separate worktree; its validation is recorded below.
+Phases 3–4 remain planned, not implemented.
 
 | Check | Result |
 |---|---|
@@ -143,3 +144,203 @@ registration stays after worker readiness; explicit Apple requests retain their
 independent sidecar path. No blocking issue was found in that pass. Existing
 model-identity timing and lifecycle failure-path concerns remain Phase 2/3 work,
 not claims fixed by this retirement.
+
+## Phase 2 execution contract (2026-09-12)
+
+Phase 1 merged as PR #37 at `d0f29bf`. Phase 2 uses the separate
+`refactor/request-execution` worktree and does not alter the running server.
+
+A controlled switch from Paraformer to SenseVoice reproduced a successful HTTP
+response labelled `paraformer` although the queued job used `sensevoice-small`.
+The route captured identity before waiting for the spawn lock. Capability checks
+read the same stale snapshot and can accept unsupported timestamp requests.
+
+Chosen contract:
+
+- Explicit selection is fixed by the request. Validate it before waiting for a
+  worker or copying the upload; explicit Apple requests retain independent dispatch.
+- Passthrough selection occurs after acquiring the spawn lock, as before. Resolve
+  an immutable execution plan there, validate its capabilities before enqueue or
+  worker startup, and carry its identity through completion. Do not turn a
+  passthrough into an explicit switch to an earlier snapshot.
+- `submit` returns a typed completion containing the normalized payload and the
+  actual model identity. HTTP rendering reads that completion, not mutable runtime
+  state. There is one submission Interface, not a second compatibility method.
+- Move request capability checks into this execution Module. HTTP still validates
+  uploads, resolves aliases, maps response formats, and maps input errors to 400.
+  Passthrough capability errors may wait for an in-progress switch, but never run
+  inference. Explicit invalid requests still fail immediately.
+- Preserve custom-model conservative capabilities, remote error status mapping,
+  queue capacity, and the existing behavior that a model switch terminates old
+  worker requests. Changes to that scheduling policy belong to a separate design.
+
+An admission-time snapshot was rejected: passing that snapshot as an explicit
+model could switch back to an earlier model and cancel other queued requests.
+Fixing only response metadata was rejected because validation could still target
+a different model from inference.
+
+Acceptance uses event-controlled concurrent tests through HTTP plus the real
+submission path with a fake worker transport; no timing sleeps or real model are
+needed to reproduce the interleaving. Check both supported-to-unsupported and
+unsupported-to-supported timestamp transitions, actual response identity, explicit
+selection stability, language gating, and custom-model behavior.
+
+### Phase 2 validation and review
+
+- Full worktree suite: **338 passed in 38.33 seconds**, including real Paraformer
+  one-second silence E2E; the existing unregistered `e2e` marker warning remains.
+- Thirteen new event-controlled execution cases cover concurrent selection,
+  capability transitions in both directions, switch failure, explicit pinning,
+  pre-worker rejection, Apple language validation, custom paths, and identity
+  after a later runtime change. No active tests were removed.
+- Ruff, Tach, and `git diff --check` passed. Targeted mypy for
+  `src/services/execution.py` passed with imported modules followed silently;
+  this is not a whole-repository type-check claim.
+- Wheel and source distribution built with `uv build --no-build-isolation`.
+- A separate second review pass checked that passthrough never becomes an explicit
+  historical-model switch, validation precedes enqueue, registration still follows
+  worker readiness, and completion metadata is independent of runtime mutations.
+  Existing worker shutdown, crash recovery, and queue policy remain Phase 3 scope.
+
+The internal Python return contract changes from a bare payload to
+`ExecutionResult(payload, model)`. The single production caller and all test
+stand-ins were migrated; the external HTTP response shape remains unchanged.
+The worktree shares the existing dependency environment via `.venv` and uses
+`--no-sync`. Neither dependency versions nor the running server were changed.
+
+## Phase 3 worker-session contract (2026-09-12)
+
+This phase is stacked on PR #38 (`11353c2`) in the isolated
+`refactor/worker-session` worktree. PR #38 remains a separate review/merge step.
+
+The previous shutdown implementation was reproduced with a process whose timed
+`join` returns while still alive: `kill()` was never called and the service
+cleared its process handle. Startup error branches also discarded the process
+without joining it or closing its queues. Ownership now stays in one Module:
+
+- `WorkerSession` owns startup/readiness, pending completions, its result reader,
+  and disposal. Its caller selects a `WorkerConfig`, awaits `start`, synchronously
+  enqueues under the admission lock, then awaits the returned future outside that
+  lock. Successful reuse of the same live configuration does not restart it.
+- The internal transport Seam has a real multiprocessing Adapter and a controlled
+  test Adapter. The service no longer holds process/queue/reader fields or pending
+  completion dictionaries. Upload directories remain owned by `submit`'s `finally`.
+- Startup failure, deadline, cancellation, idle exit, process death, and explicit
+  shutdown all dispose the owned transport. Readers are joined before replacement;
+  an old reader cannot consume a new startup handshake. No blocking executor
+  `Queue.get` is left behind on startup timeout.
+- Disposal waits for graceful exit, then checks liveness after both timed
+  terminate/join and kill/join. If the process survives, keep ownership and reject
+  replacement. Cancellation waits for cleanup before releasing lifetime ownership.
+- After the child is reaped, close the parent job-reader endpoint so a blocked
+  feeder exits on EPIPE, then close/join queues and close both endpoints. A killed
+  child can retain the Queue read lock or leave a partially consumed frame, so
+  draining through `Queue.get` is unsafe. An independent SIGSTOP-then-kill probe
+  reproduced this defect in the first implementation and is retained as a test.
+- This disposal uses CPython Queue's `_reader`, `_writer`, and `_ignore_epipe`
+  internals, isolated and typed in the transport Adapter. The flag is set before
+  any parent feeder starts; endpoint closure happens only after child reaping.
+  This avoids discarding the feeder with `cancel_join_thread`, which would hide a
+  leak. The trade-off is a CPython dependency: the real spawn probes are in CI and
+  must pass when upgrading Python. Local validation uses CPython 3.11.
+- Terminal/malformed messages fail pending jobs. Per-job legacy and typed errors
+  preserve their existing HTTP mapping. Apple sidecar lifetime remains separate.
+- Shutdown blocks later admission and waits for an already-starting resident
+  session. Explicit ModelSpec switches still close the old session even if two
+  specs reference identical weights. Cancelling a request releases its waiter/upload, not native
+  inference. Model switching still terminates outstanding jobs on the old model;
+  this phase does not introduce a drain-before-switch scheduling policy.
+
+Keeping lifecycle methods on the service with shared mutable queues was rejected:
+that would move code without transferring ownership. Replacing the multiprocessing
+wire protocol was also excluded; typed job payloads remain Phase 4 work.
+
+### Regression migration and acceptance
+
+The old suites installed private process handles, dictionaries, and reader tasks.
+They now exercise real submission/session behavior with the controlled transport.
+Repeated assertions across the old suites were consolidated; active scenarios
+remain represented as follows:
+
+| Previous obligation | Current behavioral evidence |
+| --- | --- |
+| Result/text delivery, remote error types, upload lifetime | `test_service.py` result/error parameter sets |
+| Queue full, internal admission, overflow before completion | `test_service.py` and real concurrent admission in `test_concurrency.py` |
+| Cancel waiting for lock, cancel explicit/passthrough, enqueue failure | `test_service.py` cancellation and cleanup cases |
+| Old reader must not consume new READY | `test_worker_session.py` replacement/late-result case |
+| Same-model reuse, selected model after switch, old-job termination | `test_dynamic_switching.py` |
+| Failed switch cleanup and recovery, Apple exclusion | `test_dynamic_switching.py` and unchanged Apple tests |
+| Lazy state, capabilities, idle/crash restart | `test_idle_offload.py` |
+| Selection/validation/response agreement | All 13 Phase 2 HTTP cases retained with the real session |
+
+Lightweight real-subprocess probes run in watchdog-isolated Python processes.
+Each performs three lifetimes and checks child reaping, absence of feeder threads,
+clean interpreter exit, and absence of resource-tracker warnings. Modes cover
+normal shutdown, idle, crash, load error, invalid startup, startup timeout,
+SIGTERM-resistant worker, a two-megabyte queued job with no consumer, and a
+SIGSTOP-paused consumer killed while waiting inside Queue.get. These
+probes do not load ML models. They establish lifecycle behavior for these cases,
+not long-audio inference or live-server acceptance.
+
+### Phase 3 validation and second review
+
+- Final full suite: **358 passed in 38.68 seconds**, including real Paraformer
+  one-second silence E2E. The pre-existing unregistered `e2e` marker warning remains.
+- Nine watchdog-isolated process modes, each repeated three times, passed. The
+  SIGSTOP case first failed during queue draining and passed after endpoint-based
+  disposal replaced it. These probes now run in CI alongside unit tests.
+- Ruff, Tach, `git diff --check`, and targeted mypy for `worker_session.py` and
+  `transport.py` passed. No new complexity exemptions or `Any` annotations.
+- `uv build --no-build-isolation` produced the wheel and source distribution.
+- The separate second review checked ownership transfer, cleanup cancellation,
+  same-weight/different-spec switching, failed replacement, sidecar exclusion, and
+  every active regression in the migration table. The killed-consumer read-lock
+  defect found during that pass was fixed and re-tested with a real process.
+
+The worktree reuses the existing ignored `.venv` with `--no-sync`. Dependencies,
+main checkout, and the running HTTP server were not changed. PR #38 is the base;
+this phase does not merge it or deploy either phase. Typed job/options contracts
+and narrowing the service's legacy lint exemptions remain Phase 4.
+
+
+### PR #39 review remediation (reviewed head `c2ebe72`)
+
+The local `pr-reviews/pr-39v1.md` review reported two blockers. Both are accepted;
+the earlier passing suite did not establish these two interleavings.
+
+| Item | Reproduction | Correction and regression |
+| --- | --- | --- |
+| F1: a switch can start a replacement after stop returns | Controlled close/start gap admitted a replacement after stopping began; the report's same-loop-turn switch/stop sequence is retained as a regression | Stop holds the admission lock over the entire switch transaction. Cancellation waits for this lock and cleanup; the spawn path rechecks stopping after old-session disposal. Tests cover same-turn admission, the disposal gap, and cancelled stop. |
+| F2: `get_nowait` blocks on an incomplete process frame | Before the fix, a partial startup frame exceeded a 15-second external watchdog despite a 0.5-second startup deadline | A transport-owned reader thread decodes process frames and publishes only complete messages or terminal failure to a local thread queue. Event-loop polling reads only that local queue. |
+
+The result pipe's parent writer is closed immediately after process start: the
+child is its only producer, so child exit now yields EOF even mid-frame. Shutdown
+reaps the child first, joins the reader, then disposes queue endpoints and the
+parent feeder. A receiver that fails to join retains transport ownership and
+blocks replacement. This is an owned thread, not a detached executor read.
+
+The session consumes terminal transport errors after earlier complete messages;
+it no longer races process liveness against the reader decoding a final valid
+result. A two-megabyte successful result followed by producer exit is a control.
+The result tuple protocol and model-worker inference code remain unchanged.
+
+Watchdog regressions use real Queue serialization and interrupt its separate
+frame-header write. Startup and result modes cover producer exit and a producer
+that remains alive after the header; controls disable the fault. The waiting
+modes check heartbeat progress and timeout/cancellation. Every mode repeats three
+lifetimes and asserts no live child, feeder, or `ASRResultReader` thread remains.
+
+The original review supervisor (`run_partial_frames.py`) was also rerun unchanged:
+all four cases (startup/runtime, fault disabled/enabled) exited zero and printed
+`CLEANED`; both enabled faults delivered `RuntimeError`, with no watchdog timeout.
+The initial hand-written truncated-frame probe established the red case; durable
+regressions now use the review's normal-serializer fault injection method.
+
+Remediation validation: **367 passed in 49.33 seconds**, including the real
+Paraformer one-second silence E2E. The pre-existing unregistered `e2e` marker
+warning remains. Three shutdown regressions and six normal-serializer IPC modes
+were added (four faults and two controls); the complete 15-mode process matrix
+repeats each mode three times. Ruff, Tach, targeted mypy for both lifecycle
+Modules, diff check, and wheel/source builds passed. The 49-case focused
+service/session/process suite also passed before the full run. No dependency
+updates, main-branch edits, live-server restart, or merge were performed.
