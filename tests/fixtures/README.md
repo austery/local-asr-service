@@ -19,3 +19,13 @@
 
 如果你是新 clone 本项目的开发者，请联系项目维护者获取测试音频，
 或自行准备类似特征的测试文件（多人对话，至少 2 个说话人）。
+
+## Qwen automatic-language E2E
+
+`tests/e2e/test_qwen_auto_language.py` requires the existing
+`two_speakers_60s.wav` English dialogue and cached
+`mlx-community/Qwen3-ASR-1.7B-8bit` weights on Apple Silicon. It creates a
+task-local 21-minute WAV by prepending 20 minutes of digital silence and
+checks that public `language=auto` retains the speech after the silent first
+internal chunk. Use `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1` to enforce cached-weight testing;
+the fixture must already be available.

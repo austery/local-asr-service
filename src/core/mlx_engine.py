@@ -115,13 +115,14 @@ def _is_qwen3_asr_model(model_id: str) -> bool:
     return "qwen3-asr" in model_id.lower()
 
 
-def _normalize_mlx_language(model_id: str, language: str) -> str:
+def _normalize_mlx_language(model_id: str, language: str) -> str | None:
     if not _is_qwen3_asr_model(model_id):
         return language
     normalized_language = language.strip()
     normalized_key = normalized_language.lower()
     if normalized_key == "auto":
-        return normalized_language
+        # Qwen detects each chunk independently only when no language is forced.
+        return None
     normalized = _QWEN3_LANGUAGE_ALIASES.get(normalized_key, language.strip())
     if normalized not in _QWEN3_SUPPORTED_LANGUAGES:
         raise ValueError(
