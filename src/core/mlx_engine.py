@@ -229,23 +229,27 @@ class MlxAudioEngine:
             # 步骤2: 转录所有切片
             results = []
             normalized_language = _normalize_mlx_language(self.model_id, language)
-            for i, chunk_path in enumerate(chunks):
-                print(f"🎙️ Transcribing chunk {i + 1}/{len(chunks)} (format: {output_format})...")
-                try:
-                    result = generate_transcription(
-                        model=self.model,
-                        audio=chunk_path,
-                        format=output_format,
-                        verbose=verbose,
-                        language=normalized_language,
-                    )
-                    results.append(result)
-                finally:
-                    # 清理临时切片文件
-                    if (chunk_path != chunks[0] or len(chunks) > 1) and (
-                        ".chunk_" in chunk_path or len(chunks) > 1
-                    ):
-                        Path(chunk_path).unlink(missing_ok=True)
+            # Export beside the request audio so parent cleanup also covers
+            # artifacts left behind when a deadline terminates this worker.
+            with tempfile.TemporaryDirectory(prefix="mlx_output_", dir=Path(file_path).parent) as output_dir:
+                for i, chunk_path in enumerate(chunks):
+                    print(f"🎙️ Transcribing chunk {i + 1}/{len(chunks)} (format: {output_format})...")
+                    try:
+                        result = generate_transcription(
+                            model=self.model,
+                            audio=chunk_path,
+                            output_path=str(Path(output_dir) / f"transcript_{i}"),
+                            format=output_format,
+                            verbose=verbose,
+                            language=normalized_language,
+                        )
+                        results.append(result)
+                    finally:
+                        # 清理临时切片文件
+                        if (chunk_path != chunks[0] or len(chunks) > 1) and (
+                            ".chunk_" in chunk_path or len(chunks) > 1
+                        ):
+                            Path(chunk_path).unlink(missing_ok=True)
 
             # 步骤3: 根据格式合并结果
             final_result: str | dict[str, object]
