@@ -1,7 +1,8 @@
 # Nemotron 3 Diarization: isolated PoC proposal
 
-Status: draft for owner review. This branch contains the plan only; do not
-interpret it as approval to download weights, run models, or integrate a service.
+Status: stages 1–3 approved by the owner and evaluated on 2026-10-26.
+See [measured results and decision](2026-10-26-nemotron-diarization-results.md).
+Stage 4 and production enablement remain outside this authorization.
 
 ## Question and scope
 
@@ -164,6 +165,9 @@ Deliver a compact side-by-side report plus inspectable speaker timelines for
 selected reference-labeled windows. Classify the result as: reject, continue
 observing, extend independent PoC, or propose a separately reviewed integration.
 
-Current state: branch and plan created; no weights downloaded, no environment
-installed, no inference run, and no service/source/registry change made in the
-primary checkout. The next action is owner review of this proposal.
+Current state: isolated runner, control/long-form/capacity evaluation and evidence
+report prepared. The measured decision is to hold integration. Chinese and
+bilingual independent labels and natural eight-person acceptance remain missing;
+no unmeasured quality claim is made. The primary service/environment were not
+switched. See the results report and `benchmarks/DIARIZATION_POC.md` for the
+retained evidence and reproduction commands.
