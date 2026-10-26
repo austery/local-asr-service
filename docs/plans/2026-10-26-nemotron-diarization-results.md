@@ -80,7 +80,10 @@ On this same long meeting, auxiliary diagnostics show:
   prevent treating it as a one-to-one timestamp-accuracy score.
 
 A separate reference-based returning-speaker audit inspects up to the three
-longest >=30 s reference gaps per person, using up to five seconds on each side.
+longest >=30 s reference gaps per person in the natural meeting, using up to
+five seconds on each side. The constructed-return check instead uses each
+person's longest actual turn in the first 90 s and its exact repeat at +600 s
+(the longest such window is 9.51 s).
 Only target-exclusive reference speech with exactly one predicted active speaker
 is used; each side requires >=0.5 s exclusive reference and >=50% dominant-ID
 coverage. Of ten natural ES2004b checks, two retain the same raw ID, one changes
@@ -88,10 +91,12 @@ local assignment and seven lack sufficient unambiguous coverage. The constructed
 return at +600 s retains IDs for two people; the third lacks coverage. These are
 bounded identity checks, not proof of permanent replacement or a pass for all
 long-form identities. Exact windows and counts are retained in
-`returning-speaker-audit.json` with its reproduction script.
+`returning-speaker-audit.json` with its reproduction script
+`execution-scripts/audit_returns.py`.
 
-These auxiliary diagnostics use raw references without collar/UEM; their full
-protocol and per-recording values are in `summary.json`. They are not vendor
+The other auxiliary diagnostics use raw references without collar/UEM; their
+protocol and per-recording values are in `summary.json`. The separate return
+audit protocol and windows are in `returning-speaker-audit.json`. They are not vendor
 benchmark metrics. The 10 ms output grid alone establishes no boundary accuracy.
 
 ## Behavior and operational fit
