@@ -4,6 +4,14 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Add an explicit experimental `nemotron-diar` group to model discovery and a
+  separate `/v1/audio/diarizations` endpoint. Empty optional transcription
+  selection stays disabled; no default/current ASR change. Run only after natural
+  ASR offload with cancellation-safe exclusive native admission. Preserve native
+  Apple ownership through cancelled HTTP waits. Cached pinned weights only;
+  service/environment activation remains manual. See
+  [scope and evidence](docs/2026-10-26-explicit-nemotron-option.md).
+
 - Keep ordinary MLX transcription exports in a request-owned temporary directory,
   cleaned on success and failure. Preserve caller-directory transcript files;
   leave the existing MOSS export isolation unchanged.

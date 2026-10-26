@@ -3,45 +3,24 @@ API routes for speech transcription service.
 """
 
 import logging
-import os
 from dataclasses import asdict
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
-from src.config import MAX_UPLOAD_SIZE_MB
+from src.api.diarization import DiarizerInfo, discovered_diarizers
+from src.api.diarization import router as diarization_router
+from src.api.uploads import validate_audio_upload
 from src.core.base_engine import TranscriptionInputError
+from src.core.diarization_registry import is_diarization_model
+from src.core.diarization_result import ServiceBusyError
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
 from src.services.worker_session import WorkerRemoteError
 
 logger = logging.getLogger(__name__)
 
 # 支持的音频 MIME 类型白名单
-ALLOWED_AUDIO_TYPES = {
-    "audio/wav",
-    "audio/x-wav",
-    "audio/mpeg",
-    "audio/mp3",
-    "audio/mp4",
-    "audio/x-m4a",
-    "audio/flac",
-    "audio/ogg",
-    "audio/webm",
-}
-
-# 支持的文件扩展名（用于 fallback 判断）
-ALLOWED_AUDIO_EXTENSIONS = {
-    ".wav",
-    ".mp3",
-    ".m4a",
-    ".mp4",
-    ".flac",
-    ".ogg",
-    ".webm",
-}
-
-# OpenAI response_format → internal output_format mapping
 _RESPONSE_FORMAT_MAP = {
     "verbose_json": "json",
     "text": "txt",
@@ -89,10 +68,12 @@ class ModelsResponse(BaseModel):
 
     models: list[ModelInfo]
     current: str | None
+    diarizers: list[DiarizerInfo] = Field(default_factory=list)
 
 
 # Router
 router = APIRouter()
+router.include_router(diarization_router)
 
 
 def _resolve_model(model: str | None) -> ModelSpec | None:
@@ -102,6 +83,8 @@ def _resolve_model(model: str | None) -> ModelSpec | None:
     Returns None for passthrough values (None / "whisper-1") — signals "use current engine".
     Raises HTTPException 400 for unrecognisable model strings.
     """
+    if model is not None and is_diarization_model(model):
+        raise HTTPException(400, "This is a standalone diarizer; use POST /v1/audio/diarizations.")
     if is_passthrough(model):
         return None
     try:
@@ -126,6 +109,10 @@ async def create_transcription(
             "For MOSS, also set language=en and upload at most 30 minutes of audio. "
             "Examples: " + ", ".join(f"'{spec.alias}'" for spec in list_all()) + "."
         ),
+    ),
+    diarizer: str | None = Form(
+        None,
+        description="Optional empty value disables external diarization. Use the standalone diarization endpoint for a nonempty selection.",
     ),
     language: str = Form(
         "auto",
@@ -176,41 +163,12 @@ async def create_transcription(
     """
     request_id = getattr(request.state, "request_id", "unknown")
 
-    # 1. 文件类型校验（先做，确保文件错误优先于模型错误）
-    is_valid_type = file.content_type in ALLOWED_AUDIO_TYPES
-    if not is_valid_type and file.content_type == "application/octet-stream":
-        file_ext = os.path.splitext(file.filename or "")[1].lower()
-        is_valid_type = file_ext in ALLOWED_AUDIO_EXTENSIONS
-        if is_valid_type:
-            logger.info(
-                f"[{request_id}] Accepted file by extension fallback: "
-                f"{file.filename} (ext={file_ext})"
-            )
-
-    if not is_valid_type:
-        logger.warning(
-            f"[{request_id}] Unsupported file: {file.filename} (type={file.content_type})"
-        )
+    file_size_mb = validate_audio_upload(file, request_id)
+    if isinstance(diarizer, str) and diarizer.strip():
         raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported file type. Expected audio file, got: {file.content_type}",
+            400,
+            "Use POST /v1/audio/diarizations for an explicit diarizer; leave it empty for ordinary transcription.",
         )
-
-    # 2. 文件大小校验
-    file.file.seek(0, 2)
-    file_size_bytes = file.file.tell()
-    file_size_mb = file_size_bytes / (1024 * 1024)
-
-    if file_size_mb > MAX_UPLOAD_SIZE_MB:
-        logger.warning(
-            f"[{request_id}] File too large: {file_size_mb:.2f}MB (max: {MAX_UPLOAD_SIZE_MB}MB)"
-        )
-        raise HTTPException(
-            status_code=413,
-            detail=f"File size exceeds maximum allowed ({MAX_UPLOAD_SIZE_MB} MB)",
-        )
-
-    file.file.seek(0)
 
     # 3. Resolve the requested model. Retired aliases fail before submission.
     resolved_spec = _resolve_model(model)
@@ -222,7 +180,10 @@ async def create_transcription(
     service = request.app.state.service
     logger.info(
         "[%s] Processing file: %s (%.2fMB, format=%s, requested_model=%s)",
-        request_id, file.filename, file_size_mb, effective_format,
+        request_id,
+        file.filename,
+        file_size_mb,
+        effective_format,
         resolved_spec.alias if resolved_spec is not None else "current",
     )
 
@@ -312,12 +273,19 @@ async def create_transcription(
         raise HTTPException(status_code=400, detail=str(e)) from None
 
     except WorkerRemoteError as e:
-        status = {"TranscriptionInputError": 400, "TranscriptionOutputError": 422}.get(e.exc_type_name)
+        status = {"TranscriptionInputError": 400, "TranscriptionOutputError": 422}.get(
+            e.exc_type_name
+        )
         if status is not None:
             raise HTTPException(status_code=status, detail=str(e)) from None
         logger.error(f"[{request_id}] Worker error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Internal server error occurred. (Request ID: {request_id})"
+        ) from None
+
+    except ServiceBusyError as e:
+        raise HTTPException(
+            503, detail={"code": e.code, "message": str(e)}, headers={"Retry-After": "5"}
         ) from None
 
     except RuntimeError as e:
@@ -355,9 +323,7 @@ async def list_models(request: Request) -> ModelsResponse:
             model_id=spec.model_id,
             engine_type=spec.engine_type,
             description=spec.description,
-            capabilities={
-                k: v for k, v in asdict(spec.capabilities).items()
-            },
+            capabilities={k: v for k, v in asdict(spec.capabilities).items()},
             requestable=True,
         )
         for spec in list_all()
@@ -365,6 +331,7 @@ async def list_models(request: Request) -> ModelsResponse:
     return ModelsResponse(
         models=sorted(model_entries, key=lambda item: item.alias),
         current=current_alias,
+        diarizers=discovered_diarizers(),
     )
 
 
@@ -383,7 +350,9 @@ async def get_current_model(request: Request) -> dict[str, object]:
         "model_alias": current_spec.alias if current_spec else None,
         # Use current_spec.capabilities for consistency — avoids a transient mismatch
         # between current_spec and service.engine during a model switch.
-        "capabilities": asdict(current_spec.capabilities) if current_spec else asdict(service.capabilities),
+        "capabilities": asdict(current_spec.capabilities)
+        if current_spec
+        else asdict(service.capabilities),
         "queue_size": service.queue_size,
         "max_queue_size": service.max_queue_size,
     }

@@ -264,7 +264,7 @@ class TestEndToEndSecurityFlow:
 
     def test_blocked_by_file_size_limit(self):
         """测试文件大小限制阻止请求"""
-        with patch("src.api.routes.MAX_UPLOAD_SIZE_MB", 1):  # 设置为 1 MB
+        with patch("src.api.uploads.MAX_UPLOAD_SIZE_MB", 1):  # 设置为 1 MB
             app = create_test_app_with_cors("*")
             client = TestClient(app)
 

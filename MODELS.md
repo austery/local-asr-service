@@ -1,7 +1,8 @@
 # Model Reference
 
 > Single source of truth for all supported models. Update this file when adding, removing, or re-evaluating models.
-> The authoritative alias table lives in `src/core/model_registry.py`.
+> The authoritative ASR alias table lives in `src/core/model_registry.py`.
+> Standalone diarizer metadata lives separately in `src/core/diarization_registry.py`.
 
 ---
 
@@ -14,6 +15,49 @@
 | `qwen3-asr` | mlx-audio (`load_model` + `generate_transcription` on MLX Metal) | `mlx-community/Qwen3-ASR-1.7B-8bit` | ❌ | Chinese/English quality-first ASR; language prompts are normalized before inference |
 | `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; requires explicit `language=zh/en` or `zh-CN/en-US`; short codes are mapped internally; recommended low-resource ASR-only option after Phase 3 long-audio review (verified strong low-resource candidate); no speaker labels without a separate diarization stage |
 | `moss-transcribe-diarize` | mlx-audio MLX | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | ✅ | Opt-in English continuous speech, at most 30 minutes; requires `language=en` |
+
+## Experimental standalone diarization
+
+`nemotron-diar` is a separately selected **speaker activity** option, not an ASR
+alias. It appears in `/v1/models.diarizers`; existing `models` and `current` remain
+ASR-only. The pinned MLX checkpoint is
+`mlx-community/Nemotron-3-Diarization@59ed2dbfc1346dcea9d423c71306a3a2499c568f`
+(OpenMDW-1.1), using locked mlx-audio 0.6.1. Eight channels are output capacity,
+not an eight-person accuracy guarantee.
+
+After manual deployment of this change:
+
+```bash
+curl http://127.0.0.1:50700/v1/audio/diarizations \
+  -F 'file=@conversation.m4a' -F 'diarizer=nemotron-diar'
+```
+
+- The standalone endpoint requires the explicit alias on **every** request.
+  Missing alias returns 422; blank, auto, unknown and hidden choices return 400.
+- Ordinary `/v1/audio/transcriptions` accepts a missing/None/empty/whitespace
+  `diarizer` as disabled. A nonempty choice or a known diarizer in ASR `model`
+  returns 400 with the separate endpoint. Neither path silently enables Nemotron.
+- Output is JSON `duration`, `num_speakers`, overlapping `turns`, and immutable
+  `diarizer/model_id/revision` identity. There is no transcript text or SRT.
+- Requests run only when ASR/native work is idle and the resident model has
+  naturally offloaded. Busy requests return 503 and `Retry-After: 5`; the
+  experiment similarly blocks new ASR/Apple work until its child is disposed.
+  `MODEL_IDLE_TIMEOUT_SEC=0` may keep the experiment busy indefinitely while an
+  ASR process remains resident; it never forces offload or restores another model.
+- Discovery is cheap cache inspection. Missing pinned weights return 503
+  `model_unavailable`; requests do not download/install anything.
+- Existing upload size limit applies. Decoded mono 16 kHz PCM16 is limited to
+  512 MiB; over-limit input fails rather than silently truncates. Resource guards
+  sample a 20 GiB host reserve and 8 GiB owned RSS/MLX allocation threshold, with
+  a 900-second deadline. Sampling can overshoot and is not a memory reservation.
+- Default and logical current ASR selection remain unchanged on success, failure,
+  cancellation and shutdown. Existing Paraformer/CAM++ and MOSS behavior remains.
+
+[Isolated acceptance evidence](docs/2026-10-26-explicit-nemotron-option.md)
+records HTTP smoke and long-input resource checks. The prior
+[quality evaluation](docs/plans/2026-10-26-nemotron-diarization-results.md)
+still does not qualify this model for automatic speaker-attributed transcription.
+Real podcast listening remains owner follow-up.
 
 ## Bounded MOSS (Opt-in)
 

@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -15,7 +16,10 @@ from src.config import (
 from src.core.apple_speech_engine import AppleSpeechEngine, AppleSpeechEngineConfig
 from src.core.apple_speech_port import AppleSpeechModule
 from src.core.base_engine import EngineCapabilities
+from src.core.diarization_registry import DiarizationSpec, cached_snapshot
+from src.core.diarization_result import DiarizationError, DiarizationPayload, ServiceBusyError
 from src.core.model_registry import ModelSpec
+from src.services.diarization_session import DiarizationSession, DiarizationSessionPort
 from src.services.execution import (
     ExecutionPlan,
     ExecutionResult,
@@ -44,6 +48,7 @@ class TranscriptionService:
         idle_timeout: int = 60,
         *,
         worker_session: WorkerSession | None = None,
+        diarization_session_factory: Callable[[], DiarizationSessionPort] = DiarizationSession,
     ) -> None:
         self._engine_type = engine_type
         self._model_id = model_id
@@ -54,6 +59,11 @@ class TranscriptionService:
         self._session = worker_session or WorkerSession()
         self._spawn_lock = asyncio.Lock()
         self._stopping = False
+        self._asr_admissions = 0
+        self._diarization_factory = diarization_session_factory
+        self._experiment: DiarizationSessionPort | None = None
+        self._experiment_dir: str | None = None
+        self._sidecar_tasks: set[asyncio.Task[object]] = set()
         self._sidecar_pending: set[str] = set()
         self._sidecar_semaphore = asyncio.Semaphore(APPLE_SPEECH_MAX_CONCURRENCY)
         self._apple_speech_engines: dict[str, AppleSpeechEngine] = {}
@@ -69,7 +79,6 @@ class TranscriptionService:
     def model_loaded(self) -> bool:
         """True if worker subprocess is alive."""
         return self._session.alive
-
 
     @property
     def capabilities(self) -> EngineCapabilities:
@@ -98,7 +107,14 @@ class TranscriptionService:
         """Gracefully stop worker subprocess and result reader."""
         self.is_running = False
         self._stopping = True
-        await finish_cleanup(self._stop_resident_session())
+        await finish_cleanup(self._stop_all_native_work())
+
+    async def _stop_all_native_work(self) -> None:
+        await self._stop_resident_session()
+        if self._experiment is not None and self._experiment_dir is not None:
+            await self._finish_experiment(self._experiment, self._experiment_dir)
+        if self._sidecar_tasks:
+            await asyncio.gather(*self._sidecar_tasks, return_exceptions=True)
 
     async def _stop_resident_session(self) -> None:
         # Admission owns the entire close/start switch, not only either session call.
@@ -112,10 +128,82 @@ class TranscriptionService:
         request_id: str = "unknown",
         model_spec: ModelSpec | None = None,
     ) -> ExecutionResult:
+        if model_spec is not None:
+            ExecutionPlan.select(model_spec, self._model_id).validate(params)
+        async with self._spawn_lock:
+            if self._stopping:
+                raise RuntimeError("Service is stopping")
+            if self._experiment is not None:
+                raise ServiceBusyError()
+            self._asr_admissions += 1
+        try:
+            return await self._submit_transcription(file, params, request_id, model_spec)
+        finally:
+            await finish_cleanup(self._release_asr_admission())
+
+    async def _release_asr_admission(self) -> None:
+        async with self._spawn_lock:
+            self._asr_admissions -= 1
+
+    async def submit_diarization(
+        self, file: UploadFile, spec: DiarizationSpec
+    ) -> DiarizationPayload:
+        async with self._spawn_lock:
+            if (
+                self._stopping
+                or self._experiment is not None
+                or self._asr_admissions
+                or self._active_job_count()
+                or self.model_loaded
+            ):
+                raise ServiceBusyError()
+            try:
+                disposed = await self._session.finish_idle_disposal()
+            except Exception as exc:
+                raise ServiceBusyError() from exc
+            if not disposed:
+                raise ServiceBusyError()
+            checkpoint = cached_snapshot(spec)
+            if checkpoint is None:
+                raise DiarizationError(
+                    "model_unavailable",
+                    "Cache the pinned Nemotron snapshot before requesting it.",
+                    503,
+                )
+            session = self._diarization_factory()
+            directory = tempfile.mkdtemp(prefix="diarization_task_")
+            self._experiment, self._experiment_dir = session, directory
+        try:
+            path = Path(directory) / ("upload" + Path(file.filename or "audio.wav").suffix)
+            with path.open("wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            return await session.run(path, Path(directory) / "result.json", checkpoint)
+        finally:
+            await finish_cleanup(self._finish_experiment(session, directory))
+
+    async def _finish_experiment(self, session: DiarizationSessionPort, directory: str) -> None:
+        await session.close()
+        # Cleanup failure retains both ownership and the exclusive admission flag.
+        if Path(directory).exists():
+            shutil.rmtree(directory)
+        async with self._spawn_lock:
+            if self._experiment is session:
+                self._experiment = None
+                self._experiment_dir = None
+
+    async def _submit_transcription(
+        self,
+        file: UploadFile,
+        params: dict[str, object],
+        request_id: str = "unknown",
+        model_spec: ModelSpec | None = None,
+    ) -> ExecutionResult:
         if self._stopping:
             raise RuntimeError("Service is stopping")
         params = dict(params)
-        explicit_plan = ExecutionPlan.select(model_spec, self._model_id) if model_spec is not None else None
+        explicit_plan = (
+            ExecutionPlan.select(model_spec, self._model_id) if model_spec is not None else None
+        )
         if explicit_plan is not None:
             explicit_plan.validate(params)
         if self._active_job_count() >= self._max_queue_size:
@@ -132,9 +220,13 @@ class TranscriptionService:
             # Explicit sidecar requests do not wait for resident-worker startup.
             if explicit_plan is not None and self._is_apple_speech_spec(explicit_plan.spec):
                 result = await self._submit_apple_speech_job(
-                    temp_file_path=temp_path, params=params, request_id=request_id,
+                    temp_file_path=temp_path,
+                    params=params,
+                    request_id=request_id,
                 )
-                return ExecutionResult(self._coerce_transcription_result(result), explicit_plan.model)
+                return ExecutionResult(
+                    self._coerce_transcription_result(result), explicit_plan.model
+                )
             else:
                 return await self._submit_resident_job(
                     temp_file_path=temp_path,
@@ -170,7 +262,9 @@ class TranscriptionService:
                 )
         if route_to_sidecar:
             result = await self._submit_apple_speech_job(
-                temp_file_path=temp_file_path, params=params, request_id=request_id,
+                temp_file_path=temp_file_path,
+                params=params,
+                request_id=request_id,
             )
         else:
             result = await future
@@ -215,13 +309,31 @@ class TranscriptionService:
                 language = params.get("language", "auto")
                 output_format = params.get("output_format", "json")
                 with_timestamp = params.get("with_timestamp", False)
-                return await asyncio.to_thread(
-                    engine.transcribe_file,
-                    temp_file_path,
-                    language=language if isinstance(language, str) else "auto",
-                    output_format=output_format if isinstance(output_format, str) else "json",
-                    with_timestamp=with_timestamp if isinstance(with_timestamp, bool) else False,
+                if self._stopping:
+                    raise RuntimeError("Service is stopping")
+                native = asyncio.create_task(
+                    asyncio.to_thread(
+                        engine.transcribe_file,
+                        temp_file_path,
+                        language=language if isinstance(language, str) else "auto",
+                        output_format=output_format if isinstance(output_format, str) else "json",
+                        with_timestamp=with_timestamp
+                        if isinstance(with_timestamp, bool)
+                        else False,
+                    )
                 )
+                self._sidecar_tasks.add(native)
+                try:
+                    return await asyncio.shield(native)
+                finally:
+
+                    async def wait_native() -> None:
+                        try:
+                            await native
+                        finally:
+                            self._sidecar_tasks.discard(native)
+
+                    await finish_cleanup(wait_native())
         finally:
             self._sidecar_pending.discard(request_id)
 
@@ -243,20 +355,24 @@ class TranscriptionService:
             await self._spawn_worker()
 
         # Registration belongs to the ready session, after any old worker exits.
-        return self._session.enqueue(WorkerJob(
-            uid=request_id,
-            temp_file_path=temp_file_path,
-            params=params,
-            job_kind="transcribe",
-            requested_model_spec_alias=model_spec.alias if model_spec is not None else None,
-        ))
+        return self._session.enqueue(
+            WorkerJob(
+                uid=request_id,
+                temp_file_path=temp_file_path,
+                params=params,
+                job_kind="transcribe",
+                requested_model_spec_alias=model_spec.alias if model_spec is not None else None,
+            )
+        )
 
     @staticmethod
     def _coerce_transcription_result(result: object) -> TranscriptionResult:
         if isinstance(result, str):
             return result
         if not isinstance(result, dict):
-            raise TypeError(f"Expected transcription result as str or dict, got {type(result).__name__}")
+            raise TypeError(
+                f"Expected transcription result as str or dict, got {type(result).__name__}"
+            )
 
         coerced: TranscriptionResultDict = {}
         text = result.get("text", "")
@@ -277,7 +393,6 @@ class TranscriptionService:
             coerced["language"] = language
 
         return coerced
-
 
     async def _spawn_worker(self, model_spec: ModelSpec | None = None) -> None:
         if self._stopping:

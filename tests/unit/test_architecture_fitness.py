@@ -211,6 +211,8 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
     assert core_dir.exists(), "src/core directory does not exist"
 
     allowed_core_files = {
+        "diarization_result.py",  # Owner-approved explicit option: typed standalone completion/errors.
+        "mlx_nemotron_diarizer.py",  # ADR-002: thin pinned upstream adapter, no transcription pipeline.
         "__init__.py",
         "apple_speech_engine.py",
         "apple_speech_port.py",

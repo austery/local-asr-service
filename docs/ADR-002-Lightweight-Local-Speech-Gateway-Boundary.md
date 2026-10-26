@@ -223,3 +223,16 @@ validation evidence for the limits of this operating policy.
 | 2026-05-19 | User (AI-Assisted) | Initial boundary draft after qwen3-sortformer long-form probe and Paraformer comparison | 📝 Draft |
 | 2026-05-19 | User (AI-Assisted) | Added scope audit findings, opt-in production reachability for `qwen3-sortformer`, upstream watch policy, and fitness-function follow-up | ✅ Accepted |
 | 2026-05-21 | User (AI-Assisted) | Real English manager 1:1 probe downgraded `qwen3-sortformer` from production-adjacent batch path to experimental reachable deletion candidate | ✅ Accepted |
+
+
+## Explicit standalone diarization exception (2026-10-26)
+
+The owner approved the explicit Nemotron option in
+[the bounded implementation plan](plans/2026-10-26-explicit-nemotron-diarization-option.md).
+A separate experimental endpoint returns speaker activity only. The existing
+DiarizationPort gains one thin cached-revision upstream adapter and typed
+completion/errors. It does not add ASR/aligner orchestration, embeddings, model
+conversion or automatic speaker-attributed transcription. A nonpreemptive
+exclusive admission flag protects resident ASR and Apple native work; no
+borrow/restore state machine is restored. Missing/empty ordinary transcription
+selection remains disabled; standalone inference requires the explicit alias.

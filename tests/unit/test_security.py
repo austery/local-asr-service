@@ -58,7 +58,7 @@ class TestFileSizeLimit:
         from src.api.routes import create_transcription
 
         # Mock 超大文件 (201MB, 超过默认 200MB 限制)
-        with patch("src.api.routes.MAX_UPLOAD_SIZE_MB", 200):
+        with patch("src.api.uploads.MAX_UPLOAD_SIZE_MB", 200):
             content = b"a" * (201 * 1024 * 1024)  # 201 MB
             file = MagicMock()
             file.filename = "large.wav"
@@ -92,7 +92,8 @@ class TestMIMETypeValidation:
     @pytest.mark.asyncio
     async def test_valid_audio_mime_types(self):
         """测试所有支持的音频 MIME 类型"""
-        from src.api.routes import ALLOWED_AUDIO_TYPES, create_transcription
+        from src.api.routes import create_transcription
+        from src.api.uploads import ALLOWED_AUDIO_TYPES
 
         for mime_type in ALLOWED_AUDIO_TYPES:
             content = b"fake audio data"

@@ -32,8 +32,10 @@ class WorkerSession:
     """
 
     def __init__(
-        self, transport_factory: Callable[[WorkerConfig], WorkerTransport] = ProcessTransport,
-        *, startup_timeout: float = 120.0,
+        self,
+        transport_factory: Callable[[WorkerConfig], WorkerTransport] = ProcessTransport,
+        *,
+        startup_timeout: float = 120.0,
     ) -> None:
         self._factory = transport_factory
         self._startup_timeout = startup_timeout
@@ -45,7 +47,9 @@ class WorkerSession:
 
     @property
     def alive(self) -> bool:
-        return self._config is not None and self._transport is not None and self._transport.is_alive()
+        return (
+            self._config is not None and self._transport is not None and self._transport.is_alive()
+        )
 
     @property
     def pending_count(self) -> int:
@@ -83,6 +87,14 @@ class WorkerSession:
             raise
         return future
 
+    async def finish_idle_disposal(self) -> bool:
+        """Reap an already exited worker without preempting a live native model."""
+        async with self._lifetime_lock:
+            if self._transport is not None and self._transport.is_alive():
+                return False
+            await self._close()
+            return True
+
     async def close(self) -> None:
         await finish_cleanup(self._locked_close())
 
@@ -117,7 +129,11 @@ class WorkerSession:
                 continue
             if message == ("READY", None):
                 return
-            if isinstance(message, tuple) and len(message) == _STARTUP_MESSAGE_SIZE and message[0] == "LOAD_ERROR":
+            if (
+                isinstance(message, tuple)
+                and len(message) == _STARTUP_MESSAGE_SIZE
+                and message[0] == "LOAD_ERROR"
+            ):
                 raise RuntimeError(f"Worker failed to load model: {message[1]}")
             raise RuntimeError(f"Worker sent unexpected startup message: {message!r}")
 

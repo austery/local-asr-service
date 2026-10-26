@@ -76,6 +76,10 @@ def create_diarizer(alias: str) -> DiarizationPort:
     from src.core.mlx_sortformer_diarizer import MlxSortformerDiarizer  # noqa: PLC0415
 
     spec = lookup_diarizer(alias)
+    if spec.backend == "nemotron":
+        from src.core.mlx_nemotron_diarizer import MlxNemotronDiarizer
+
+        return MlxNemotronDiarizer()
     if spec.runtime == "mlx":
         return MlxSortformerDiarizer(model_id=spec.model_id)
     raise ValueError(f"Unsupported diarization runtime: {spec.runtime}")

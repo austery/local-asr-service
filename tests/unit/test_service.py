@@ -118,7 +118,7 @@ async def test_cancel_while_waiting_for_startup_cleans_unregistered_upload(tmp_p
         uploaded.set()
         return str(task_dir)
 
-    await service._spawn_lock.acquire()
+    harness.configure = lambda t: setattr(t, "ready", False)
     with patch("src.services.transcription.tempfile.mkdtemp", side_effect=make_temp_dir):
         task = asyncio.create_task(service.submit(upload(), {}, "waiting"))
         try:
@@ -130,7 +130,6 @@ async def test_cancel_while_waiting_for_startup_cleans_unregistered_upload(tmp_p
             assert not task_dir.exists()
             assert service.queue_size == 0
         finally:
-            service._spawn_lock.release()
             await service.stop_worker()
 
 
