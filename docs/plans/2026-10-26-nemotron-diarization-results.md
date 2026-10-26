@@ -79,6 +79,17 @@ On this same long meeting, auxiliary diagnostics show:
   optimistic many-to-one diagnostic; missed boundaries and short-turn failures
   prevent treating it as a one-to-one timestamp-accuracy score.
 
+A separate reference-based returning-speaker audit inspects up to the three
+longest >=30 s reference gaps per person, using up to five seconds on each side.
+Only target-exclusive reference speech with exactly one predicted active speaker
+is used; each side requires >=0.5 s exclusive reference and >=50% dominant-ID
+coverage. Of ten natural ES2004b checks, two retain the same raw ID, one changes
+local assignment and seven lack sufficient unambiguous coverage. The constructed
+return at +600 s retains IDs for two people; the third lacks coverage. These are
+bounded identity checks, not proof of permanent replacement or a pass for all
+long-form identities. Exact windows and counts are retained in
+`returning-speaker-audit.json` with its reproduction script.
+
 These auxiliary diagnostics use raw references without collar/UEM; their full
 protocol and per-recording values are in `summary.json`. They are not vendor
 benchmark metrics. The 10 ms output grid alone establishes no boundary accuracy.
@@ -144,7 +155,7 @@ MLX monitor terminates its own low-RSS child on a 9 GiB reading.
 | Clean independently labeled two-speaker DER <=10% | **Unmeasured**: existing fixture has no human RTTM |
 | Core 3–4-speaker DER <=20%, no worse than usable control | **Not met consistently** |
 | Silence false-speech bound | **Met by Nemotron** on the digital controls |
-| Reference-reviewed returning-speaker ID drift across silence/cache boundaries | **Not evaluated**: global mapping/window diagnostics and A/silence/A file reset do not establish this |
+| Reference-reviewed returning-speaker ID drift across silence/cache boundaries | **Not established as passing**: bounded reference-exclusive checks have mixed identity consistency and insufficient coverage; no permanent-replacement conclusion |
 | Long final speech window | Output reaches the final annotated region; complete recovery **not established** |
 | RTF and owned memory | Nemotron observations fit; large Sortformer fails resource gate |
 | Natural 5–8-person quality | **Unmeasured**; separate synthetic eight-identity test fails count |
