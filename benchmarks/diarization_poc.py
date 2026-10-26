@@ -11,8 +11,11 @@ import resource
 import signal
 import subprocess
 import sys
+import threading
 import time
 import wave
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 from importlib import import_module
 from importlib.metadata import version
@@ -64,6 +67,59 @@ class Runtime(Protocol):
     ) -> tuple[Output, object]: ...
 
 
+class MemoryRuntime(Protocol):
+    def get_active_memory(self) -> int: ...
+    def get_cache_memory(self) -> int: ...
+    def get_peak_memory(self) -> int: ...
+
+
+@contextmanager
+def allocation_guard(runtime: MemoryRuntime, path: Path, budget: int) -> Iterator[None]:
+    """Stop this owned child on observed MLX pressure; limits alone are advisory.
+
+    Sampling can overshoot between checks. The parent independently preserves
+    system memory and deadlines; this thread never targets another process.
+    """
+    stopped = threading.Event()
+
+    def monitor() -> None:
+        peak_seen = 0
+        while not stopped.is_set():
+            try:
+                active = runtime.get_active_memory()
+                cache = runtime.get_cache_memory()
+                peak_seen = max(peak_seen, runtime.get_peak_memory(), active + cache)
+                record = {
+                    "active_bytes": active,
+                    "cache_bytes": cache,
+                    "peak_observed_bytes": peak_seen,
+                    "budget_bytes": budget,
+                    "stop_reason": None
+                    if peak_seen <= budget
+                    else "MLX allocation exceeded owned budget",
+                }
+                path.write_text(json.dumps(record, indent=2))
+                if peak_seen > budget:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    return
+            except Exception as exc:
+                # A broken monitor must fail closed rather than run unprotected.
+                try:
+                    path.write_text(json.dumps({"stop_reason": f"MLX monitor failed: {exc}"}))
+                finally:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                return
+            stopped.wait(0.05)
+
+    thread = threading.Thread(target=monitor, name="poc-mlx-memory", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join(timeout=2)
+
+
 def read_audio(path: Path) -> FloatAudio:
     with wave.open(str(path), "rb") as f:
         if (f.getnchannels(), f.getsampwidth(), f.getframerate()) != (1, 2, 16000):
@@ -84,9 +140,11 @@ def protect(identities: dict[int, float]) -> None:
 
 
 def supervise(args: argparse.Namespace) -> None:
+    if args.output.suffix != ".json":
+        raise ValueError("Output must use the .json suffix")
     if any(
         args.output.with_suffix(suffix).exists()
-        for suffix in (".json", ".log", ".npz", ".rttm", ".supervision.json")
+        for suffix in (".json", ".log", ".npz", ".rttm", ".supervision.json", ".memory.json")
     ):
         raise FileExistsError("Use a fresh output path to preserve previous evidence")
     identities = {p: psutil.Process(p).create_time() for p in args.protect_pid}
@@ -360,6 +418,8 @@ def main() -> None:
         p.error("Chunk duration, timeout and memory cap must be positive")
     if not 0 <= args.threshold <= 1 or min(args.min_duration, args.merge_gap) < 0:
         p.error("Invalid postprocessing parameters")
+    if args.output.suffix != ".json":
+        p.error("Output must use the .json suffix")
     if args.reset_check and args.mode != "whole":
         p.error("State-reset probe uses whole-file generation")
     if args.reference and not args.recording_id:
@@ -368,7 +428,11 @@ def main() -> None:
         p.error("UEM requires a reference")
     if args.worker:
         try:
-            run(args)
+            runtime = cast(MemoryRuntime, import_module("mlx.core"))
+            with allocation_guard(
+                runtime, args.output.with_suffix(".memory.json"), round(args.memory_gib * 1024**3)
+            ):
+                run(args)
         except Exception as exc:
             args.output.write_text(
                 json.dumps(

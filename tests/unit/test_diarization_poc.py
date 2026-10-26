@@ -64,7 +64,9 @@ def test_production_inference_prevents_starting_a_model(monkeypatch: pytest.Monk
         runner.protect({7: 10.0})
 
 
-@pytest.mark.parametrize("suffix", [".json", ".npz", ".rttm", ".log", ".supervision.json"])
+@pytest.mark.parametrize(
+    "suffix", [".json", ".npz", ".rttm", ".log", ".supervision.json", ".memory.json"]
+)
 def test_existing_evidence_is_never_overwritten(tmp_path: Path, suffix: str) -> None:
     out = tmp_path / "out.json"
     preserved = out.with_suffix(suffix)
@@ -95,3 +97,33 @@ def test_memory_reserve_drop_stops_only_owned_group_and_retains_diagnostics(
     process.wait.assert_called_once_with(timeout=10)
     assert not output.exists()
     assert "Available memory fell" in output.with_suffix(".supervision.json").read_text()
+
+
+@pytest.mark.parametrize("filename", ["existing.txt", "existing"])
+def test_non_json_output_cannot_overwrite_an_existing_file(tmp_path: Path, filename: str) -> None:
+    output = tmp_path / filename
+    output.write_text("unique data")
+    with pytest.raises(ValueError, match=".json suffix"):
+        runner.supervise(argparse.Namespace(output=output))
+    assert output.read_text() == "unique data"
+
+
+def test_mlx_guard_terminates_owned_child_when_allocations_exceed_budget(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    diagnostic = tmp_path / "memory.json"
+    code = """
+import sys,time
+from pathlib import Path
+from benchmarks.diarization_poc import allocation_guard
+class FakeMLX:
+    def get_active_memory(self) -> int: return 9*1024**3
+    def get_cache_memory(self) -> int: return 0
+    def get_peak_memory(self) -> int: return 9*1024**3
+with allocation_guard(FakeMLX(), Path(sys.argv[1]), 8*1024**3):
+    time.sleep(5)
+"""
+    completed = subprocess.run([sys.executable, "-c", code, str(diagnostic)], timeout=10)
+    assert completed.returncode == -runner.signal.SIGTERM
+    assert "MLX allocation exceeded owned budget" in diagnostic.read_text()

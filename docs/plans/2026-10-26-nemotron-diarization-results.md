@@ -125,10 +125,34 @@ only 0.84 GB peak RSS. This exceeds the proposed 8 GiB operational gate. The
 39-minute run was terminated after system available memory fell to roughly
 2.5 GiB; its output is unscored. Available memory recovered after the owned
 worker exited. RSS alone was insufficient protection, so the runner now also
-sets an 8 GiB MLX allocation limit, continuously enforces the 20 GiB available
-memory reserve and writes supervision diagnostics. This is an experimental
+samples actual MLX active/cache/peak allocation every 50 ms and terminates the
+owned child when the observed value exceeds 8 GiB. The allocator limit itself is
+only a guideline. The parent also checks the 20 GiB available-memory reserve
+every 250 ms and writes supervision diagnostics. Sampling can briefly overshoot;
+these safeguards are not an atomic memory reservation. This is an experimental
 harness safeguard, not a production change. The large control is not rerun
-merely to reproduce resource exhaustion.
+merely to reproduce resource exhaustion. A final guarded Nemotron repeat was
+also correctly stopped when available memory crossed 20 GiB during loading;
+it has no score and does not replace the successful long-run measurements.
+A real subprocess test with injected MLX allocation readings verifies that the
+MLX monitor terminates its own low-RSS child on a 9 GiB reading.
+
+## Gate status
+
+| Proposed gate | Initial evaluation status |
+| --- | --- |
+| Clean independently labeled two-speaker DER <=10% | **Unmeasured**: existing fixture has no human RTTM |
+| Core 3–4-speaker DER <=20%, no worse than usable control | **Not met consistently** |
+| Silence false-speech bound | **Met by Nemotron** on the digital controls |
+| Reference-reviewed returning-speaker ID drift across silence/cache boundaries | **Not evaluated**: global mapping/window diagnostics and A/silence/A file reset do not establish this |
+| Long final speech window | Output reaches the final annotated region; complete recovery **not established** |
+| RTF and owned memory | Nemotron observations fit; large Sortformer fails resource gate |
+| Natural 5–8-person quality | **Unmeasured**; separate synthetic eight-identity test fails count |
+| Chinese/bilingual DER and speaker-attributed WER | **Unmeasured** |
+
+Completing this initial evaluation does not mean all stages 1–3 acceptance gates
+passed. Missing labels and identity audits remain explicit gaps; they do not
+change the hold decision.
 
 ## Outcome and next decision
 

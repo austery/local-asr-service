@@ -75,8 +75,12 @@ uv run --frozen python -m benchmarks.diarization_poc \
 
 One owned model process runs at a time. Offline variables are set in the child.
 The supervisor checks production identity/children, a 20 GiB available-memory
-reserve and an 8 GiB RSS cap at 250 ms intervals. MLX allocations also have an
-8 GiB limit. Sampling is a guard, not an atomic reservation: a concurrent request
+reserve and an 8 GiB RSS cap at 250 ms intervals. A child monitor samples
+MLX active + cached allocations and its reported peak every 50 ms, retaining
+`.memory.json`, and terminates only itself if an observed value exceeds 8 GiB.
+`set_memory_limit` is additionally configured but is only an allocator guideline.
+Sampling can transiently overshoot; these are termination thresholds, not an
+atomic memory reservation: a concurrent request
 can begin between samples. The deadline defaults to 900 seconds. Only the owned
 process group is terminated if a guard fails; diagnostics remain on disk.
 
