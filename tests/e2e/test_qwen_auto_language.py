@@ -28,8 +28,11 @@ def test_qwen_auto_should_transcribe_speech_after_silent_first_chunk(
                 output.writeframesraw(one_second)
             output.writeframes(speech.readframes(speech.getnframes()))
 
-    # The upstream helper writes transcript.json in its working directory.
-    monkeypatch.chdir(tmp_path)
+    cwd = tmp_path / "caller"
+    cwd.mkdir()
+    preserved_export = cwd / "transcript.json"
+    preserved_export.write_text("existing transcript", encoding="utf-8")
+    monkeypatch.chdir(cwd)
     engine = MlxAudioEngine()
     try:
         engine.load()
@@ -50,3 +53,7 @@ def test_qwen_auto_should_transcribe_speech_after_silent_first_chunk(
     assert segments[1]["language"] == "English"
     assert segments[1]["start"] > 1190
     assert segments[1]["end"] == pytest.approx(1260)
+
+    assert preserved_export.read_text(encoding="utf-8") == "existing transcript"
+    assert list(cwd.iterdir()) == [preserved_export]
+    assert not list(tmp_path.glob("mlx_output_*"))

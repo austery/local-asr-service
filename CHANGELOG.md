@@ -4,6 +4,10 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Keep ordinary MLX transcription exports in a request-owned temporary directory,
+  cleaned on success and failure. Preserve caller-directory transcript files;
+  leave the existing MOSS export isolation unchanged.
+
 - Prepare mlx-audio 0.6.1 and map Qwen public `language=auto` to upstream
   automatic detection (`None`). Detect language independently after a silent
   first chunk; preserve explicit-language and other MLX model contracts.
