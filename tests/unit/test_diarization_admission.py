@@ -2,60 +2,17 @@
 
 import asyncio
 import threading
-from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import UploadFile
 
 from src.core.diarization_registry import lookup_diarizer
-from src.core.diarization_result import DiarizationError, DiarizationPayload, ServiceBusyError
+from src.core.diarization_result import DiarizationError, ServiceBusyError
 from src.core.model_registry import lookup
 from src.services.transcription import TranscriptionService
-from src.services.worker_session import WorkerSession
+from tests.helpers.diarization_runtime import ControlledDiarization, service_for, upload
 from tests.helpers.worker_transport import WorkerHarness
-
-
-def upload() -> UploadFile:
-    return UploadFile(file=BytesIO(b"audio"), filename="test.wav")
-
-
-class ControlledDiarization:
-    def __init__(self) -> None:
-        self.started = asyncio.Event()
-        self.release_run = asyncio.Event()
-        self.closing = asyncio.Event()
-        self.release_close = asyncio.Event()
-        self.release_close.set()
-        self.path: Path | None = None
-        self.close_error = False
-
-    async def run(self, audio: Path, output: Path, checkpoint: Path) -> DiarizationPayload:
-        self.path = audio
-        self.started.set()
-        await self.release_run.wait()
-        return DiarizationPayload(1, [])
-
-    async def close(self) -> None:
-        self.closing.set()
-        await self.release_close.wait()
-        if self.close_error:
-            raise RuntimeError("disposal failed")
-        self.release_run.set()
-
-
-def service_for(
-    fake: ControlledDiarization, harness: WorkerHarness | None = None
-) -> TranscriptionService:
-    spec = lookup("paraformer")
-    return TranscriptionService(
-        spec.engine_type,
-        spec.model_id,
-        initial_model_spec=spec,
-        worker_session=WorkerSession(harness.factory) if harness else None,
-        diarization_session_factory=lambda: fake,
-    )
 
 
 @pytest.fixture

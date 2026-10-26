@@ -1,6 +1,7 @@
 """Experimental discovery and required standalone selection; no model inference."""
 
 from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
@@ -156,3 +157,105 @@ def test_busy_ordinary_transcription_is_503_not_runtime_500(
         "/v1/audio/transcriptions", files={"file": ("a.wav", b"audio", "audio/wav")}
     )
     assert response.status_code == 503 and response.headers["Retry-After"] == "5"
+
+
+async def test_asgi_disconnect_waits_for_disposal_and_upload_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Send real ASGI disconnect, not just cancellation of a Python waiter."""
+    import asyncio
+    from pathlib import Path
+
+    from tests.helpers.diarization_runtime import ControlledDiarization, service_for
+
+    fake = ControlledDiarization()
+    fake.release_close.clear()
+    service = service_for(fake)
+    app.state.service = service
+    monkeypatch.setattr("src.services.transcription.cached_snapshot", lambda spec: tmp_path)
+    from tests.helpers.diarization_runtime import start_disconnecting_request
+
+    disconnect = asyncio.Event()
+    request = start_disconnecting_request(app, disconnect)
+    try:
+        await asyncio.wait_for(fake.started.wait(), 1)
+        disconnect.set()
+        await asyncio.wait_for(fake.closing.wait(), 1)
+        with pytest.raises(ServiceBusyError):
+            from tests.helpers.diarization_runtime import upload
+
+            await service.submit(upload(), {})
+        assert fake.path is not None and Path(fake.path).exists()
+        assert not request.done()
+    finally:
+        fake.release_close.set()
+        if not request.done():
+            request.cancel()
+        await asyncio.wait_for(asyncio.gather(request, return_exceptions=True), 2)
+        await service.stop_worker()
+    assert not fake.path.parent.exists()
+
+
+async def test_disconnect_reaps_real_stubborn_worker_before_releasing_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import json
+    import sys
+    from io import BytesIO
+
+    import psutil
+    from fastapi import UploadFile
+
+    from src.services.diarization_session import DiarizationSession
+    from tests.helpers.diarization_runtime import start_disconnecting_request
+
+    marker = tmp_path / "started.json"
+    closing = tmp_path / "closing"
+    child = tmp_path / "native.py"
+    child.write_text(f"""
+import json,os,signal,sys,time
+from pathlib import Path
+signal.signal(signal.SIGTERM,lambda signum,frame:Path({str(closing)!r}).write_text('terminating'))
+Path({str(marker)!r}).write_text(json.dumps({{'pid':os.getpid(),'upload':sys.argv[1]}}))
+time.sleep(60)
+""")
+    spec = lookup("paraformer")
+    service = TranscriptionService(
+        spec.engine_type,
+        spec.model_id,
+        initial_model_spec=spec,
+        diarization_session_factory=lambda: DiarizationSession(
+            (sys.executable, str(child)), reserve_bytes=0, timeout=10
+        ),
+    )
+    app.state.service = service
+    monkeypatch.setattr("src.services.transcription.cached_snapshot", lambda spec: tmp_path)
+    disconnect = asyncio.Event()
+    request = start_disconnecting_request(app, disconnect)
+    owned: dict[str, object] = {}
+    try:
+        for _ in range(200):
+            if marker.exists():
+                break
+            await asyncio.sleep(0.01)
+        owned = json.loads(marker.read_text())
+        disconnect.set()
+        for _ in range(200):
+            if closing.exists():
+                break
+            await asyncio.sleep(0.01)
+        assert closing.exists()
+        with pytest.raises(ServiceBusyError):
+            await service.submit(UploadFile(file=BytesIO(b"audio"), filename="a.wav"), {})
+        assert Path(str(owned["upload"])).exists()
+        await asyncio.wait_for(request, 8)
+        assert not psutil.pid_exists(int(str(owned["pid"])))
+        assert not Path(str(owned["upload"])).parent.exists()
+        assert service.current_model_spec is spec
+    finally:
+        disconnect.set()
+        if not request.done():
+            request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+        await service.stop_worker()

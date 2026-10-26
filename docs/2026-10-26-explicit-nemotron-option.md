@@ -25,6 +25,9 @@ Quality acceptance remains separate from this bounded experimental entry point.
   only claims an exclusive lease after all native ASR work is idle/offloaded.
   Native Apple work retains its ownership despite HTTP cancellation. Cleanup must
   finish before another model is admitted, including repeated cancellation.
+  A body-consumed ASGI disconnect listener cancels and joins the owned operation;
+  it does not rely on nonblocking disconnect polling through BaseHTTPMiddleware.
+  Regression coverage includes a real worker that ignores SIGTERM until escalation.
   Already exited resident workers are settled through WorkerSession before
   experimental startup; disposal failure keeps the experiment busy.
 - The dedicated child decodes request-owned audio and loads only the cached
@@ -46,12 +49,12 @@ existing cached weights and copies of existing inputs. No dependency change.
 
 | Check | Observed result |
 | --- | --- |
-| Complete pytest suite, including existing real-model E2E | 470 passed in 58.47 s |
-| Focused API/admission scenarios | 28 passed |
+| Complete pytest suite, including existing real-model E2E | 472 passed in 61.37 s |
+| Focused API/admission scenarios | 30 passed |
 | Owned-process tests (real lightweight children) | 10 cases, covered in the complete run |
 | Ruff, Tach, mypy for new boundaries | Passed |
-| Real 60 s English input through isolated ASGI HTTP | 200, two speakers, ~3.34 s total |
-| Repeated AMI M4A, 9,381.9735 s (~156 min) | 200, five identities, ~16.86 s total |
+| Real 60 s English input through isolated ASGI HTTP | 200, two speakers, ~2.48 s total |
+| Repeated AMI M4A, 9,381.9735 s (~156 min) | 200, five identities, ~16.55 s total |
 
 Both real requests preserve the full pre/post model-discovery response, keep
 `current=paraformer`, and never load the replica's resident ASR worker. The probe
@@ -67,8 +70,8 @@ The unmodified public AMI source and prior manual references remain retained.
 
 Private raw results and logs: primary checkout
 `.runtime-validation/nemotron-option/`. Relevant files include
-`real-http-short.json`, `real-http-long.json`, their logs and
-`pytest-full-1793046609990603000.log`. Private inputs are not committed.
+`real-http-short-disconnect-fixed.json`, `real-http-long-disconnect-fixed.json`, their logs and
+`pytest-full-1793047303557786000.log`. Private inputs are not committed.
 
 ## Compatibility and limits
 

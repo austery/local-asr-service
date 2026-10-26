@@ -1,5 +1,7 @@
 """Explicit standalone diarization HTTP contract, separate from transcription."""
 
+import asyncio
+from contextlib import suppress
 from dataclasses import asdict
 from typing import Literal
 
@@ -8,8 +10,9 @@ from pydantic import BaseModel
 
 from src.api.uploads import validate_audio_upload
 from src.core.diarization_registry import cached_snapshot, lookup_diarizer, public_diarizers
-from src.core.diarization_result import DiarizationError
+from src.core.diarization_result import DiarizationError, DiarizationPayload
 from src.services.transcription import TranscriptionService
+from src.services.worker_session import finish_cleanup
 
 router = APIRouter()
 
@@ -54,6 +57,37 @@ class DiarizationResponse(BaseModel):
     turns: list[TurnResponse]
 
 
+async def _await_diarization(
+    request: Request, operation: asyncio.Task[DiarizationPayload]
+) -> DiarizationPayload:
+    """Disconnect cancels the request, never its native disposal obligations."""
+
+    async def listen_disconnect() -> None:
+        while True:
+            message = await request.receive()
+            if message["type"] == "http.disconnect":
+                return
+
+    listener = asyncio.create_task(listen_disconnect())
+    try:
+        done, _ = await asyncio.wait({operation, listener}, return_when=asyncio.FIRST_COMPLETED)
+        if operation in done:
+            return await operation
+        await listener
+        raise HTTPException(499, "Client disconnected")
+    finally:
+        if not operation.done():
+            operation.cancel()
+        listener.cancel()
+
+        async def finish_operation() -> None:
+            await asyncio.gather(listener, return_exceptions=True)
+            with suppress(asyncio.CancelledError):
+                await operation
+
+        await finish_cleanup(finish_operation())
+
+
 @router.post("/v1/audio/diarizations", response_model=DiarizationResponse)
 async def create_diarization(
     request: Request,
@@ -79,9 +113,13 @@ async def create_diarization(
         raise HTTPException(400, "This diarizer is not publicly requestable.")
     service: TranscriptionService = request.app.state.service
     try:
-        payload = await service.submit_diarization(file, spec)
+        payload = await _await_diarization(
+            request, asyncio.create_task(service.submit_diarization(file, spec))
+        )
     except DiarizationError as exc:
-        headers = {"Retry-After": "5"} if exc.status == status.HTTP_503_SERVICE_UNAVAILABLE else None
+        headers = (
+            {"Retry-After": "5"} if exc.status == status.HTTP_503_SERVICE_UNAVAILABLE else None
+        )
         raise HTTPException(
             exc.status, detail={"code": exc.code, "message": str(exc)}, headers=headers
         ) from None
