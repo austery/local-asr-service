@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -203,6 +203,7 @@ class TestMlxAudioEngine:
         mock_generate_transcription.assert_called_once_with(
             model=mock_model,
             audio="test.wav",
+            output_path=ANY,
             format="txt",
             verbose=False,
             language="English",
@@ -268,6 +269,7 @@ class TestMlxAudioEngine:
         mock_generate_transcription.assert_called_once_with(
             model=mock_model,
             audio="test.wav",
+            output_path=ANY,
             format="txt",
             verbose=False,
             language=None,
@@ -325,6 +327,7 @@ class TestMlxAudioEngine:
         mock_generate_transcription.assert_called_once_with(
             model=mock_model,
             audio="test.wav",
+            output_path=ANY,
             format="txt",
             verbose=True,
             language=None,
@@ -361,6 +364,7 @@ class TestMlxAudioEngine:
         mock_generate_transcription.assert_called_once_with(
             model=mock_model,
             audio="test.wav",
+            output_path=ANY,
             format="json",
             verbose=False,
             language=None,
