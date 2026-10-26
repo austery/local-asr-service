@@ -81,17 +81,21 @@ MLX active + cached allocations and its reported peak every 50 ms, retaining
 `set_memory_limit` is additionally configured but is only an allocator guideline.
 Sampling can transiently overshoot; these are termination thresholds, not an
 atomic memory reservation: a concurrent request
-can begin between samples. The deadline defaults to 900 seconds. Only the owned
+can begin between samples. SIGTERM is deferred during spawn, then the supervisor terminates and reaps its
+owned process group through the same bounded cleanup path. The original signal
+handler is restored after disposal. The deadline defaults to 900 seconds. Only the owned
 process group is terminated if a guard fails; diagnostics remain on disk.
 
 Use fresh output paths. JSON, log, NPZ probabilities, native RTTM and supervision
 JSON are retained. An inference exception or supervisor abort is a failed run,
-not a zero-error score. Native out-of-range intervals produce `invalid_timeline`;
+not a zero-error score. Completed native JSON/NPZ/RTTM are saved before reference
+parsing and scoring. A scoring failure marks the JSON as `error` while preserving
+those raw fields and sidecars; interim `inference_complete` is not a scored pass. Native out-of-range intervals produce `invalid_timeline`;
 clipping for diagnostic scoring never passes the native output gate.
 
 For a cropped reference input pass `--reference-offset SECONDS` in the original
-recording's timebase. UEM and RTTM are cropped and shifted together. A missing
-recording ID/reference region raises an error rather than silently scoring empty
+recording's timebase. UEM and RTTM are cropped and shifted together. Non-finite, negative or reversed UEM coordinates are rejected before clipping.
+A missing recording ID/reference region raises an error rather than silently scoring empty
 reference speech. Reference-free silence has undefined DER; inspect predicted
 speech duration and identities instead.
 

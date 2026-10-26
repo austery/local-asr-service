@@ -45,6 +45,8 @@ def read_rttm(path: Path, recording: str, duration: float, offset: float = 0) ->
 def read_uem(
     path: Path, recording: str, duration: float, offset: float = 0
 ) -> list[tuple[float, float]]:
+    if not math.isfinite(duration) or duration <= 0 or not math.isfinite(offset) or offset < 0:
+        raise ValueError("UEM duration must be positive and offset nonnegative and finite")
     intervals = []
     for line in path.read_text().splitlines():
         fields = line.split()
@@ -53,10 +55,12 @@ def read_uem(
         if len(fields) != 4:
             raise ValueError("Expected four UEM fields")
         if fields[0] == recording:
-            start, end = (
-                max(0.0, float(fields[2]) - offset),
-                min(duration, float(fields[3]) - offset),
-            )
+            source_start, source_end = float(fields[2]), float(fields[3])
+            if not all(map(math.isfinite, (source_start, source_end))) or not (
+                0 <= source_start < source_end
+            ):
+                raise ValueError("UEM coordinates must be finite, nonnegative and increasing")
+            start, end = max(0.0, source_start - offset), min(duration, source_end - offset)
             if end > start:
                 intervals.append((start, end))
     if not intervals:

@@ -20,6 +20,7 @@ from dataclasses import asdict
 from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
+from types import FrameType
 from typing import Protocol, cast
 
 import numpy as np
@@ -139,6 +140,21 @@ def protect(identities: dict[int, float]) -> None:
                 raise RuntimeError("Production inference active; stop the owned experiment")
 
 
+@contextmanager
+def termination_request() -> Iterator[threading.Event]:
+    """Defer SIGTERM until spawn returns, then dispose the owned child normally."""
+    requested = threading.Event()
+
+    def request_shutdown(signum: int, frame: FrameType | None) -> None:
+        requested.set()
+
+    previous = signal.signal(signal.SIGTERM, request_shutdown)
+    try:
+        yield requested
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def supervise(args: argparse.Namespace) -> None:
     if args.output.suffix != ".json":
         raise ValueError("Output must use the .json suffix")
@@ -156,7 +172,7 @@ def supervise(args: argparse.Namespace) -> None:
         HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_DATASETS_OFFLINE="1", PYTHONUNBUFFERED="1"
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.with_suffix(".log").open("w") as log:
+    with termination_request() as requested, args.output.with_suffix(".log").open("w") as log:
         p = subprocess.Popen(
             [sys.executable, "-m", "benchmarks.diarization_poc", *sys.argv[1:], "--worker"],
             env=env,
@@ -170,6 +186,8 @@ def supervise(args: argparse.Namespace) -> None:
         stop_reason: str | None = None
         try:
             while p.poll() is None:
+                if requested.is_set():
+                    raise SystemExit(128 + signal.SIGTERM)
                 protect(identities)
                 minimum_available = min(minimum_available, psutil.virtual_memory().available)
                 if minimum_available < 20 * 1024**3:
@@ -185,6 +203,8 @@ def supervise(args: argparse.Namespace) -> None:
                 if rss > args.memory_gib * 1024**3:
                     raise MemoryError("Owned process exceeded its memory cap")
                 time.sleep(0.25)
+            if requested.is_set():
+                raise SystemExit(128 + signal.SIGTERM)
         except BaseException as exc:
             stop_reason = str(exc)
             if p.poll() is None:
@@ -315,20 +335,9 @@ def run(args: argparse.Namespace) -> None:
             else None,
             "identical_turns": raw_turns == repeated_turns,
         }
-    scores = []
-    if args.reference:
-        reference = read_rttm(args.reference, args.recording_id, duration, args.reference_offset)
-        regions = (
-            read_uem(args.uem, args.recording_id, duration, args.reference_offset)
-            if args.uem
-            else None
-        )
-        scores = [
-            asdict(score_turns(reference, scored_turns, duration, c, regions)) for c in (0.0, 0.25)
-        ]
     record = {
         "reset_check": reset_check,
-        "status": "ok" if timeline_valid else "invalid_timeline",
+        "status": "inference_complete",
         "timeline_valid": timeline_valid,
         "score_scope": "Intervals cropped to the recording/UEM for diagnostic scoring; invalid native bounds remain a failed output gate",
         "uem": str(args.uem) if args.uem else None,
@@ -354,7 +363,7 @@ def run(args: argparse.Namespace) -> None:
         "raw_turns": [asdict(t) for t in raw_turns],
         "speakers": len({t.speaker for t in raw_turns}),
         "probability_shape": list(probabilities.shape),
-        "scores": scores,
+        "scores": [],
         "reference": str(args.reference) if args.reference else None,
         "reference_offset_s": args.reference_offset,
         "cpwer": None,
@@ -368,6 +377,36 @@ def run(args: argparse.Namespace) -> None:
             for t in raw_turns
         )
     )
+
+    # Keep the completed inference even when reference loading or scoring fails.
+    scores = []
+    if args.reference:
+        reference = read_rttm(args.reference, args.recording_id, duration, args.reference_offset)
+        regions = (
+            read_uem(args.uem, args.recording_id, duration, args.reference_offset)
+            if args.uem
+            else None
+        )
+        scores = [
+            asdict(score_turns(reference, scored_turns, duration, c, regions)) for c in (0.0, 0.25)
+        ]
+    record["scores"] = scores
+    record["status"] = "ok" if timeline_valid else "invalid_timeline"
+    args.output.write_text(json.dumps(record, indent=2))
+
+
+def record_failure(args: argparse.Namespace, exc: Exception) -> None:
+    record: dict[str, object] = {}
+    if args.output.exists():
+        record = cast(dict[str, object], json.loads(args.output.read_text()))
+    record.update(
+        status="error",
+        model=args.model,
+        audio=str(args.audio),
+        error_type=type(exc).__name__,
+        error=str(exc),
+    )
+    args.output.write_text(json.dumps(record, indent=2))
 
 
 def main() -> None:
@@ -434,18 +473,7 @@ def main() -> None:
             ):
                 run(args)
         except Exception as exc:
-            args.output.write_text(
-                json.dumps(
-                    {
-                        "status": "error",
-                        "model": args.model,
-                        "audio": str(args.audio),
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    },
-                    indent=2,
-                )
-            )
+            record_failure(args, exc)
             raise
     else:
         supervise(args)

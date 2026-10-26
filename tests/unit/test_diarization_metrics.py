@@ -82,3 +82,26 @@ def test_rttm_and_uem_are_clipped_using_the_same_offset(tmp_path: Path) -> None:
     assert read_uem(uem, "meeting", 4, offset=10) == [(0, 4)]
     with pytest.raises(ValueError, match="No reference"):
         read_rttm(ref, "wrong", 4, offset=10)
+
+
+@pytest.mark.parametrize(
+    "start,end",
+    [
+        ("nan", "2"),
+        ("0", "nan"),
+        ("-inf", "2"),
+        ("0", "inf"),
+        ("inf", "2"),
+        ("0", "-inf"),
+        ("-1", "2"),
+        ("2", "1"),
+        ("1", "1"),
+    ],
+)
+def test_uem_rejects_invalid_source_coordinates_before_clipping(
+    tmp_path: Path, start: str, end: str
+) -> None:
+    uem = tmp_path / "bad.uem"
+    uem.write_text(f"clip 1 {start} {end}\n")
+    with pytest.raises(ValueError, match="UEM coordinates"):
+        read_uem(uem, "clip", duration=4)
