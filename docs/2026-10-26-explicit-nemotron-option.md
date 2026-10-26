@@ -35,6 +35,10 @@ Quality acceptance remains separate from this bounded experimental entry point.
   Timeout, malformed output, missing cache, resource pressure and decoded-budget
   errors fail explicitly instead of returning partial success.
 
+CI runs unit, mocked HTTP integration and lightweight reliability suites,
+including the actual ASGI disconnect/process regressions. Real-model E2E
+remains isolated local acceptance rather than requiring weights in GitHub CI.
+
 The existing resident ASR worker cannot simply host this request: it eagerly loads
 ASR at startup, and the old MLX diarizer factory selected Sortformer for every
 backend. The implementation adds explicit backend discrimination and an isolated
