@@ -85,6 +85,30 @@ def test_rttm_and_uem_are_clipped_using_the_same_offset(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "duration",
+    [0, -1, float("nan"), float("inf"), float("-inf")],
+    ids=["zero", "negative", "nan", "positive-infinity", "negative-infinity"],
+)
+def test_uem_rejects_invalid_duration_before_clipping(tmp_path: Path, duration: float) -> None:
+    uem = tmp_path / "ref.uem"
+    uem.write_text("meeting 1 9 15\n")
+    with pytest.raises(ValueError, match="UEM duration must be positive"):
+        read_uem(uem, "meeting", duration=duration, offset=10)
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [-1, float("nan"), float("inf"), float("-inf")],
+    ids=["negative", "nan", "positive-infinity", "negative-infinity"],
+)
+def test_uem_rejects_invalid_offset_before_clipping(tmp_path: Path, offset: float) -> None:
+    uem = tmp_path / "ref.uem"
+    uem.write_text("meeting 1 9 15\n")
+    with pytest.raises(ValueError, match="offset nonnegative and finite"):
+        read_uem(uem, "meeting", duration=4, offset=offset)
+
+
+@pytest.mark.parametrize(
     "start,end",
     [
         ("nan", "2"),
