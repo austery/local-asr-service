@@ -134,9 +134,24 @@ The TypeScript reference implementation (silence-based chunking) lives at
 - **Idle model offload** (SPEC-009 v2): The ASR model runs in an isolated child subprocess managed via `multiprocessing.Queue` IPC. When `MODEL_IDLE_TIMEOUT_SEC > 0`, the worker process self-terminates on idle, letting the OS reclaim all memory (including the PyTorch MPS Metal heap). Memory profile: ~150 MB startup, ~20-23 GB during transcription, <500 MB after idle timeout. Next incoming request spawns a new worker and reloads the model (~10-30s for FunASR, ~3-5s for MLX). Set to `0` to disable auto-termination (worker stays resident). Architecture: `src/workers/model_worker.py` (subprocess entry point), `src/services/worker_session.py` (lifetime ownership), `src/workers/transport.py` (process/queue Adapter), `src/services/transcription.py` (admission).
 
 ## Testing Notes
-- Run `uv run python -m pytest` for all tests. E2E tests (`tests/e2e/`) require the real model to be downloaded and are slow.
+- Select acceptance by the changed behavior. `uv run python -m pytest` runs the full suite, including real-model E2E; the bounded offline lane below is sufficient only when all its conditions hold.
+
 - Unit tests mock the engine entirely — do not add real model calls to unit tests.
 - Test count baseline: 125 tests (as of 2026-03-08). Do not reduce this.
+
+### Offline test-only acceptance
+
+This repository accepts additions or strengthening of isolated, model-free tests without real-model E2E when the author and independent reviewer verify all of these conditions against the exact base/head:
+
+- Changes affect only test modules and fixtures used exclusively by those modules. Production code, dependencies, model artifacts, shared fixtures/conftest, test configuration, CI controls, and acceptance policy remain unchanged.
+- Tests exercise existing approved behavior with local temporary inputs or mocks. They do not load/download models, call external providers, restart services, or alter persistent user data.
+- Assertions and coverage are preserved or strengthened. Removed assertions, relaxed expectations, new skips/xfails, reduced coverage thresholds, or changed approved behavior require separate acceptance assessment.
+
+Required evidence: run the affected test modules; run every lint, boundary and test command in `.github/workflows/ci.yml`; require passing remote checks and an independent review of the current snapshot. The current test command includes all unit tests and the worker-process lifetime tests. Test-file location alone does not establish eligibility. Record the eligibility evidence and explicitly state that real-model E2E was not run and is not required for this lane.
+
+If any condition is false or uncertain, identify and run the checks needed for the affected behavior under the normal acceptance process. Changes affecting model execution still require the applicable real-model acceptance. This lane does not change merge authority or permit weakening tests.
+
+The owner explicitly approved introducing this repository-local rule while completing PR #61 on 2026-10-26. That policy edit itself is reviewed as an authorized acceptance-policy change, not classified as an offline test-only change. Future policy changes require their own approval.
 
 ### Integration Test Mock Pattern (subprocess architecture)
 Integration tests must mock `TranscriptionService` at the **class level**, not the engine factory. The old pattern (`patch("src.main.create_engine")`) is invalid — `main.py` no longer imports an engine factory directly.
