@@ -29,6 +29,11 @@ curl http://127.0.0.1:50700/v1/audio/transcriptions \
 
 - **Input:** one recording, at most 30 minutes, explicit English. The model
   receives the whole file in one call. Speaker IDs are local to that recording.
+- **Prompt:** the adapter explicitly asks MOSS to preserve the original English
+  wording without translation, while retaining timestamp and speaker markup.
+  The generic upstream prompt can produce Spanish translations of English
+  speech ([issue #42](https://github.com/austery/local-asr-service/issues/42)).
+  This instruction is not an output-language detector or an accuracy guarantee.
 - **Output:** clean `text`, timestamped `segments` with `speaker`, input
   `duration`, and requested `language=en`. JSON, text (including optional
   timestamps), and SRT use the existing API formats.
