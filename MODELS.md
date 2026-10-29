@@ -15,6 +15,48 @@
 | `apple-speech` | Apple SpeechAnalyzer `SpeechTranscriber` via Swift sidecar | `apple-speech:speechTranscriber` | ❌ | macOS 26+ local ASR-only path; requires explicit `language=zh/en` or `zh-CN/en-US`; short codes are mapped internally; recommended low-resource ASR-only option after Phase 3 long-audio review (verified strong low-resource candidate); no speaker labels without a separate diarization stage |
 | `moss-transcribe-diarize` | mlx-audio MLX | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | ✅ | Opt-in English continuous speech, at most 30 minutes; requires `language=en` |
 
+## Deepgram batch diarized transcription (disabled pending acceptance)
+
+`deepgram-nova-3-diarize` is a per-request cloud alias for Nova-3 with
+`diarize_model=v1` and `utterances=true`. It never replaces the local current
+model and cannot be startup `MODEL_ID`. Existing local/default/passthrough calls
+stay local without keys. Limited coordinator probes on 2026-10-29 found two
+speaker labels with v1 and only one with v2 on the same owner-confirmed two-voice
+60-second fixture. This replaces the original v2 proposal for this slice only;
+it does not establish general v1 superiority. Gateway v1 and broader real-media
+acceptance remain pending; see the dated evidence in the acceptance plan.
+
+After representative real-media acceptance, the operator may set
+`DEEPGRAM_ENABLED=true` and `DEEPGRAM_API_KEY` server-side. Both are required;
+key presence only means configured, not live-verified. Discovery lists the alias
+with `execution_location=cloud`, provider, configured status and a bounded
+unavailable reason. It remains `requestable=false` while disabled.
+
+Explicit `language=en` or `language=zh` is required. Nova-3 documents those
+individual languages in its [language matrix](https://developers.deepgram.com/docs/models-languages-overview).
+This slice rejects `auto`, `multi`, locale variants and other languages; no
+Chinese-English code-switching quality claim is made. Input must have a supported
+WAV/MP3/M4A/MP4/FLAC/OGG/WebM extension and be nonempty, at most 200 MiB (or a
+lower configured upload ceiling). No independent splitting or reconciliation.
+Provider limits do not establish measured duration coverage.
+
+JSON contains validated speaker/start/end/text segments; text retains speaker
+labels and optional timestamps; SRT retains overlap and speaker labels. Word
+labels/timings are validated internally. Speakers are anonymous and recording
+local. Silence may return no segments; missing labels or malformed output return
+502 rather than invented labels. The total deadline includes waiting (default
+1800s, configurable 1–1800s via `DEEPGRAM_TOTAL_TIMEOUT_SEC`). Only one cloud
+request runs at once; all waiting/active requests share the gateway queue bound.
+
+Disabled/missing configuration and admission/rate limiting return 503; bad
+language/format input returns 400, oversize 413, provider authentication/service
+or output failure 502, and deadline 504. No paid submission retries, fallback,
+redirects, or environment proxies are used. Ambiguous failures mean result unknown:
+check provider usage/request IDs before any manual resend. Disconnect/shutdown
+closes local work before deleting uploads; remote execution/billing may continue.
+See [ADR-002](docs/ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md) and the
+[acceptance plan](docs/plans/2026-10-29-cloud-diarized-transcription.md).
+
 ## Bounded MOSS (Opt-in)
 
 `moss-transcribe-diarize` uses `OpenMOSS-Team/MOSS-Transcribe-Diarize` through

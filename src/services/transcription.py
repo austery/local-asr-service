@@ -22,6 +22,7 @@ from src.services.execution import (
     TranscriptionResult,
     TranscriptionResultDict,
 )
+from src.services.remote_session import RemoteSession, render_remote
 from src.services.worker_session import WorkerSession, finish_cleanup
 from src.workers.model_worker import WorkerJob
 from src.workers.transport import WorkerConfig
@@ -44,6 +45,7 @@ class TranscriptionService:
         idle_timeout: int = 60,
         *,
         worker_session: WorkerSession | None = None,
+        remote_session: RemoteSession | None = None,
     ) -> None:
         self._engine_type = engine_type
         self._model_id = model_id
@@ -51,6 +53,10 @@ class TranscriptionService:
         self._idle_timeout = idle_timeout
         self._max_queue_size = max_queue_size
 
+        if initial_model_spec is not None and initial_model_spec.engine_type == "deepgram":
+            raise ValueError("Cloud aliases cannot be startup MODEL_ID; select Deepgram per request.")
+        self._remote = remote_session or RemoteSession()
+        self._admitted = 0
         self._session = worker_session or WorkerSession()
         self._spawn_lock = asyncio.Lock()
         self._stopping = False
@@ -90,6 +96,7 @@ class TranscriptionService:
 
     async def start_worker(self) -> None:
         """Mark service as running. Worker spawns lazily on first request."""
+        self._remote.start()
         self.is_running = True
         self._stopping = False
         self.logger.info("🚦 Service initialized (worker spawns on first request).")
@@ -101,6 +108,7 @@ class TranscriptionService:
         await finish_cleanup(self._stop_resident_session())
 
     async def _stop_resident_session(self) -> None:
+        await self._remote.close()
         # Admission owns the entire close/start switch, not only either session call.
         async with self._spawn_lock:
             await self._session.close()
@@ -122,12 +130,28 @@ class TranscriptionService:
             self.logger.warning(f"[{request_id}] Queue full, rejecting request")
             raise RuntimeError("Service busy: Queue is full.")
 
-        temp_dir = tempfile.mkdtemp(prefix="asr_task_")
+        cloud = explicit_plan is not None and explicit_plan.spec is not None and explicit_plan.spec.engine_type == "deepgram"
+        if cloud:
+            file.file.seek(0, 2)
+            self._remote.preflight(file.filename or "", file.file.tell(), params)
+            file.file.seek(0)
+        # No await between shutdown/capacity checks and reservation. All paths count,
+        # including requests waiting for native startup or a remote semaphore.
+        self._admitted += 1
+        deadline = self._remote.deadline() if cloud else 0.0
+        temp_dir: str | None = None
         try:
+            temp_dir = tempfile.mkdtemp(prefix="asr_task_")
             file_ext = os.path.splitext(file.filename or "upload.wav")[1] or ".wav"
             temp_path = os.path.join(temp_dir, f"original{file_ext}")
             with open(temp_path, "wb") as buf:
                 shutil.copyfileobj(file.file, buf)
+
+            if cloud and explicit_plan is not None:
+                language = params.get("language")
+                assert isinstance(language, str)  # Checked before upload ownership.
+                remote_result = await self._remote.submit(Path(temp_path), language, request_id, deadline)
+                return ExecutionResult(render_remote(remote_result, params.get("output_format", "json"), params.get("with_timestamp") is True), explicit_plan.model)
 
             # Explicit sidecar requests do not wait for resident-worker startup.
             if explicit_plan is not None and self._is_apple_speech_spec(explicit_plan.spec):
@@ -141,9 +165,12 @@ class TranscriptionService:
                     params=params,
                     request_id=request_id,
                     plan=explicit_plan,
+                    admitted=True,
                 )
         finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            if temp_dir is not None:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            self._admitted -= 1
 
     async def _submit_resident_job(
         self,
@@ -151,7 +178,10 @@ class TranscriptionService:
         params: dict[str, object],
         request_id: str,
         plan: ExecutionPlan | None,
+        admitted: bool = False,
     ) -> ExecutionResult:
+        if not admitted and self._active_job_count() >= self._max_queue_size:
+            raise RuntimeError("Service busy: Queue is full.")
         # Select passthrough under the same lock that protects model switches.
         # Release it after enqueue, so waiting for inference never serializes
         # admission of other requests or hides them from queue_size.
@@ -177,7 +207,7 @@ class TranscriptionService:
         return ExecutionResult(self._coerce_transcription_result(result), selected.model)
 
     def _active_job_count(self) -> int:
-        return self._session.pending_count + len(self._sidecar_pending)
+        return max(self._admitted, self._session.pending_count + len(self._sidecar_pending))
 
     @staticmethod
     def _is_apple_speech_spec(model_spec: ModelSpec | None) -> bool:
@@ -204,9 +234,8 @@ class TranscriptionService:
         params: dict[str, object],
         request_id: str,
     ) -> object:
-        if self._active_job_count() >= self._max_queue_size:
-            self.logger.warning(f"[{request_id}] Queue full, rejecting Apple Speech request")
-            raise RuntimeError("Service busy: Queue is full.")
+        if self._stopping:
+            raise RuntimeError("Service is stopping")
 
         self._sidecar_pending.add(request_id)
         try:
@@ -233,10 +262,6 @@ class TranscriptionService:
         model_spec: ModelSpec | None,
     ) -> asyncio.Future[object]:
         """Enqueue a transcription while the caller holds _spawn_lock."""
-        if self._active_job_count() >= self._max_queue_size:
-            self.logger.warning(f"[{request_id}] Queue full, rejecting worker job")
-            raise RuntimeError("Service busy: Queue is full.")
-
         if model_spec is not None and model_spec != self._current_model_spec:
             await self._switch_worker(model_spec)
         elif not self.model_loaded:
