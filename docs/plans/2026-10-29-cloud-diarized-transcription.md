@@ -51,7 +51,7 @@ Proposed aliases, registered centrally:
 
 | Priority | Alias | Upstream selection | Initial gate |
 | --- | --- | --- | --- |
-| 1 | `deepgram-nova-3-diarize` | Nova-3 + batch diarizer v2 + utterances | Enable after real-media acceptance |
+| 1 | `deepgram-nova-3-diarize` | Nova-3 + fixed batch diarizer v1 + utterances | Enable after real-media acceptance |
 | 2 | `openai-transcribe-diarize` | gpt-4o-transcribe-diarize + diarized_json + auto chunking | Enable after acceptance; disclose scheduled retirement |
 | 3 | `sonix-transcribe-diarize` | Sonix file transcription and JSON export | Hold until automatic single-track speaker clustering is verified |
 
@@ -86,8 +86,9 @@ List cloud aliases without network requests, model loads, or secret disclosure.
 
 ## Provider boundaries
 
-Deepgram: use `/v1/listen`, `model=nova-3`, `diarize_model=v2`, and utterance
-output. Pin v2 for reproducible initial acceptance instead of following latest.
+Deepgram: use `/v1/listen`, `model=nova-3`, `diarize_model=v1`, and utterance
+output. Pin v1 following the dated fixture comparison below; the original v2
+proposal is superseded for this slice. Do not follow latest.
 Map speaker numbers to strings and retain word timestamps within their spoken
 segments. Do not use deprecated diarize=true. Resolve explicit language and auto
 language detection using the provider's actual language matrix; reject unsupported
@@ -212,8 +213,10 @@ splitting or truncation is performed. Supported input extensions are WAV, MP3,
 M4A, MP4, FLAC, OGG, and WebM. Corrupt audio is left to provider validation;
 preflight checks extension, nonempty size, language, and output mode.
 
-No paid call, activation, service restart, or live provider acceptance has run.
-A valid key alone does not demonstrate acceptance. Before a live probe, retain
+The initial implementor made no paid call, activation, or service restart.
+Subsequent coordinator probes are recorded below; gateway v1 and broader live
+acceptance remain pending. A valid key alone does not demonstrate acceptance.
+For live probes, retain
 service logs containing UUID-only provider/local request correlations under
 `pr-reviews/deepgram-20261029/` outside disposable uploads. Record the sample,
 status, request IDs and billed usage there without credentials or transcript
@@ -242,5 +245,46 @@ not the offline test-only acceptance lane.
   installed packages. Checked HTTP/framework/test/runtime package versions match
   the lock; this is not a successful fresh-install claim.
 
-Independent fixed-commit review, remote CI, live Deepgram requests, paid usage,
-quality/duration scoring, and operator activation remain pending.
+These checks describe the initial implementation snapshot. Independent review
+subsequently found no blocking static/diff defect and requested a CHANGELOG entry.
+The parameter amendment below requires its own fixed-head review and gateway v1
+probe. Remote CI, broader quality/duration scoring, billed-usage assessment, and
+operator activation remain pending.
+
+
+### Fixed v1 repair evidence (2026-10-29)
+
+The owner authorized up to five coordinator calls and confirmed the fixture has
+two voices by listening. The implementor makes no API calls in this repair.
+All three existing probes used `tests/fixtures/two_speakers_60s.wav` (60.0s),
+SHA-256 `a44ad63de6d62d4aad1e562c765ff8c1e82bba3743054bf973ca1e06c7c49a19`.
+Call 1 through the v2 gateway returned HTTP 200 with 14 utterances, all speaker 0.
+Direct provider calls 2 and 3 compared the same bytes:
+
+| Evidence | Requested/actual diarizer | Word labels | Speaker transition |
+| --- | --- | --- | --- |
+| `diagnostic-02.summary.json` / `.raw.json` | v1 / arch v1, UUID `a9f85c2b-5afb-4b9d-b49b-492c43a01cfb` | 0: 28, 1: 125 | 13.599999s |
+| `diagnostic-03.summary.json` / `.raw.json` | v2 / arch v2, UUID `6946b038-8264-4505-acf7-9822c009fecb` | 0: 153 | None |
+
+Evidence lives in `pr-reviews/deepgram-20261029/` outside the disposable worktree.
+Both raw responses report ASR `general-nova-3` version `2025-07-31.0`. The
+implementor checked summary/raw agreement, fixture hash, and both full responses
+through the unchanged normalizer: v1 retains 14 utterances with two labels and
+its original float offsets; v2 retains 14 speaker-0 utterances without invention.
+A minimal sanitized v1 shape now guards the two labels and transition offset.
+
+The coordinator's bounded disposition is fixed `diarize_model=v1` for this slice.
+This supersedes the original v2 proposal because v2 missed the actual required
+two-speaker case; it is not a general policy change or a global quality ranking.
+No alias, architecture, fallback, tuning interface, or local behavior changes.
+Default enablement stays false. Gateway v1 validation is still pending and is
+reserved for the coordinator's next authorized call (call 4) after this commit.
+English/Mandarin quality, overlap and long-audio coverage remain limited or
+unverified; no DER or broad speaker-accuracy claim follows from this fixture.
+
+The prior cached one-second local E2E remains applicable: this repair changes
+only the remote diarizer request parameter, its description/test expectation,
+and documentation. It does not change native inference, admission, lifetime, or
+rendering. Repeating native inference would not validate the changed parameter;
+request-contract and normalization regressions plus gateway v1 acceptance cover
+that behavior. Existing local source/tests and protected policy are unchanged.

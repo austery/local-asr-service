@@ -82,7 +82,7 @@ async def test_http_contract_and_local_selection_are_preserved(format_name: str)
     async def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         assert await request.aread() == b"audio"
-        assert dict(request.url.params) == {"model": "nova-3", "language": "en", "utterances": "true", "diarize_model": "v2"}
+        assert dict(request.url.params) == {"model": "nova-3", "language": "en", "utterances": "true", "diarize_model": "v1"}
         assert request.headers["authorization"] == "Token fake-test-key"
         return httpx.Response(200, json=response_data())
 
@@ -501,3 +501,37 @@ async def test_service_lifecycle_can_reopen_remote_admission_after_disposal() ->
     assert execution.model == ALIAS
     assert not service.model_loaded
     await service.stop_worker()
+
+
+def test_sanitized_real_v1_shape_preserves_two_speakers_and_float_transition() -> None:
+    # diagnostic-02.raw.json, 2026-10-29: retain timing/shape, sanitize speech.
+    # Source WAV SHA-256: a44ad63de6d62d4aad1e562c765ff8c1e82bba3743054bf973ca1e06c7c49a19.
+    first: dict[str, object] = {
+        "start": 2.8799999, "end": 3.1999998, "speaker": 0,
+        "word": "Sample0", "punctuated_word": "Sample0.",
+    }
+    second: dict[str, object] = {
+        "start": 13.599999, "end": 13.84, "speaker": 1,
+        "word": "Sample1", "punctuated_word": "Sample1.",
+    }
+    data: dict[str, object] = {
+        "metadata": {"duration": 60.0, "diarize_info": {"arch": "v1"}},
+        "results": {
+            "channels": [{"alternatives": [{"transcript": "Sample0. Sample1.", "words": [first, second]}]}],
+            "utterances": [
+                {"start": 2.8799999, "end": 7.44, "speaker": 0, "transcript": "Sample0.", "words": [first]},
+                {"start": 13.599999, "end": 15.775001, "speaker": 1, "transcript": "Sample1.", "words": [second]},
+            ],
+        },
+    }
+    result = normalize_deepgram(data, "en")
+    assert result.duration == 60.0
+    assert [s.speaker for s in result.segments] == ["Speaker 0", "Speaker 1"]
+    assert [(s.start, s.end) for s in result.segments] == [(2.8799999, 7.44), (13.599999, 15.775001)]
+    assert result.segments[1].words[0].speaker == "Speaker 1"
+    assert result.segments[1].words[0].start == 13.599999
+    assert result.segments[1].words[0].end == 13.84
+    # An upstream all-zero result must remain all zero, never infer a second voice.
+    second["speaker"] = 0
+    utterances(data)[1]["speaker"] = 0
+    assert {s.speaker for s in normalize_deepgram(data, "en").segments} == {"Speaker 0"}

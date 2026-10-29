@@ -18,9 +18,13 @@
 ## Deepgram batch diarized transcription (disabled pending acceptance)
 
 `deepgram-nova-3-diarize` is a per-request cloud alias for Nova-3 with
-`diarize_model=v2` and `utterances=true`. It never replaces the local current
+`diarize_model=v1` and `utterances=true`. It never replaces the local current
 model and cannot be startup `MODEL_ID`. Existing local/default/passthrough calls
-stay local without keys. No live Deepgram acceptance has run.
+stay local without keys. Limited coordinator probes on 2026-10-29 found two
+speaker labels with v1 and only one with v2 on the same owner-confirmed two-voice
+60-second fixture. This replaces the original v2 proposal for this slice only;
+it does not establish general v1 superiority. Gateway v1 and broader real-media
+acceptance remain pending; see the dated evidence in the acceptance plan.
 
 After representative real-media acceptance, the operator may set
 `DEEPGRAM_ENABLED=true` and `DEEPGRAM_API_KEY` server-side. Both are required;

@@ -53,7 +53,7 @@ class DeepgramAdapter:
     async def _send(self, client: httpx.AsyncClient, path: Path, language: str, request_id: str) -> RemoteTranscript:
         async with client.stream(
             "POST", _ENDPOINT,
-            params={"model": "nova-3", "diarize_model": "v2", "utterances": "true", "language": language},
+            params={"model": "nova-3", "diarize_model": "v1", "utterances": "true", "language": language},
             headers={"Authorization": f"Token {self._api_key}", "Content-Type": "application/octet-stream", "Accept-Encoding": "identity", "Content-Length": str(path.stat().st_size)},
             content=_audio(path),
         ) as response:

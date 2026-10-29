@@ -38,7 +38,7 @@ _REGISTRY: dict[str, ModelSpec] = {
             alias="deepgram-nova-3-diarize",
             model_id="nova-3",
             engine_type="deepgram",
-            description="Opt-in Deepgram batch Nova-3 with diarizer v2. Explicit en/zh only; live acceptance pending. Never changes the local current model.",
+            description="Opt-in Deepgram batch Nova-3 with fixed diarizer v1. Explicit en/zh only; live acceptance pending. Never changes the local current model.",
             capabilities=EngineCapabilities(timestamp=True, diarization=True),
         ),
         ModelSpec(
