@@ -10,7 +10,7 @@ from typing import Literal
 
 from src.core.base_engine import EngineCapabilities
 
-EngineType = Literal["funasr", "mlx", "apple-speech"]
+EngineType = Literal["funasr", "mlx", "apple-speech", "deepgram"]
 MOSS_MODEL_ID = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
 MOSS_MODEL_REVISION = "704aa4a9c304e8520be88901e0d1960158ef5b15"
 
@@ -34,6 +34,13 @@ class ModelSpec:
 _REGISTRY: dict[str, ModelSpec] = {
     spec.alias: spec
     for spec in [
+        ModelSpec(
+            alias="deepgram-nova-3-diarize",
+            model_id="nova-3",
+            engine_type="deepgram",
+            description="Opt-in Deepgram batch Nova-3 with diarizer v2. Explicit en/zh only; live acceptance pending. Never changes the local current model.",
+            capabilities=EngineCapabilities(timestamp=True, diarization=True),
+        ),
         ModelSpec(
             alias="paraformer",
             model_id="iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",

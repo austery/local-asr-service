@@ -215,6 +215,7 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
         "apple_speech_engine.py",
         "apple_speech_port.py",
         "base_engine.py",
+        "remote_port.py",  # ADR-002: typed explicit cloud boundary.
         "alignment_port.py",
         "diarization_port.py",
         "alignment_registry.py",
@@ -251,6 +252,8 @@ def test_engine_adapters_and_diarization_are_gated() -> None:
         "pipeline_chunking.py",
         "segment_alignment.py",
         "text.py",
+        "deepgram_http.py",  # ADR-002: single-submit batch HTTP adapter.
+        "deepgram_output.py",  # ADR-002: pure validation, no reconciliation.
         "moss_output.py",  # ADR-002: pure output validation; no model runtime or reconciliation.
     }
 

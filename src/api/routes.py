@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 from src.config import MAX_UPLOAD_SIZE_MB
 from src.core.base_engine import TranscriptionInputError
 from src.core.model_registry import ModelSpec, is_passthrough, list_all, lookup
+from src.core.remote_port import RemoteTranscriptionError
+from src.services.remote_session import deepgram_configured, deepgram_unavailable_reason
 from src.services.worker_session import WorkerRemoteError
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,10 @@ class ModelInfo(BaseModel):
     description: str
     capabilities: dict[str, bool]
     requestable: bool = True
+    execution_location: str = "local"
+    provider: str | None = None
+    configured: bool = True
+    unavailable_reason: str | None = None
 
 
 class ModelsResponse(BaseModel):
@@ -308,6 +314,9 @@ async def create_transcription(
                 segments=None,
             )
 
+    except RemoteTranscriptionError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from None
+
     except TranscriptionInputError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
 
@@ -358,7 +367,11 @@ async def list_models(request: Request) -> ModelsResponse:
             capabilities={
                 k: v for k, v in asdict(spec.capabilities).items()
             },
-            requestable=True,
+            requestable=spec.engine_type != "deepgram" or deepgram_unavailable_reason() is None,
+            execution_location="cloud" if spec.engine_type == "deepgram" else "local",
+            provider="deepgram" if spec.engine_type == "deepgram" else None,
+            configured=spec.engine_type != "deepgram" or deepgram_configured(),
+            unavailable_reason=deepgram_unavailable_reason() if spec.engine_type == "deepgram" else None,
         )
         for spec in list_all()
     ]

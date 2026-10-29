@@ -54,6 +54,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         initial_spec = None
         logger.warning(f"⚠️  Startup model '{startup_model_id}' not in registry; model tracking disabled.")
 
+    if initial_spec is not None and initial_spec.engine_type == "deepgram":
+        raise ValueError("Cloud aliases cannot be startup MODEL_ID; keep a local startup model and select Deepgram per request.")
+
     # 2. 初始化服务（Worker subprocess spawns lazily on first request）
     service = TranscriptionService(
         engine_type=ENGINE_TYPE,
