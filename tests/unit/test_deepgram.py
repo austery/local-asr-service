@@ -535,3 +535,133 @@ def test_sanitized_real_v1_shape_preserves_two_speakers_and_float_transition() -
     second["speaker"] = 0
     utterances(data)[1]["speaker"] = 0
     assert {s.speaker for s in normalize_deepgram(data, "en").segments} == {"Speaker 0"}
+
+
+def mixed_response_data() -> dict[str, object]:
+    """Entirely synthetic tokens with repeated speaker transitions and gaps."""
+    tokens = ["Alpha,", "beta", "Gamma!", "delta?", "Epsilon", "zeta"]
+    speakers = [4, 4, 9, 4, 9, 9]
+    word_list: list[dict[str, object]] = []
+    for i, (token, speaker) in enumerate(zip(tokens, speakers, strict=True)):
+        word: dict[str, object] = {
+            "word": token.rstrip(",!?"), "start": 0.25 + i,
+            "end": 0.75 + i, "speaker": speaker,
+        }
+        if i < 4:
+            word["punctuated_word"] = token
+        elif i == 4:
+            word["punctuated_word"] = ""  # Empty punctuation falls back to word.
+        word_list.append(word)
+    return {
+        "metadata": {"duration": 7.0},
+        "results": {
+            "channels": [{"alternatives": [{"transcript": "Alpha, beta Gamma! delta? Epsilon zeta", "words": copy.deepcopy(word_list)}]}],
+            "utterances": [{"start": 0.0, "end": 6.5, "speaker": 4, "transcript": "Header text must not replace mixed word tokens.", "words": word_list}],
+        },
+    }
+
+
+def test_mixed_utterance_preserves_every_word_and_contiguous_run() -> None:
+    data = mixed_response_data()
+    before = copy.deepcopy(data)
+    result = normalize_deepgram(data, "en")
+    assert data == before
+    assert result.text == "Alpha, beta Gamma! delta? Epsilon zeta"
+    assert result.duration == 7.0
+    assert result.language == "en"
+    assert [(s.speaker, s.start, s.end, s.text) for s in result.segments] == [
+        ("Speaker 4", 0.25, 1.75, "Alpha, beta"),
+        ("Speaker 9", 2.25, 2.75, "Gamma!"),
+        ("Speaker 4", 3.25, 3.75, "delta?"),
+        ("Speaker 9", 4.25, 5.75, "Epsilon zeta"),
+    ]
+    flattened = [word for segment in result.segments for word in segment.words]
+    original = words(utterances(data)[0])
+    assert len(flattened) == len(original) == 6
+    assert [(w.speaker, w.start, w.end, w.text) for w in flattened] == [
+        (f"Speaker {w['speaker']}", w["start"], w["end"], w.get("punctuated_word") or w["word"])
+        for w in original
+    ]
+    assert all(w.speaker == s.speaker and s.start <= w.start < w.end <= s.end for s in result.segments for w in s.words)
+
+
+@pytest.mark.parametrize("header", [4, 99])
+def test_homogeneous_words_keep_transcript_and_timing_but_own_identity(header: int) -> None:
+    data = mixed_response_data()
+    utterance = utterances(data)[0]
+    utterance["speaker"] = header
+    for word in words(utterance):
+        word["speaker"] = 4
+    result = normalize_deepgram(data, "en")
+    assert len(result.segments) == 1
+    segment = result.segments[0]
+    assert (segment.speaker, segment.start, segment.end, segment.text) == (
+        "Speaker 4", 0.0, 6.5, "Header text must not replace mixed word tokens.",
+    )
+    assert len(segment.words) == 6
+    assert {w.speaker for w in segment.words} == {"Speaker 4"}
+    assert [w.text for w in segment.words] == ["Alpha,", "beta", "Gamma!", "delta?", "Epsilon", "zeta"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("speaker", None), ("speaker", True), ("speaker", -1), ("speaker", "9"), ("speaker", 9.5),
+    ("start", -0.1), ("start", float("nan")), ("start", float("inf")),
+    ("end", float("nan")), ("end", float("inf")), ("end", 0.0),
+    ("end", 2.25), ("end", 7.0), ("word", ""), ("word", " "),
+])
+def test_mixed_words_still_reject_invalid_labels_timing_and_text(field: str, value: object) -> None:
+    data = mixed_response_data()
+    words(utterances(data)[0])[2][field] = value
+    with pytest.raises(RemoteTranscriptionError, match="invalid diarized output"):
+        normalize_deepgram(data, "en")
+
+
+@pytest.mark.parametrize("field", ["speaker", "start", "end", "word"])
+def test_mixed_words_still_require_fields(field: str) -> None:
+    data = mixed_response_data()
+    del words(utterances(data)[0])[2][field]
+    with pytest.raises(RemoteTranscriptionError, match="invalid diarized output"):
+        normalize_deepgram(data, "en")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("speaker", None), ("speaker", True), ("speaker", -1), ("speaker", "4"),
+    ("start", 0.5), ("start", float("nan")), ("end", 7.5),
+    ("end", float("inf")), ("transcript", " "), ("words", []),
+])
+def test_mixed_utterances_still_require_valid_headers_and_bounds(field: str, value: object) -> None:
+    data = mixed_response_data()
+    utterances(data)[0][field] = value
+    with pytest.raises(RemoteTranscriptionError, match="invalid diarized output"):
+        normalize_deepgram(data, "en")
+
+
+@pytest.mark.parametrize("format_name", ["json", "verbose_json", "text", "srt"])
+async def test_mixed_runs_render_through_gateway_with_sequential_ids(format_name: str) -> None:
+    service = service_with_http(lambda r: httpx.Response(200, json=mixed_response_data()))
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_for(service)), base_url="http://test") as client:
+            response = await client.post("/v1/audio/transcriptions", files={"file": ("synthetic.wav", b"audio")}, data={"model": ALIAS, "language": "en", "response_format": format_name})
+        assert response.status_code == 200, response.text
+        if format_name == "srt":
+            assert response.text == (
+                "1\n00:00:00,250 --> 00:00:01,750\n[Speaker 4]: Alpha, beta\n\n"
+                "2\n00:00:02,250 --> 00:00:02,750\n[Speaker 9]: Gamma!\n\n"
+                "3\n00:00:03,250 --> 00:00:03,750\n[Speaker 4]: delta?\n\n"
+                "4\n00:00:04,250 --> 00:00:05,750\n[Speaker 9]: Epsilon zeta"
+            )
+        else:
+            body = response.json()
+            assert body["model"] == ALIAS
+            if format_name == "text":
+                assert body["text"] == "[Speaker 4]: Alpha, beta\n[Speaker 9]: Gamma!\n[Speaker 4]: delta?\n[Speaker 9]: Epsilon zeta"
+            else:
+                assert body["text"] == "Alpha, beta Gamma! delta? Epsilon zeta"
+                assert body["segments"] == [
+                    {"id": 0, "speaker": "Speaker 4", "start": 0.25, "end": 1.75, "text": "Alpha, beta"},
+                    {"id": 1, "speaker": "Speaker 9", "start": 2.25, "end": 2.75, "text": "Gamma!"},
+                    {"id": 2, "speaker": "Speaker 4", "start": 3.25, "end": 3.75, "text": "delta?"},
+                    {"id": 3, "speaker": "Speaker 9", "start": 4.25, "end": 5.75, "text": "Epsilon zeta"},
+                ]
+    finally:
+        await service.stop_worker()

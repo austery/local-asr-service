@@ -1,5 +1,7 @@
 """Fail-closed normalization of Deepgram's batch diarized response."""
 
+from itertools import groupby
+
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from src.core.remote_port import (
@@ -37,15 +39,27 @@ class _Utterance(_Timing):
     transcript: str = Field(min_length=1)
     words: list[_Word] = Field(min_length=1)
 
-    def normalized(self, duration: float) -> RemoteSegment:
+    def normalized(self, duration: float) -> tuple[RemoteSegment, ...]:
         if not self.transcript.strip() or self.end > duration:
             raise ValueError("Invalid utterance")
         for word in self.words:
-            if word.start < self.start or word.end > self.end or word.speaker != self.speaker:
-                raise ValueError("Word outside utterance or inconsistent speaker")
-        return RemoteSegment(
-            f"Speaker {self.speaker}", self.start, self.end, self.transcript,
-            tuple(word.normalized() for word in self.words),
+            if word.start < self.start or word.end > self.end:
+                raise ValueError("Word outside utterance")
+        runs = tuple(
+            tuple(run)
+            for _, run in groupby((word.normalized() for word in self.words), key=lambda w: w.speaker)
+        )
+        if len(runs) == 1:
+            # Word identity wins even when the utterance header disagrees.
+            return (RemoteSegment(runs[0][0].speaker, self.start, self.end, self.transcript, runs[0]),)
+        # Preserve each token verbatim (punctuated_word or word), joined by one
+        # space. Do not infer punctuation from the utterance transcript.
+        return tuple(
+            RemoteSegment(
+                run[0].speaker, min(w.start for w in run), max(w.end for w in run),
+                " ".join(w.text for w in run), run,
+            )
+            for run in runs
         )
 
 
@@ -78,7 +92,11 @@ def normalize_deepgram(data: object, language: str) -> RemoteTranscript:
     try:
         response = _Response.model_validate(data)
         alternative = response.results.channels[0].alternatives[0]
-        segments = tuple(u.normalized(response.metadata.duration) for u in response.results.utterances)
+        segments = tuple(
+            segment
+            for utterance in response.results.utterances
+            for segment in utterance.normalized(response.metadata.duration)
+        )
         words = tuple(w.normalized() for w in alternative.words)
         if any(w.end > response.metadata.duration for w in words):
             raise ValueError("Word exceeds duration")
