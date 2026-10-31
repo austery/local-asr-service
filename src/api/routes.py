@@ -132,11 +132,15 @@ async def create_transcription(
         None,
         description=(
             "Model alias or full model path. "
-            "Omit this field to use the server's current model. "
-            "'whisper-1' is accepted as an OpenAI-compatible passthrough value "
-            "and does not select Whisper; the fresh server default is `paraformer` "
+            "Leave this field empty to use the server's current local model, "
+            "or explicitly select a listed alias. The fresh server default is `paraformer` "
             "unless ENGINE_TYPE or MODEL_ID overrides it. "
             "Use GET /v1/models for the live alias list. "
+            "Optional compatibility note: 'whisper-1' is accepted as a passthrough value, "
+            "which means it uses the current local model, just like omitting this field. "
+            "You do not need an OpenAI-compatible client or an installed Whisper model. "
+            "You can ignore this compatibility value when using Swagger. "
+            "It does not select Whisper, download Whisper, or call OpenAI. "
             "For cloud transcription, explicitly select deepgram-nova-3-diarize, set "
             "language=en or zh and response_format=verbose_json. This does not switch "
             "the resident local model. The operator must enable DEEPGRAM_ENABLED=true "
@@ -172,6 +176,8 @@ async def create_transcription(
     Transcribe audio file. Optionally specify a model to use for this request.
 
     Model selection:
+    - Leave `model` empty to use the server's current local model, or explicitly select
+      a listed alias.
     - Pass `model=paraformer` for multi-speaker content (enables diarization).
     - Pass `model=qwen3-asr` for single-speaker quality-first content.
     - Pass `model=moss-transcribe-diarize` with `language=en` for English continuous-speech
@@ -192,12 +198,15 @@ async def create_transcription(
       Apple Speech requires an explicit language; pass `zh`, `zh-CN`, `en`, or `en-US`.
       Short codes `zh` and `en` are mapped to Apple locales internally. Do not pass `auto`.
     - `apple-dictation` remains hidden until the Swift runtime supports DictationTranscriber.
-    - Omit `model` to use the server's currently loaded model.
-    - `model=whisper-1` is accepted as an OpenAI-compatible passthrough value and
-      does not select Whisper.
     - By default, a fresh server starts with `paraformer` unless `ENGINE_TYPE`,
       `MODEL_ID`, or engine-specific model environment variables override it.
     - Use `GET /v1/models` or `GET /v1/models/current` to inspect runtime aliases.
+
+    Optional compatibility note:
+    `model=whisper-1` is accepted as a passthrough value: it uses the current local
+    model, just like omitting `model`. You do not need an OpenAI-compatible client
+    or an installed Whisper model. You can ignore this compatibility value when using Swagger.
+    It does not select Whisper, download Whisper, or call OpenAI.
 
     Deepgram operator setup and Swagger steps:
 
