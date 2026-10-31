@@ -50,6 +50,33 @@ comparison. The short English v1 gateway test passed. The original long-recordin
 quality acceptance, and activation remain pending. This remains a default-off
 backup option, with activation on hold. See [Deepgram scope and limits](MODELS.md#deepgram-batch-diarized-transcription-disabled-pending-acceptance).
 
+Operator enablement recipe (only after acceptance; activation remains on hold):
+
+1. Load the merged code and current docs. Keep startup `MODEL_ID` local.
+2. Set `DEEPGRAM_ENABLED=true` and `DEEPGRAM_API_KEY` in the server environment.
+   Bind `HOST=127.0.0.1` or use an authenticated proxy. Never enter the key in Swagger.
+3. Plan a server restart to apply code or environment changes. Refreshing the browser
+   does not apply them. These instructions do not perform a restart or enablement.
+4. Check the alias in `GET /v1/models`. Inspect `configured`, `requestable`, and
+   `unavailable_reason`. Disabled requests return 503 without a paid upload.
+
+Swagger steps after enablement:
+
+1. Open `/docs`, expand `POST /v1/audio/transcriptions`, and click **Try it out**.
+2. Click **Choose file**. Select a nonempty wav/mp3/m4a/mp4/flac/ogg/webm file.
+3. Set **model** to `deepgram-nova-3-diarize`.
+4. Set **language** to `en` or `zh`. The default `auto` is invalid and returns 400.
+5. Set **response_format** to `verbose_json` to inspect speaker segments.
+6. Click **Execute** only when ready to upload audio externally and spend Deepgram
+   credits. This cloud request does not switch the resident local model. There is no
+   automatic retry, fallback, or local model change.
+
+The upload limit is 200 MiB or the lower configured `MAX_UPLOAD_SIZE_MB` limit.
+There is no audio-minute cap; processing timeouts are not recording-duration limits.
+The output validator accepts a single-channel provider response. See the
+[full limits table](MODELS.md#deepgram-batch-diarized-transcription-disabled-pending-acceptance)
+for channel handling and other constraints.
+
 ```bash
 # Only after operator acceptance and enablement:
 curl http://127.0.0.1:50700/v1/audio/transcriptions \

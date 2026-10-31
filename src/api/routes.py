@@ -119,7 +119,15 @@ def _resolve_model(model: str | None) -> ModelSpec | None:
 @router.post("/v1/audio/transcriptions", response_model=None)
 async def create_transcription(
     request: Request,
-    file: UploadFile = File(..., description="Audio file (wav, mp3, m4a, etc.)"),
+    file: UploadFile = File(
+        ...,
+        description=(
+            "Audio file. For Deepgram, choose a nonempty wav/mp3/m4a/mp4/flac/ogg/webm file, "
+            "at most 200 MiB or the lower configured MAX_UPLOAD_SIZE_MB limit. "
+            "For this alias, Execute uploads the file to Deepgram externally and costs credits. "
+            "There is no audio-minute cap; processing timeouts are not duration limits."
+        ),
+    ),
     model: str | None = Form(
         None,
         description=(
@@ -129,6 +137,11 @@ async def create_transcription(
             "and does not select Whisper; the fresh server default is `paraformer` "
             "unless ENGINE_TYPE or MODEL_ID overrides it. "
             "Use GET /v1/models for the live alias list. "
+            "For cloud transcription, explicitly select deepgram-nova-3-diarize, set "
+            "language=en or zh and response_format=verbose_json. This does not switch "
+            "the resident local model. The operator must enable DEEPGRAM_ENABLED=true "
+            "and set DEEPGRAM_API_KEY server-side after acceptance; never enter the key "
+            "in Swagger. Disabled requests return 503 without a paid upload. "
             "For MOSS, also set language=en and upload at most 30 minutes of audio. "
             "Examples: " + ", ".join(f"'{spec.alias}'" for spec in list_all()) + "."
         ),
@@ -136,14 +149,19 @@ async def create_transcription(
     language: str = Form(
         "auto",
         description=(
-            "Language code. MOSS requires explicit 'en'; do not use 'auto'. "
+            "Language code. Deepgram requires explicit 'en' or 'zh'; the default 'auto' "
+            "is invalid and returns 400. MOSS requires explicit 'en'; do not use 'auto'. "
             "Use explicit 'zh'/'zh-CN' or 'en'/'en-US' for Apple Speech; "
             "short codes are mapped to Apple locales internally. "
             "'auto' is only supported by engines with language detection."
         ),
     ),
     response_format: str | None = Form(
-        None, description="OpenAI-compatible format: json, verbose_json, text, vtt, srt"
+        None,
+        description=(
+            "OpenAI-compatible format: json, verbose_json, text, vtt, srt. "
+            "For Deepgram in Swagger, select verbose_json to inspect speaker segments."
+        ),
     ),
     output_format: str = Form("json", description="Output format: json (default), txt, srt"),
     with_timestamp: bool = Form(
@@ -153,7 +171,7 @@ async def create_transcription(
     """
     Transcribe audio file. Optionally specify a model to use for this request.
 
-    Model switching:
+    Model selection:
     - Pass `model=paraformer` for multi-speaker content (enables diarization).
     - Pass `model=qwen3-asr` for single-speaker quality-first content.
     - Pass `model=moss-transcribe-diarize` with `language=en` for English continuous-speech
@@ -163,6 +181,12 @@ async def create_transcription(
       Detectable truncation or an uncovered interval over 10 seconds returns HTTP 422;
       legitimate long silence can also trigger this conservative check.
       In Swagger, set `response_format=verbose_json` to inspect speaker segments.
+    - Pass `model=deepgram-nova-3-diarize` for optional cloud diarized transcription,
+      with explicit `language=en` or `language=zh` and `response_format=verbose_json`.
+      This is a cloud request, not a resident model switch. Keep startup `MODEL_ID` local.
+      Deepgram is disabled by default pending acceptance. Disabled requests return 503
+      without a paid upload; invalid language (including the default `auto`) returns 400.
+      No automatic retry, fallback, or local model change occurs.
     - Pass `model=sensevoice-small` for language/emotion tags without timestamps.
     - Pass `model=apple-speech` for macOS 26+ Apple SpeechAnalyzer ASR-only sidecar transcription.
       Apple Speech requires an explicit language; pass `zh`, `zh-CN`, `en`, or `en-US`.
@@ -174,6 +198,32 @@ async def create_transcription(
     - By default, a fresh server starts with `paraformer` unless `ENGINE_TYPE`,
       `MODEL_ID`, or engine-specific model environment variables override it.
     - Use `GET /v1/models` or `GET /v1/models/current` to inspect runtime aliases.
+
+    Deepgram operator setup and Swagger steps:
+
+    1. Load the merged code and current docs. After acceptance, the server operator
+       sets `DEEPGRAM_ENABLED=true` and `DEEPGRAM_API_KEY` on the server.
+       Bind `HOST=127.0.0.1` or use an authenticated proxy. Never enter the key in
+       a Swagger form. Keep startup `MODEL_ID` local.
+    2. Plan a server restart to apply code or environment changes. A browser refresh
+       does not apply server environment changes. This documentation does not restart
+       or enable the service.
+    3. Check the `deepgram-nova-3-diarize` entry in `GET /v1/models`:
+       inspect `configured`, `requestable`, and `unavailable_reason` before submitting.
+       Configured status alone does not prove live acceptance.
+    4. In Swagger `/docs`, expand `POST /v1/audio/transcriptions` and click **Try it out**.
+    5. Click **Choose file** and select a nonempty wav/mp3/m4a/mp4/flac/ogg/webm file.
+    6. Set **model** to `deepgram-nova-3-diarize`.
+    7. Set **language** to `en` or `zh`; replace the invalid default `auto`.
+    8. Set **response_format** to `verbose_json` to inspect speaker segments.
+    9. Click **Execute** only when ready to upload audio externally to Deepgram and
+       spend credits. An ambiguous failure does not authorize an automatic resend.
+
+    Deepgram accepts at most 200 MiB or the lower configured `MAX_UPLOAD_SIZE_MB` limit.
+    There is no audio-minute cap. Processing timeouts are not recording-duration limits.
+    The output validator accepts a single-channel provider response; the gateway does
+    not downmix audio or preserve separate stereo channels. See `MODELS.md` for the
+    full limits table and acceptance status.
 
     Output Formats:
     - **json** (default): Full structured data with segments and timestamps
