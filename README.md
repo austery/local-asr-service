@@ -149,9 +149,13 @@ The easiest way to test the service without using the command line:
    400; detectable incomplete output or a gap over 10 seconds returns 422.
 
 MOSS receives one complete recording per call and does not automatically split
-long uploads. A small compressed file can still exceed 30 minutes. Omitting
-`model` keeps the current model; `whisper-1` is also passthrough and does not
-select Whisper. Use `GET /v1/models` for the active aliases. A running server
+long uploads. A small compressed file can still exceed 30 minutes. Leave `model`
+empty to use the current local model, or explicitly select an alias listed by
+`GET /v1/models`. Optional compatibility note: `whisper-1` is accepted as a
+passthrough value, which uses the current local model just like omitting `model`.
+You do not need an OpenAI-compatible client or an installed Whisper model.
+This optional input is not an extra installed or requestable registered model.
+It does not select Whisper, download Whisper, or call OpenAI. A running server
 must load the updated application before `/docs` reflects source changes.
 
 ### CLI (curl)
