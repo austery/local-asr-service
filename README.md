@@ -154,7 +154,7 @@ empty to use the current local model, or explicitly select an alias listed by
 `GET /v1/models`. Optional compatibility note: `whisper-1` is accepted as a
 passthrough value, which uses the current local model just like omitting `model`.
 You do not need an OpenAI-compatible client or an installed Whisper model.
-This optional input is not an extra installed or requestable registered model.
+You can ignore this compatibility value when using Swagger.
 It does not select Whisper, download Whisper, or call OpenAI. A running server
 must load the updated application before `/docs` reflects source changes.
 

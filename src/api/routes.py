@@ -139,7 +139,7 @@ async def create_transcription(
             "Optional compatibility note: 'whisper-1' is accepted as a passthrough value, "
             "which means it uses the current local model, just like omitting this field. "
             "You do not need an OpenAI-compatible client or an installed Whisper model. "
-            "This optional input is not an extra installed or requestable registered model. "
+            "You can ignore this compatibility value when using Swagger. "
             "It does not select Whisper, download Whisper, or call OpenAI. "
             "For cloud transcription, explicitly select deepgram-nova-3-diarize, set "
             "language=en or zh and response_format=verbose_json. This does not switch "
@@ -205,8 +205,8 @@ async def create_transcription(
     Optional compatibility note:
     `model=whisper-1` is accepted as a passthrough value: it uses the current local
     model, just like omitting `model`. You do not need an OpenAI-compatible client
-    or an installed Whisper model. This optional input is not an extra installed
-    or requestable registered model. It does not select Whisper, download Whisper, or call OpenAI.
+    or an installed Whisper model. You can ignore this compatibility value when using Swagger.
+    It does not select Whisper, download Whisper, or call OpenAI.
 
     Deepgram operator setup and Swagger steps:
 
