@@ -35,6 +35,28 @@ The preferred direction is to reuse strong upstream runtimes such as
 `mlx-audio` for Qwen3-ASR and MOSS speaker transcription, while this
 service owns the stable local HTTP contract and Apple Silicon memory boundary.
 
+## Optional cloud file transcription
+
+Deepgram is available as the explicit `deepgram-nova-3-diarize` alias, disabled
+by default pending live-media acceptance. Existing local models and defaults
+remain available without credentials. Do not use this alias as startup `MODEL_ID`.
+After acceptance, the operator can set `DEEPGRAM_ENABLED=true` and a server-side
+`DEEPGRAM_API_KEY`; key presence alone is not verification. Per-request uploads
+use Nova-3, fixed batch diarizer v1 and utterances; supported language scope is explicit
+`en` or `zh`, with no enabled auto/mixed-language mode. No automatic retries or
+fallback are performed. The fixed v1 choice follows a dated two-speaker fixture
+comparison. The short English v1 gateway test passed. The original long-recording
+502 was fixed, and captured-response replay passed. Fresh live testing, broader
+quality acceptance, and activation remain pending. This remains a default-off
+backup option, with activation on hold. See [Deepgram scope and limits](MODELS.md#deepgram-batch-diarized-transcription-disabled-pending-acceptance).
+
+```bash
+# Only after operator acceptance and enablement:
+curl http://127.0.0.1:50700/v1/audio/transcriptions \
+  -F file=@conversation.wav -F model=deepgram-nova-3-diarize \
+  -F language=en -F response_format=verbose_json
+```
+
 ## Background
 
 This project grew out of earlier local transcription workflows for YouTube and

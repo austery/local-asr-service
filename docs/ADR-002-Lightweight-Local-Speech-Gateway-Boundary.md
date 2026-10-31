@@ -3,7 +3,7 @@ specId: ADR-002
 title: Lightweight Local Speech Gateway Boundary
 status: ✅ 已完成 (Completed)
 creationDate: 2026-05-19
-lastUpdateDate: 2026-05-19
+lastUpdateDate: 2026-10-29
 deciders:
   - User (AI-Assisted)
 relatedSpecs:
@@ -223,3 +223,72 @@ validation evidence for the limits of this operating policy.
 | 2026-05-19 | User (AI-Assisted) | Initial boundary draft after qwen3-sortformer long-form probe and Paraformer comparison | 📝 Draft |
 | 2026-05-19 | User (AI-Assisted) | Added scope audit findings, opt-in production reachability for `qwen3-sortformer`, upstream watch policy, and fitness-function follow-up | ✅ Accepted |
 | 2026-05-21 | User (AI-Assisted) | Real English manager 1:1 probe downgraded `qwen3-sortformer` from production-adjacent batch path to experimental reachable deletion candidate | ✅ Accepted |
+
+## Explicit cloud extension (2026-10-29, issue #62)
+
+The owner approved a narrow extension for explicit cloud diarized file
+transcription. Implement Deepgram first; OpenAI and Sonix remain future plan
+scope. Local aliases, defaults, passthrough selection, and native worker lifecycle
+remain the local gateway contract. Cloud aliases cannot be startup `MODEL_ID`.
+
+Four persistent modules implement this extension:
+
+- `src/core/remote_port.py`: typed async file-transcription port, normalized
+  immutable segments/words, and sanitized HTTP error categories.
+- `src/services/remote_session.py`: one active remote request, owned tasks,
+  queue-inclusive deadline, cancellation/disposal, and compatible rendering.
+- `src/adapters/deepgram_http.py`: one authenticated HTTPS batch submission;
+  request-scoped client closure, no redirects/proxy environment/retries/fallback.
+- `src/adapters/deepgram_output.py`: pure strict output validation; no speaker
+  inference, splitting, or reconciliation.
+
+`TranscriptionService` reserves capacity before any asynchronous admission wait
+across all execution paths and owns request upload cleanup. The cloud branch
+retains the immutable execution plan and completion identity and bypasses native
+selection entirely. Session disposal must finish before upload deletion. A client
+is request-scoped inside the provider invocation, whose task the session owns;
+there is no independent HTTP pool or detached upload task.
+
+This design intentionally permits only the service's narrow dependency on
+`src.adapters.deepgram_http` in Tach. API code consumes the remote port's error
+contract; adapters depend on the port, never on service orchestration. Fitness
+allowlists admit exactly the port and two Deepgram adapters. Existing complexity
+and acceptance gates remain unchanged.
+
+`DEEPGRAM_ENABLED=false` is the default. Credential presence is reported as
+configuration only; requestability requires explicit operator enablement after
+live-media acceptance. Initial language scope is explicit `en` or `zh`, despite
+broader upstream language support. Auto detection and code-switching remain
+outside the tested slice. Pin `model=nova-3`, `diarize_model=v1`, and
+`utterances=true`; do not follow the upstream recommendation to use `latest`,
+because initial acceptance needs a stable diarizer selection.
+
+The initial implementation had no paid probe. The subsequent dated comparison
+below changes only the fixed provider parameter. Gateway v1, broader real audio
+quality, duration coverage, billing, and upstream cancellation remain acceptance
+obligations. Local
+cancellation only stops and closes local network work; remote processing or
+billing may continue. Ambiguous failures must say result unknown and prohibit
+automatic resend. Log only validated UUID request IDs for recovery, never
+provider bodies, transcript text, or credentials. For paid probes,
+the operator must retain these service logs in the designated review evidence
+directory and record minimal status/usage there. No database/job system is added.
+
+### Fixed diarizer amendment (2026-10-29)
+
+The coordinator selected fixed v1 within this Deepgram slice after inspecting
+same-file raw provider evidence: `diagnostic-02.summary.json`/`.raw.json` (v1)
+and `diagnostic-03.summary.json`/`.raw.json` (v2), retained outside the worktree in
+`pr-reviews/deepgram-20261029/`. The 60-second fixture hash is
+`a44ad63de6d62d4aad1e562c765ff8c1e82bba3743054bf973ca1e06c7c49a19`;
+the owner confirmed two voices by listening. V1 returned 28 speaker-0 words and
+125 speaker-1 words, with the transition at 13.599999 seconds. V2 labeled all
+153 words speaker 0. Both used `general-nova-3` version `2025-07-31.0`.
+
+This evidence replaces the original fixed-v2 proposal for this fixture's required
+two-speaker behavior; it is a bounded coordinator disposition, not a new
+owner-approved general policy or evidence that v1 is universally better. Keep the
+same alias, default-off gate, and architecture. No fallback, retry, tuning, version
+selection interface, or invented speaker labels is introduced. Gateway v1
+acceptance remains the next coordinator probe; broader language, overlap, and
+long-recording quality remain unproven.

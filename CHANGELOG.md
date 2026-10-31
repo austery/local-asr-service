@@ -4,6 +4,12 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Add explicit `deepgram-nova-3-diarize` file transcription, disabled by default
+  pending acceptance, using Nova-3 with fixed batch diarizer v1 and utterances.
+  Preserve local aliases/current selection and reject cloud startup models.
+  Count requests waiting for admission/startup as well as queued/active work
+  toward the existing shared queue limit across native, Apple and cloud paths.
+
 - Keep ordinary MLX transcription exports in a request-owned temporary directory,
   cleaned on success and failure. Preserve caller-directory transcript files;
   leave the existing MOSS export isolation unchanged.

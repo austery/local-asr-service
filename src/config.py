@@ -95,3 +95,8 @@ APPLE_SPEECH_MAX_CONCURRENCY = max(1, int(os.getenv("APPLE_SPEECH_MAX_CONCURRENC
 
 # Tokenizers 并行警告抑制
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+# Explicit cloud opt-in; key presence does not establish live acceptance.
+DEEPGRAM_ENABLED = os.getenv("DEEPGRAM_ENABLED", "false").lower() == "true"
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+DEEPGRAM_TOTAL_TIMEOUT_SEC = max(1.0, min(1800.0, float(os.getenv("DEEPGRAM_TOTAL_TIMEOUT_SEC", "1800"))))

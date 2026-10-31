@@ -19,6 +19,7 @@ forbid_circular_dependencies = true
 [[modules]]
 path = "src.api"
 depends_on = [
+  "src.core.remote_port",
   "src.services",
   "src.core",
   "src.config",
@@ -28,11 +29,21 @@ depends_on = [
 [[modules]]
 path = "src.services"
 depends_on = [
+  "src.adapters.deepgram_http",
   "src.core",
   "src.core.apple_speech_port",
+  "src.core.remote_port",
   "src.workers",
   "src.config",
 ]
+
+[[modules]]
+path = "src.core.remote_port"
+depends_on = []
+
+[[modules]]
+path = "src.adapters.deepgram_http"
+depends_on = ["src.core.remote_port", "src.adapters"]
 
 # ── Workers: Subprocess model runner ──
 [[modules]]
@@ -49,6 +60,7 @@ depends_on = [
   "src.core.alignment_port",
   "src.core.diarization_port",
   "src.core.apple_speech_port",
+  "src.core.remote_port",
   "src.adapters",
   "src.config",
 ]
@@ -74,6 +86,7 @@ depends_on = [
   "src.core.alignment_port",
   "src.core.diarization_port",
   "src.core.apple_speech_port",
+  "src.core.remote_port",
   "src.config",
 ]
 
