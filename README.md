@@ -45,7 +45,10 @@ After acceptance, the operator can set `DEEPGRAM_ENABLED=true` and a server-side
 use Nova-3, fixed batch diarizer v1 and utterances; supported language scope is explicit
 `en` or `zh`, with no enabled auto/mixed-language mode. No automatic retries or
 fallback are performed. The fixed v1 choice follows a dated two-speaker fixture
-comparison; gateway v1 and broader acceptance remain pending. See [Deepgram scope and limits](MODELS.md#deepgram-batch-diarized-transcription-disabled-pending-acceptance).
+comparison. The short English v1 gateway test passed. The original long-recording
+502 was fixed, and captured-response replay passed. Fresh live testing, broader
+quality acceptance, and activation remain pending. This remains a default-off
+backup option, with activation on hold. See [Deepgram scope and limits](MODELS.md#deepgram-batch-diarized-transcription-disabled-pending-acceptance).
 
 ```bash
 # Only after operator acceptance and enablement:
