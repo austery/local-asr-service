@@ -22,7 +22,7 @@ class _RuntimeAlignmentResult(Protocol):
 def _load_qwen_forced_aligner_runtime(model_id: str) -> _QwenForcedAlignerRuntime:
     stt_module = import_module("mlx_audio.stt")
     load = stt_module.load
-    return load(model_id)
+    return cast(_QwenForcedAlignerRuntime, load(model_id))
 
 
 def _require_runtime_item(item: object) -> RuntimeAlignmentItem:

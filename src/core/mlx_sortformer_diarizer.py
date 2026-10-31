@@ -23,7 +23,7 @@ class _RuntimeDiarizationOutput(Protocol):
 def _load_sortformer_runtime(model_id: str) -> _SortformerRuntime:
     vad_module = import_module("mlx_audio.vad")
     load = vad_module.load
-    return load(model_id)
+    return cast(_SortformerRuntime, load(model_id))
 
 
 def _require_runtime_segment(segment: object) -> RuntimeDiarizationSegment:

@@ -301,3 +301,23 @@ src/
 - Model switch order: `release()` → `load()` (memory-safe, no double-peak)
 
 → See `docs/` for full specs and ADRs.
+
+
+### Explicit experimental speaker activity
+
+The optional Nemotron selection defaults to **disabled**. Ordinary transcription
+may omit `diarizer` or send an empty value; it continues using its selected ASR
+model. To request speaker activity explicitly after manually deploying this
+change, discover `/v1/models.diarizers` and call:
+
+```bash
+curl http://127.0.0.1:50700/v1/audio/diarizations \
+  -F 'file=@conversation.m4a' -F 'diarizer=nemotron-diar'
+```
+
+This returns overlapping speaker turns, not text. It does not change the current
+ASR model. Models must be idle and the resident ASR process naturally offloaded;
+otherwise retry the 503 response later. During the experiment new ASR requests
+also receive retryable 503. Cached pinned weights are required; no request-time
+download occurs. See [model scope and limits](MODELS.md#experimental-standalone-diarization)
+and [isolated validation](docs/2026-10-26-explicit-nemotron-option.md).
