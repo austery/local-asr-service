@@ -71,6 +71,29 @@ Identical speaker labels do not prove identical speaker-attributed accuracy:
 changed text allocation can move words between speakers. No human gold
 transcript or speaker timing reference was used, so no CER or DER gain is claimed.
 
+## Other upstream runtime changes
+
+The project speaker patch does not override these 1.4.19 behaviors:
+
+- Automatic clustering defaults to `max_num_spks=15`. The UMAP/HDBSCAN branch
+  now merges the closest speaker groups when its output exceeds that cap,
+  even when the caller does not set a cap. The 1/3-speaker samples do not
+  exercise this merge path.
+- Spectral clustering computes only the leading eigenpairs. Speaker-embedding
+  inference uses its own `spk_kwargs` instead of the ASR settings.
+- `ncpu` also limits process-wide BLAS math-library threads (default 4).
+  The limit persists for the worker process lifetime. These clustering,
+  inference-setting, and thread-limit changes are part of the tested runtime;
+  their individual effects were not isolated. They are not established causes
+  of the observed slowdown.
+- Postprocessing raises `ValueError` when a retained token lacks its timestamp,
+  rather than silently shifting the mapping. The worker reports this as a
+  failed job. The two successful clips do not test this failure path.
+
+Model construction was measured separately from inference: 1.4.19 took
+10.67–11.38 seconds in the original two runs. This does not establish full
+HTTP worker-startup acceptance or behavior under resource pressure.
+
 ## Validation
 
 The isolated comparison environments each passed Ruff, Tach, and 523 tests:
@@ -91,8 +114,9 @@ under `pr-reviews/funasr-ab-20261101/`. They are not committed or published.
 
 - Full-length Mandarin recordings and long-input resource behavior.
 - Human-reviewed recognition accuracy, speaker accuracy, and audible boundaries.
-- English and mixed-language quality, SenseVoice, explicit speaker caps, and
-  exhaustive empty-token failure paths.
+- English and mixed-language quality, SenseVoice, default and explicit speaker
+  caps (including the >15-group merge), and empty-token or missing-timestamp
+  failure paths.
 - Real-model HTTP submission, worker startup/offload, and live service cutover.
 
 The running checkout and its environment are outside this change. Merge alone
