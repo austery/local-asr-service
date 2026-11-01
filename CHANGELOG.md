@@ -4,6 +4,11 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Prepare FunASR 1.4.19 with unchanged model weights and the existing speaker
+  timestamp patch. Isolated Mandarin samples retain full text and timestamps,
+  improve segment text allocation, and take longer to process. Runtime activation
+  remains separate. See [upgrade evidence](docs/2026-11-01-funasr-1419-upgrade.md).
+
 - Add explicit `deepgram-nova-3-diarize` file transcription, disabled by default
   pending acceptance, using Nova-3 with fixed batch diarizer v1 and utterances.
   Preserve local aliases/current selection and reject cloud startup models.
