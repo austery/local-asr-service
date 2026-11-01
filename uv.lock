@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <3.13"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -459,7 +459,7 @@ wheels = [
 
 [[package]]
 name = "funasr"
-version = "1.4.14"
+version = "1.4.19"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -482,6 +482,7 @@ dependencies = [
     { name = "sentencepiece" },
     { name = "soundfile" },
     { name = "tensorboardx" },
+    { name = "threadpoolctl" },
     { name = "tiktoken" },
     { name = "torch-complex" },
     { name = "tqdm" },
@@ -489,9 +490,9 @@ dependencies = [
     { name = "umap-learn" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f1/ca/7e77c64a160a4af54cdd7fbcde7140e93e795f050b3693f58caa164077cf/funasr-1.4.14.tar.gz", hash = "sha256:5dd3ab30f6f2f26207992173a1da54d2f0f3f74f64d0823a05a9eab9f93a704f", size = 921390, upload-time = "2026-09-03T16:23:56.153Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/11/17/02a872745169f10c8a2505cc0e8e968eb1c0540e00f16b53534e18138eb3/funasr-1.4.19.tar.gz", hash = "sha256:87140542bc1e2e8bd5194ce71a9bff9fe9ae5152188adfa2e52c1fd00fdbd75f", size = 1049723, upload-time = "2026-11-01T02:18:49.747Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/a8/2304ccd6b39a1f64035d38dbd5ab9ce2c5eca93a196c22d25787802d09a2/funasr-1.4.14-py3-none-any.whl", hash = "sha256:8f1bceeb183359fb44402dea16200415a838da314742aa0c80752efe0e229e6c", size = 994966, upload-time = "2026-09-03T16:23:52.794Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/94/b52e5a55a94c704c5337d8b667b52084c4edf7041fe40f1daca3bf77c015/funasr-1.4.19-py3-none-any.whl", hash = "sha256:31760d1d9bee645f0257e80c00f6872f50d8e398cb41d7a827356121a6bd40f9", size = 1014074, upload-time = "2026-11-01T02:18:47.363Z" },
 ]
 
 [package.optional-dependencies]
@@ -833,8 +834,8 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "funasr", extra = ["llm"] },
-    { name = "huggingface-hub" },
     { name = "httpx" },
+    { name = "huggingface-hub" },
     { name = "mlx-audio" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -857,9 +858,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.121.3" },
-    { name = "funasr", extras = ["llm"], specifier = ">=1.4.14" },
-    { name = "huggingface-hub", specifier = ">=0.26.0" },
+    { name = "funasr", extras = ["llm"], specifier = ">=1.4.19" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "huggingface-hub", specifier = ">=0.26.0" },
     { name = "mlx-audio", specifier = ">=0.6.1" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
