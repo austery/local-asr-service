@@ -30,6 +30,16 @@ from src.core.model_registry import MOSS_MODEL_ID, MOSS_MODEL_REVISION, lookup
 
 MOSS_MAX_DURATION_SECONDS = 1800.0
 MOSS_MAX_TOKENS = 32768
+# The generic upstream prompt can translate English instead of transcribing it (#42).
+MOSS_ENGLISH_TRANSCRIPTION_PROMPT = (
+    "The spoken language is English. Transcribe the original English speech in English only. "
+    "Preserve the original English wording. Do not translate the speech into another language. "
+    "Do not translate into Spanish. Do not paraphrase or summarize. "
+    "Transcribe the audio into text. Start each segment with the start timestamp and speaker "
+    "label ([S01], [S02], [S03], ...), write the corresponding spoken content, and end each "
+    "segment with the ending timestamp to clearly mark the segment range. "
+    "All segment text must remain in the original English."
+)
 
 # Per-model capability profiles (prefix-matched, longest prefix wins)
 _MLX_MODEL_CAPABILITIES: dict[str, EngineCapabilities] = {
@@ -298,6 +308,7 @@ class MlxAudioEngine:
                 max_tokens=MOSS_MAX_TOKENS,
                 temperature=0.0,
                 prefill_step_size=4096,
+                prompt=MOSS_ENGLISH_TRANSCRIPTION_PROMPT,
             )
             try:
                 normalized = normalize_moss_output(result, duration, MOSS_MAX_TOKENS)
