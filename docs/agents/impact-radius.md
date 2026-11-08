@@ -15,20 +15,15 @@ already been rebuilt on another base once and the intent outlived it:
 - `/Users/leipeng/Documents/research-notes/05-archive/2026-07-06_local-asr-service_project-origin-and-early-evolution.md`
   (origin and early evolution)
 
-In-repository implementation of that intent:
+Read only each document's `## Current core` section. In-repository
+implementation of that intent:
 [ADR-002](../ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md). It does not
 replace the North Star.
 
-- **Mission:** a lightweight, OpenAI-compatible local speech gateway for two
-  personal uses: local transcription for data pipelines (PureSubs and other
-  batch callers), and a local fallback when remote speech APIs are slow or down.
-- **Intended form:** depend on upstream speech runtimes (FunASR, `mlx-audio`,
-  Apple Speech) and own only a thin layer.
-- **Non-goals:** a general speech model framework or model zoo; model
-  architecture ports; inference kernels; model conversion pipelines; complex
-  diarization postprocessing; speaker embedding reconciliation; large
-  multi-model orchestration; desktop or mobile app UX; Swift-native runtime code
-  that belongs in a Swift package.
+As of 2026-11-08 neither North Star document has a `## Current core` section.
+Until the owner writes it, the Trunk split and the conflict examples below are
+derived from ADR-002 ("Decision": the thin layer it owns and the list it does
+not own) and must be rechecked against `## Current core` once it exists.
 
 **Trunk follows from the thin layer.** The mission depends on four things, and
 each one is Trunk below:
