@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import subprocess
 import sys
@@ -505,7 +506,8 @@ def save_report(results: list[ProbeResult], output_dir: Path = RESULTS_DIR) -> P
 
 def _number_or_none(value: object) -> float | None:
     if isinstance(value, int | float) and not isinstance(value, bool):
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     return None
 
 
