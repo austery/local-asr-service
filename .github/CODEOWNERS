@@ -1,0 +1,68 @@
+# Scope comes from docs/agents/impact-radius.md.
+# GitHub matches whole paths. New coverage within a listed test path also matches.
+
+# Verifiers
+/.github/ @austery
+/tach.toml @austery
+/tests/unit/ @austery
+/tests/reliability/test_worker_session_process.py @austery
+/tests/helpers/ @austery
+conftest.py @austery
+/apple-speech-worker/Sources/AppleSpeechWorkerContractTests/ @austery
+/benchmarks/ @austery
+/scripts/probe_qwen3_sortformer_longform.py @austery
+
+# Structure and paid-call gates
+/src/api/routes.py @austery
+/src/main.py @austery
+/src/services/execution.py @austery
+/src/services/transcription.py @austery
+/src/core/funasr_engine.py @austery
+/src/core/apple_speech_engine.py @austery
+/src/core/mlx_engine.py @austery
+/src/adapters/moss_output.py @austery
+/src/adapters/deepgram_output.py @austery
+/src/services/remote_session.py @austery
+/src/adapters/text.py @austery
+/src/core/model_registry.py @austery
+/src/config.py @austery
+/src/workers/model_worker.py @austery
+/src/workers/transport.py @austery
+/src/services/worker_session.py @austery
+/apple-speech-worker/Package.swift @austery
+/apple-speech-worker/Sources/apple-speech-worker/main.swift @austery
+/apple-speech-worker/Sources/AppleSpeechWorkerCore/WorkerModels.swift @austery
+/apple-speech-worker/Sources/AppleSpeechWorkerCore/WorkerCommands.swift @austery
+/src/adapters/apple_speech_worker_client.py @austery
+/src/core/apple_speech_port.py @austery
+/docs/fixtures/apple-speech-transcribe-en-US.json @austery
+/apple-speech-worker/Sources/AppleSpeechWorkerCore/LiveAppleSpeechRuntime.swift @austery
+/src/core/diarization_registry.py @austery
+/src/core/alignment_registry.py @austery
+/src/core/mlx_sortformer_diarizer.py @austery
+/src/core/mlx_qwen_forced_aligner.py @austery
+/src/adapters/deepgram_http.py @austery
+/pyproject.toml @austery
+/uv.lock @austery
+/.python-version @austery
+**/migrations/** @austery
+**/*.prisma @austery
+**/schema.* @austery
+**/*.sql @austery
+
+# Policy, decisions, and acceptance evidence
+/AGENTS.md @austery
+/CLAUDE.md @austery
+/docs/agents/ @austery
+/docs/ADR-*.md @austery
+/docs/SPEC-*.md @austery
+/docs/plans/2026-09-07-puresubs-moss-integration.md @austery
+/docs/plans/2026-09-07-moss-adapter-contract.md @austery
+/docs/plans/2026-10-29-cloud-diarized-transcription.md @austery
+/docs/2026-*-upgrade.md @austery
+/docs/plans/2026-09-07-runtime-upgrades-and-moss-evaluation.md @austery
+/.scratch/runtime-upgrades-moss/ @austery
+/docs/plans/2026-03-08-subprocess-model-isolation-design.md @austery
+/docs/plans/2026-03-08-subprocess-model-isolation.md @austery
+/docs/plans/2026-10-23-nemotron-diarization-poc.md @austery
+/docs/plans/2026-10-26-nemotron-diarization-results.md @austery
