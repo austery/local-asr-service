@@ -247,8 +247,9 @@ Not yet mapped, so treat as **Unknown**:
     `tests/reliability/test_worker_session_process.py`).
   - `tach.toml` boundary rules and `tests/unit/test_architecture_fitness.py`
     (SPEC-015).
-  - The Markdown link check `scripts/check_doc_links.py` (run by CI) and its
-    test `tests/unit/test_check_doc_links.py`.
+  - The Markdown link check `scripts/check_doc_links.py` (run by CI), its
+    test `tests/unit/test_check_doc_links.py`, and the version of its parser
+    `markdown-it-py` (a dev dependency) in `uv.lock`.
   - Test configuration in `pyproject.toml`: `[tool.ruff*]`,
     `[tool.pytest.ini_options]`, `[tool.mypy]`. Version changes of `ruff`,
     `tach`, `pytest` or `mypy` in `uv.lock`.

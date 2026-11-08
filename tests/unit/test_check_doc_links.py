@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,53 @@ def test_commonmark_non_links_are_ignored() -> None:
 
 
 @pytest.mark.parametrize(
+    "text",
+    [
+        "- uses ` char\n- [b](gone.md)\n- `x`\n",
+        "Text ` stray\n# H\n[b](gone.md) and `code`\n",
+        "| a | b |\n|---|---|\n| ` | x |\n| [b](gone.md) | `y` |\n",
+        "Use `<!--` here.\n\n[b](gone.md)\n\nand `-->` there.\n",
+        "- item\n\n  More text.\n\n    [b](gone.md)\n",
+        "- item\n\n  para\n\n    - nested [b](gone.md)\n",
+        "1. item\n\n   para\n\n    [b](gone.md)\n",
+    ],
+)
+def test_links_after_stray_backticks_and_in_list_content_are_checked(text: str) -> None:
+    assert [(b.target, b.reason) for b in check(text)] == [("gone.md", "missing")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\\\\`[b](gone.md)`",
+        "# H\n    [b](gone.md)\n",
+        "<!-- unterminated\n\n[b](gone.md)\n",
+        "<div>\n[b](gone.md)\n</div>\n",
+    ],
+)
+def test_commonmark_code_and_html_blocks_are_not_links(text: str) -> None:
+    assert check(text) == []
+
+
+def test_reference_style_link_is_checked() -> None:
+    assert check("See [spec][s].\n\n[s]: gone.md\n") == [
+        BrokenLink("docs/SPEC.md", 1, "gone.md", "missing")
+    ]
+
+
+def test_link_line_is_reported_inside_a_multiline_paragraph() -> None:
+    assert check("First line\nsecond [b](gone.md)\n") == [
+        BrokenLink("docs/SPEC.md", 2, "gone.md", "missing")
+    ]
+
+
+def test_pathological_backticks_finish_quickly() -> None:
+    started = time.monotonic()
+    assert check("``x" + " ```a" * 200) == []
+    assert time.monotonic() - started < 2.0
+
+
+@pytest.mark.parametrize(
     ("path", "maintained"),
     [
         ("README.md", True),
@@ -119,7 +167,9 @@ def test_repository_scan_uses_tracked_files_and_skips_archived_payloads(tmp_path
     (tmp_path / "README.md").write_text("[ok](docs/_archive/README.md)\n", encoding="utf-8")
     (tmp_path / "docs/_archive/README.md").write_text("[gone](nope.md)\n", encoding="utf-8")
     (tmp_path / "docs/_archive/old.md").write_text("[gone](/abs.md)\n", encoding="utf-8")
-    (tmp_path / "docs/guide.md").write_text("[dir](_archive/) [new](draft.md)\n", encoding="utf-8")
+    (tmp_path / "docs/guide.md").write_text(
+        "[dir](_archive/) [root](..) [new](draft.md)\n", encoding="utf-8"
+    )
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     (tmp_path / "docs/draft.md").write_text("untracked\n", encoding="utf-8")
