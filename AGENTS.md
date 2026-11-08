@@ -60,6 +60,9 @@ MOSS is opt-in, requires explicit English, accepts at most 1,800 seconds, and do
 `qwen3-sortformer` is retired from the public registry and production orchestration (SPEC-016); retain independent `qwen3-asr`, experimental adapters, and historical pipeline evidence. The live gateway submits transcription jobs only; do not restore pipeline borrow/restore logic.
 See `CHANGELOG.md` and `docs/plans/2026-09-07-puresubs-moss-integration.md` for delivery state and the planned caller adaptation.
 
+## Document Lifecycle
+Before publishing a PR that closes a task, follow the task closeout in `~/Documents/global-skills/agents/DOC-LIFECYCLE.md`. Archive: `docs/_archive/` (index: `docs/_archive/README.md`). Link check: `uv run python scripts/check_doc_links.py`. ADRs live in `docs/` as `docs/ADR-*.md`, a Structure path.
+
 ## Testing
 The project uses `pytest` for all levels of testing.
 
