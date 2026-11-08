@@ -14,7 +14,7 @@ Rules (see ~/Documents/global-skills/agents/DOC-LIFECYCLE.md, "Link check"):
 
 Links are found by markdown-it-py's CommonMark parser (plus tables), so code
 blocks, code spans and HTML blocks follow CommonMark exactly. Reference-style
-links are checked; heading anchors and external URLs are not.
+links are checked; heading anchors, external URLs and raw HTML links are not.
 
 Usage: ``uv run python scripts/check_doc_links.py``
 """
@@ -56,16 +56,21 @@ _BARE_FILE_LINE = re.compile(r"^[^:/]+\.[^:/]+:\d+(?:-\d+)?(?:[?#].*)?$")
 _LINE_SUFFIX = re.compile(r":\d+(?:-\d+)?$")
 
 
-def _parser() -> MarkdownIt:
-    md = MarkdownIt("commonmark").enable("table")
-    # Keep destinations as written: the default rejects file: links (which must
-    # fail here, not vanish) and percent-encodes the rest.
-    md.validateLink = lambda _url: True
-    md.normalizeLink = lambda url: url
-    return md
+class _RawLinkMarkdownIt(MarkdownIt):
+    """Keep destinations as written.
+
+    The default rejects file: links (which must fail here, not vanish) and
+    percent-encodes the rest.
+    """
+
+    def validateLink(self, url: str) -> bool:  # noqa: N802 - parent method name
+        return True
+
+    def normalizeLink(self, url: str) -> str:  # noqa: N802 - parent method name
+        return url
 
 
-_MD = _parser()
+_MD = _RawLinkMarkdownIt("commonmark").enable("table")
 
 
 def is_maintained_markdown(path: str) -> bool:
@@ -82,22 +87,26 @@ def _destinations(tokens: Sequence[Token]) -> Iterator[tuple[int, int, str]]:
         if token.type != "inline" or token.map is None:
             continue
         first, last = token.map
-        stack = list(token.children or [])
-        while stack:
-            child = stack.pop(0)
-            attr = "href" if child.type == "link_open" else "src" if child.type == "image" else None
-            if attr is not None:
-                target = child.attrGet(attr)
-                if isinstance(target, str):
-                    yield first, last, target
-            stack[:0] = child.children or []
+        for child in token.children or []:
+            if child.type == "image":
+                # An image's children are its alt text; a link there is not rendered.
+                target = child.attrGet("src")
+            elif child.type == "link_open":
+                target = child.attrGet("href")
+            else:
+                target = None
+            if isinstance(target, str):
+                yield first, last, target
 
 
 def _line_of(lines: Sequence[str], first: int, last: int, target: str) -> int:
     """1-based line of the target inside its block; the block start if not found."""
-    for index in range(first, min(last, len(lines))):
-        if target in lines[index]:
-            return index + 1
+    block = range(first, min(last, len(lines)))
+    # Prefer a link destination over plain text that mentions the same path.
+    for needle in (f"({target}", f"(<{target}", target):
+        for index in block:
+            if needle in lines[index]:
+                return index + 1
     return first + 1
 
 
@@ -106,10 +115,17 @@ def _link_path(target: str) -> str:
     return unquote(_LINE_SUFFIX.sub("", without_fragment))
 
 
+def _is_network_path(target: str) -> bool:
+    """A scheme-relative URL such as //example.org/page."""
+    return target.startswith("//")
+
+
 def _is_machine_specific(target: str) -> bool:
     return (
         target.lower().startswith("file:")
-        or target.startswith(("/", "~", "\\"))
+        or (target.startswith("/") and not _is_network_path(target))
+        or target == "~"
+        or target.startswith(("~/", "~\\", "\\"))
         or _WINDOWS_ABSOLUTE.match(target) is not None
     )
 
@@ -118,15 +134,17 @@ def find_broken_links_in_text(
     file: str, text: str, exists: Callable[[str], bool]
 ) -> list[BrokenLink]:
     """Check one document. `exists` receives a repository-relative POSIX path."""
-    lines = text.splitlines()
+    lines = text.split("\n")
     broken: list[BrokenLink] = []
     for first, last, target in _destinations(_MD.parse(text)):
         line = _line_of(lines, first, last, target)
         if _is_machine_specific(target):
             broken.append(BrokenLink(file, line, target, "machine-specific"))
             continue
-        if target.startswith("#") or (
-            _SCHEME.match(target) and not _BARE_FILE_LINE.match(target)
+        if (
+            target.startswith("#")
+            or _is_network_path(target)
+            or (_SCHEME.match(target) and not _BARE_FILE_LINE.match(target))
         ):
             continue
         path = _link_path(target)
@@ -140,14 +158,17 @@ def find_broken_links_in_text(
     return broken
 
 
-def _tracked_paths(root: Path) -> set[str]:
-    """Tracked files, every directory that holds one, and the root itself."""
+def _tracked_files(root: Path) -> list[str]:
     listed = subprocess.run(
         ["git", "ls-files", "-z"], cwd=root, check=True, capture_output=True, text=True
     ).stdout
-    paths: set[str] = {"."}
-    for file in filter(None, listed.split("\0")):
-        paths.add(file)
+    return [file for file in listed.split("\0") if file]
+
+
+def _with_directories(files: Sequence[str]) -> set[str]:
+    """The files, every directory that holds one, and the root itself."""
+    paths: set[str] = {".", *files}
+    for file in files:
         parent = posixpath.dirname(file)
         while parent and parent not in paths:
             paths.add(parent)
@@ -156,14 +177,15 @@ def _tracked_paths(root: Path) -> set[str]:
 
 
 def find_broken_links(root: Path) -> list[BrokenLink]:
-    tracked = _tracked_paths(root)
+    tracked = _tracked_files(root)
+    paths = _with_directories(tracked)
     files = sorted(f for f in tracked if is_maintained_markdown(f))
     if not files:
         raise RuntimeError("No maintained Markdown files discovered.")
     broken: list[BrokenLink] = []
     for file in files:
         text = (root / file).read_text(encoding="utf-8")
-        broken.extend(find_broken_links_in_text(file, text, tracked.__contains__))
+        broken.extend(find_broken_links_in_text(file, text, paths.__contains__))
     return broken
 
 

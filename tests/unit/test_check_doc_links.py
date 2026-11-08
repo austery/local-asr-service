@@ -139,6 +139,29 @@ def test_link_line_is_reported_inside_a_multiline_paragraph() -> None:
     ]
 
 
+def test_link_in_image_alt_text_is_not_checked() -> None:
+    assert check("![See [guide](missing.md)](ADR-002.md)") == []
+    assert [b.target for b in check("![See [guide](ADR-002.md)](gone.png)")] == ["gone.png"]
+
+
+def test_network_path_url_is_not_checked() -> None:
+    assert check("[remote](//example.org/guide)") == []
+
+
+def test_only_a_home_path_counts_as_tilde_absolute() -> None:
+    assert [(b.target, b.reason) for b in check("[a](~draft.md) [b](~/x.md) [c](~)")] == [
+        ("~draft.md", "missing"),
+        ("~/x.md", "machine-specific"),
+        ("~", "machine-specific"),
+    ]
+
+
+def test_line_prefers_the_link_over_an_earlier_mention() -> None:
+    assert check("mention gone.md here\nand [b](gone.md)\n") == [
+        BrokenLink("docs/SPEC.md", 2, "gone.md", "missing")
+    ]
+
+
 def test_pathological_backticks_finish_quickly() -> None:
     started = time.monotonic()
     assert check("``x" + " ```a" * 200) == []
@@ -178,3 +201,13 @@ def test_repository_scan_uses_tracked_files_and_skips_archived_payloads(tmp_path
         BrokenLink("docs/_archive/README.md", 1, "nope.md", "missing"),
         BrokenLink("docs/guide.md", 1, "draft.md", "missing"),
     ]
+
+
+def test_repository_scan_ignores_a_directory_named_like_markdown(tmp_path: Path) -> None:
+    (tmp_path / "guides.md").mkdir()
+    (tmp_path / "guides.md/readme.txt").write_text("text\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("[dir](guides.md)\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+
+    assert find_broken_links(tmp_path) == []
