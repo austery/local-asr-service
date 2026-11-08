@@ -77,12 +77,19 @@ make it structure.
   `audio/mpeg`), `_RESPONSE_FORMAT_MAP`, the response models (`Segment`,
   `TranscriptionResponse`, `ModelInfo`, `ModelsResponse`), the segment mapping,
   the error-status mapping, and the `/v1/models/current` keys.
+- `src/main.py`: the `/health` response keys. PureSubs setup docs check
+  `curl http://localhost:50700/health` (`LOCAL_WORKER_SETUP.md`).
+- Response normalization: `src/services/execution.py` (`TranscriptionResultDict`,
+  `TranscriptionResult`) and `src/services/transcription.py`
+  (`_coerce_transcription_result`, an allowlist that keeps only `text`,
+  `segments`, `duration` and `language`; it also builds `WorkerJob`).
 - Transcript text producers, whose output PureSubs stores as
   `[<speaker>]: <text>` (`LocalWhisperService.ts`, lines ~238-244):
   `src/core/funasr_engine.py` (`Speaker N` labels, txt and srt rendering),
   `src/core/apple_speech_engine.py` (json and srt rendering returned directly
   by `routes.py`), `src/adapters/moss_output.py`, `src/adapters/deepgram_output.py`,
-  `src/services/remote_session.py` (`render_remote`).
+  `src/services/remote_session.py` (`render_remote`), and `src/adapters/text.py`
+  (SenseVoice tag cleanup; `sensevoice-small` is a stored PureSubs alias).
 - `src/core/model_registry.py`: aliases, model IDs, and `MOSS_MODEL_REVISION`.
   PureSubs stores alias strings in its database (`schema.prisma`, line ~49), in
   its dashboard list (`channel-dialog.component.ts`, `knownAsr`), in job metadata
@@ -95,8 +102,11 @@ make it structure.
   decide what is downloaded into `~/.cache/modelscope/hub/` and
   `~/.cache/huggingface/hub/`.
 - Worker IPC: `src/workers/model_worker.py` (the `WorkerJob` dataclass and the
-  result tuples) and `src/workers/transport.py` (framing). Parent and child must
-  agree on them.
+  result tuples), `src/workers/transport.py` (framing), and the parent-side
+  decoder in `src/services/worker_session.py` (`READY`, `IDLE_EXIT`, result and
+  typed-error tuple sizes). Parent and child must agree on them. macOS starts the
+  worker with `spawn`, so a worker started after a code change on disk runs new
+  code while the parent still runs old code.
 - Apple Speech sidecar protocol and binary location:
   `apple-speech-worker/Package.swift` (product name),
   `apple-speech-worker/Sources/apple-speech-worker/main.swift` (stdout line,
@@ -128,6 +138,17 @@ Structure = touched means:
   `torchaudio`, `mlx`, `mlx-audio`, `mlx-metal`) attaches a real-model A/B on the
   owner-approved clips. A dev-tool change (`ruff`, `tach`, `pytest`, `mypy`) is
   also a verifier change (see Always stop).
+- The PR records the recovery method, its evidence and its cost (policy:
+  "approved" needs apply and rollback output). For this repository:
+  - Dependencies: restore the previous `uv.lock`, run `uv sync --frozen`, and
+    show the old lock reproduces the old environment. For a live runtime, also
+    name the retained previous environment (the FunASR 1.4.19 cutover kept one).
+  - Model ID or revision: name the previous identifier and confirm its cache is
+    still present, or state the re-download size.
+  - Alias, field or text format: state which PureSubs rows already hold the old
+    value; recovery for those rows is One-way (see below).
+  - IPC or sidecar protocol: show that both sides ship together, and that a
+    restart of the service restores a matched pair.
 
 Add a path here when the project gains another kind of persistent structure, such
 as a job store, a result cache, or a new sidecar protocol.
@@ -147,9 +168,9 @@ default. This is why no engine is a controlled Branch today.
 
 | Radius | In this repository |
 | --- | --- |
-| **Trunk** | **Request execution and admission:** `src/services/transcription.py`, `src/services/execution.py`, `src/services/worker_session.py`. Every HTTP request passes through them; they own `_spawn_lock`, model switching, upload temp files and worker lifetime (`AGENTS.md`, SPEC-016). **Worker process and IPC:** `src/workers/model_worker.py`, `src/workers/transport.py`; a hang or leak blocks every request and shutdown (history: the 2026-04-03 shutdown hang). **HTTP layer and startup:** `src/api/routes.py`, the only caller-facing surface; `src/main.py`, the composition root that starts and stops the service. **Deepgram remote session:** `src/services/remote_session.py`. `TranscriptionService` builds `RemoteSession` for every instance and calls its `start()` on startup and `close()` on shutdown; `GET /v1/models` calls `deepgram_unavailable_reason()` and `deepgram_configured()` for every caller; `deepgram_unavailable_reason()` is the only check that blocks paid uploads. **Shared contracts:** `src/core/base_engine.py` (`ASREngine`, `EngineCapabilities`, `TranscriptionInputError`), imported by `api`, `services`, every engine and the registries. `src/core/model_registry.py`, imported by `api`, `services`, `workers`, `main`, `mlx_engine` and `factory`. `src/core/factory.py`, the only constructor of local engines, called by the worker (`model_worker.create_engine`). **Configuration:** `src/config.py`, which loads `.env` and is imported by every layer (`MODEL_IDLE_TIMEOUT_SEC`, `MAX_QUEUE_SIZE`, `DEEPGRAM_ENABLED`). **The FunASR engine** `src/core/funasr_engine.py`: the production default, and the home of the required `distribute_spk` patch |
-| **Branch** | `src/adapters/text.py`: a pure text-cleanup function, imported lazily by `funasr_engine` only for SenseVoice (around lines 223-226). A failure is limited to SenseVoice responses. No other path is mapped as Branch until it has the containment evidence the policy requires |
-| **Leaf** | Test additions under `tests/` that leave existing assertions, fixtures, helpers, configuration and baselines unchanged (see the offline test-only lane in `AGENTS.md`). `examples/demo_diarization.py` and `scripts/probe_qwen3_sortformer_longform.py`, which nothing in `src/` or `tests/` imports. A script that posts to the running service on port 50700 is not Leaf (see Unknown). `.env.example`, which no code reads. Historical records not referenced by `AGENTS.md` or `MODELS.md`: `docs/superpowers/`, `docs/2026-*-upgrade.md`, `.scratch/`, and the `docs/plans/` files not listed under Always stop. Documentation that states no rule (typo or link fixes in `README.md`, benchmark prose in `MODELS.md`) |
+| **Trunk** | **Request execution and admission:** `src/services/transcription.py`, `src/services/execution.py`, `src/services/worker_session.py`. Every HTTP request passes through them; they own `_spawn_lock`, model switching, upload temp files and worker lifetime (`AGENTS.md`, SPEC-016). **Worker process and IPC:** `src/workers/model_worker.py`, `src/workers/transport.py`; a hang or leak blocks every request and shutdown (history: the 2026-04-03 shutdown hang). **HTTP layer and startup:** `src/api/routes.py`, the only caller-facing surface; `src/main.py`, the composition root that starts and stops the service. **Deepgram remote session:** `src/services/remote_session.py`. `TranscriptionService` builds `RemoteSession` for every instance and calls its `start()` on startup and `close()` on shutdown; `GET /v1/models` calls `deepgram_unavailable_reason()` and `deepgram_configured()` for every caller; `deepgram_unavailable_reason()` is the only check that blocks paid uploads. The rest of that path: `src/adapters/deepgram_http.py` (API key in the `Authorization` header, the paid upload), `src/adapters/deepgram_output.py`, and `src/core/remote_port.py`, whose `RemoteTranscriptionError` `routes.py` imports at startup and catches for every request. **Shared contracts:** `src/core/base_engine.py` (`ASREngine`, `EngineCapabilities`, `TranscriptionInputError`), imported by `api`, `services`, every engine and the registries. `src/core/model_registry.py`, imported by `api`, `services`, `workers`, `main`, `mlx_engine` and `factory`. `src/core/factory.py`, the only constructor of local engines, called by the worker (`model_worker.create_engine`). **Configuration:** `src/config.py`, which loads `.env` and is imported by `api`, `services`, `main`, `adapters` (`audio_chunking`) and `core` (`factory`) (`MODEL_IDLE_TIMEOUT_SEC`, `MAX_QUEUE_SIZE`, `DEEPGRAM_ENABLED`). **The FunASR engine** `src/core/funasr_engine.py`: the production default, and the home of the required `distribute_spk` patch |
+| **Branch** | None mapped. Every local engine and its adapters run inside the shared worker queue (see above), so none has the containment evidence a controlled Branch needs. `src/adapters/text.py` runs there too (SenseVoice only) and is a Structure path |
+| **Leaf** | Test additions under `tests/` that leave existing assertions, fixtures, helpers, configuration and baselines unchanged (see the offline test-only lane in `AGENTS.md`). `examples/demo_diarization.py`, which nothing in `src/` or `tests/` imports. A script that posts to the running service on port 50700 is not Leaf (see Unknown). `.env.example`, which no code reads. Historical records that no other document cites as a contract, roadmap or acceptance evidence: `docs/superpowers/`, and `docs/plans/` files not listed under Always stop. Documentation that states no rule (typo or link fixes in `README.md`, benchmark prose in `MODELS.md`) |
 
 Not yet mapped, so treat as **Unknown**:
 
@@ -159,13 +180,18 @@ Not yet mapped, so treat as **Unknown**:
   also a stored PureSubs channel preference.
 - `src/core/apple_speech_engine.py` and the sidecar internal
   `apple-speech-worker/Sources/AppleSpeechWorkerCore/WorkerRuntime.swift`.
-  Each sidecar call has a 120-second timeout
-  (`src/adapters/apple_speech_worker_client.py`). Missing evidence: whether a
-  request that waits for that timeout holds `_spawn_lock` and blocks admission
-  for other aliases.
-- `src/adapters/deepgram_http.py`. It puts the API key in the `Authorization`
-  header and makes the paid upload. Missing evidence: none needed to stop; see
-  Always stop and One-way effects.
+  Apple requests do not hold `_spawn_lock`, but two couplings reach other
+  aliases. First, the first Apple request (and every Apple request while
+  `capabilities` keeps failing) runs `engine.load()` on the event loop, and
+  `load()` makes a blocking `subprocess.run` for up to
+  `APPLE_SPEECH_WORKER_TIMEOUT_SEC` (`src/config.py`, default 120). During that
+  time every HTTP request waits, including `paraformer`, `/health` and
+  `/v1/models` (`src/services/transcription.py`, `_get_apple_speech_engine`).
+  Second, pending Apple requests count against the shared `MAX_QUEUE_SIZE`
+  (`_active_job_count`) while they serialize on `_sidecar_semaphore`, so a hung
+  sidecar can make other aliases fail with "Queue full". Both point toward Trunk.
+  Missing evidence: whether the owner treats these as accepted risk or as
+  defects to fix before any Apple change can be a Branch.
 - The retired decoupled-diarization modules: `src/core/diarization_registry.py`,
   `src/core/alignment_registry.py`, `src/core/pipeline_registry.py`,
   `src/core/mlx_sortformer_diarizer.py`, `src/core/mlx_qwen_forced_aligner.py`,
@@ -176,8 +202,6 @@ Not yet mapped, so treat as **Unknown**:
   `audio_chunking.py` (the MLX path) imports `pipeline_chunking.py`. Missing
   evidence: whether a live path reaches them, and whether SPEC-016 intends to
   delete or keep them.
-- `src/core/remote_port.py`, imported by `api`, `services` and `adapters`.
-  Missing evidence: whether its types change anything outside the Deepgram path.
 - `examples/demo_clean_tags.py` and any script that posts to the running service
   on port 50700. Running it with another model alias makes the live service
   switch models, which shuts down the resident worker and can fail requests in
@@ -232,6 +256,16 @@ Not yet mapped, so treat as **Unknown**:
   `docs/plans/2026-09-07-puresubs-moss-integration.md`,
   `docs/plans/2026-09-07-moss-adapter-contract.md`,
   `docs/plans/2026-10-29-cloud-diarized-transcription.md`.
+- **Acceptance and roadmap records.** `docs/2026-*-upgrade.md` (cited by
+  `CHANGELOG.md` as upgrade evidence; `docs/2026-11-01-funasr-1419-upgrade.md`
+  records the owner's acceptance basis),
+  `docs/plans/2026-09-07-runtime-upgrades-and-moss-evaluation.md` (the maintained
+  roadmap named in `README.md` and `CHANGELOG.md`, which states authorization
+  limits), and `.scratch/runtime-upgrades-moss/` (admission evidence cited by
+  `CHANGELOG.md`).
+- **Retirement guard.** `scripts/probe_qwen3_sortformer_longform.py`, which CI
+  runs through `tests/unit/test_pipeline_registry.py` to prove the retired
+  `qwen3-sortformer` pipeline stays retired (SPEC-016).
 - **Paid-call gate and secrets.** `deepgram_unavailable_reason()` and
   `deepgram_configured()` in `src/services/remote_session.py`, `DEEPGRAM_*`
   settings in `src/config.py`, and key handling in `src/adapters/deepgram_http.py`.
@@ -266,11 +300,16 @@ no engine is a controlled Branch yet. The work splits like this:
    exact new response field (for example an optional `finish_reason` on
    `TranscriptionResponse`), its values, and how PureSubs should react.
 2. **Structure and Trunk ticket, within the design.** Add the optional field to
-   `src/api/routes.py` and the engine result in `src/core/base_engine.py`. Owner
-   decision before merge, with the PureSubs impact statement.
-3. **Unknown and wrong-but-green ticket.** Fill the field in
-   `src/core/mlx_engine.py` for one MLX model, with a real-model run on a long
-   clip. Owner decision before merge.
+   `TranscriptionResponse` in `src/api/routes.py`, to `TranscriptionResultDict`
+   in `src/services/execution.py`, and to the allowlist in
+   `_coerce_transcription_result` (`src/services/transcription.py`), which
+   otherwise drops unknown keys. Unit tests that mock the service stay green
+   even when the allowlist drops the field, so this is wrong-but-green: attach an
+   HTTP request against an isolated service instance. Owner decision before
+   merge, with the PureSubs impact statement.
+3. **Structure, Unknown and wrong-but-green ticket.** Fill the field in
+   `src/core/mlx_engine.py` (a Structure path) for one MLX model, with a
+   real-model run on a long clip. Owner decision before merge.
 4. **Leaf ticket.** Add unit tests for the new field mapping without changing
    existing assertions. Merge after review.
 5. **Stops.** Filling the field in the FunASR engine touches the Trunk production
