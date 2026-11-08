@@ -85,7 +85,8 @@ make it structure.
 - Transcript text producers, whose output PureSubs stores as
   `[<speaker>]: <text>` (`LocalWhisperService.ts`, lines ~238-244):
   `src/core/funasr_engine.py` (`Speaker N` labels, txt and srt rendering),
-  `src/adapters/moss_output.py`, `src/adapters/deepgram_output.py`,
+  `src/core/apple_speech_engine.py` (json and srt rendering returned directly
+  by `routes.py`), `src/adapters/moss_output.py`, `src/adapters/deepgram_output.py`,
   `src/services/remote_session.py` (`render_remote`).
 - `src/core/model_registry.py`: aliases, model IDs, and `MOSS_MODEL_REVISION`.
   PureSubs stores alias strings in its database (`schema.prisma`, line ~49), in
@@ -153,7 +154,7 @@ default. This is why no engine is a controlled Branch today.
 | --- | --- |
 | **Trunk** | **Request execution and admission:** `src/services/transcription.py`, `src/services/execution.py`, `src/services/worker_session.py`. Every HTTP request passes through them; they own `_spawn_lock`, model switching, upload temp files and worker lifetime (`AGENTS.md`, SPEC-016). **Worker process and IPC:** `src/workers/model_worker.py`, `src/workers/transport.py`; a hang or leak blocks every request and shutdown (history: the 2026-04-03 shutdown hang). **HTTP layer and startup:** `src/api/routes.py`, the only caller-facing surface; `src/main.py`, the composition root that starts and stops the service. **Deepgram remote session:** `src/services/remote_session.py`. `TranscriptionService` builds `RemoteSession` for every instance and calls its `start()` on startup and `close()` on shutdown; `GET /v1/models` calls `deepgram_unavailable_reason()` and `deepgram_configured()` for every caller; `deepgram_unavailable_reason()` is the only check that blocks paid uploads. **Shared contracts:** `src/core/base_engine.py` (`ASREngine`, `EngineCapabilities`, `TranscriptionInputError`), imported by `api`, `services`, every engine and the registries. `src/core/model_registry.py`, imported by `api`, `services`, `workers`, `main`, `mlx_engine` and `factory`. `src/core/factory.py`, the only constructor of local engines, called by the worker (`model_worker.create_engine`). **Configuration:** `src/config.py`, which loads `.env` and is imported by every layer (`MODEL_IDLE_TIMEOUT_SEC`, `MAX_QUEUE_SIZE`, `DEEPGRAM_ENABLED`). **The FunASR engine** `src/core/funasr_engine.py`: the production default, and the home of the required `distribute_spk` patch |
 | **Branch** | `src/adapters/text.py`: a pure text-cleanup function, imported lazily by `funasr_engine` only for SenseVoice (around lines 223-226). A failure is limited to SenseVoice responses. No other path is mapped as Branch until it has the containment evidence the policy requires |
-| **Leaf** | Test additions under `tests/` that leave existing assertions, fixtures, helpers, configuration and baselines unchanged (see the offline test-only lane in `AGENTS.md`). `examples/` and `scripts/probe_qwen3_sortformer_longform.py`, which nothing in `src/` or `tests/` imports. `.env.example`, which no code reads. Historical records not referenced by `AGENTS.md` or `MODELS.md`: `docs/superpowers/`, `docs/2026-*-upgrade.md`, `.scratch/`, and the `docs/plans/` files not listed under Always stop. Documentation that states no rule (typo or link fixes in `README.md`, benchmark prose in `MODELS.md`) |
+| **Leaf** | Test additions under `tests/` that leave existing assertions, fixtures, helpers, configuration and baselines unchanged (see the offline test-only lane in `AGENTS.md`). `examples/demo_diarization.py` and `scripts/probe_qwen3_sortformer_longform.py`, which nothing in `src/` or `tests/` imports. A script that posts to the running service on port 50700 is not Leaf (see Unknown). `.env.example`, which no code reads. Historical records not referenced by `AGENTS.md` or `MODELS.md`: `docs/superpowers/`, `docs/2026-*-upgrade.md`, `.scratch/`, and the `docs/plans/` files not listed under Always stop. Documentation that states no rule (typo or link fixes in `README.md`, benchmark prose in `MODELS.md`) |
 
 Not yet mapped, so treat as **Unknown**:
 
@@ -182,6 +183,10 @@ Not yet mapped, so treat as **Unknown**:
   delete or keep them.
 - `src/core/remote_port.py`, imported by `api`, `services` and `adapters`.
   Missing evidence: whether its types change anything outside the Deepgram path.
+- `examples/demo_clean_tags.py` and any script that posts to the running service
+  on port 50700. Running it with another model alias makes the live service
+  switch models, which shuts down the resident worker and can fail requests in
+  flight. Missing evidence: that it targets an isolated service instance.
 - `.github/dependabot.yml` and any path this table does not name.
 
 ## One-way effects in this repository
