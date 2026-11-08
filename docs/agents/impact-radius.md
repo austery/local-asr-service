@@ -11,9 +11,8 @@ local-asr-service and sets the review depth for each class.
 
 Read only its `## Current core` section. The North Star lives outside this
 repository because the service has already been rebuilt on another base once
-and the intent outlived it. As of 2026-11-08 `## Current core` is a draft that
-the owner has not yet confirmed; recheck the Trunk split and the examples below
-when the owner rewrites or confirms it.
+and the intent outlived it. The owner confirmed `## Current core` on
+2026-11-08; recheck the Trunk split and the examples below whenever it changes.
 
 Supporting sources, not the North Star:
 [ADR-002](../ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md) (the
@@ -53,7 +52,10 @@ source of each is in brackets.
   voice input, or Swift-native runtime code beyond the thin Apple Speech sidecar
   [Current core; ADR-002 Decision];
 - add local complexity for a capability upstream already provides, instead of
-  deleting local code [Current core].
+  deleting local code [Current core];
+- offer the service to other people: multi-user accounts, public or shared
+  hosting, or access control and quotas for other users [Current core: "for my
+  own use only"].
 
 Each change is classified on three separate axes:
 
