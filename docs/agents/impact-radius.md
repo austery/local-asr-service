@@ -5,6 +5,57 @@ One-way), Radius (Leaf / Branch / Trunk), Structure, the controlled-Branch
 evidence, and the execution gates. This file maps those terms onto
 local-asr-service and sets the review depth for each class.
 
+## North Star
+
+The product intent lives outside this repository, because the service has
+already been rebuilt on another base once and the intent outlived it:
+
+- `/Users/leipeng/Documents/research-notes/05-archive/2026-05-19_local-asr-service_boundary-creep-and-fitness-functions.md`
+  (boundary decision and fitness functions)
+- `/Users/leipeng/Documents/research-notes/05-archive/2026-07-06_local-asr-service_project-origin-and-early-evolution.md`
+  (origin and early evolution)
+
+In-repository implementation of that intent:
+[ADR-002](../ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md). It does not
+replace the North Star.
+
+- **Mission:** a lightweight, OpenAI-compatible local speech gateway for two
+  personal uses: local transcription for data pipelines (PureSubs and other
+  batch callers), and a local fallback when remote speech APIs are slow or down.
+- **Intended form:** depend on upstream speech runtimes (FunASR, `mlx-audio`,
+  Apple Speech) and own only a thin layer.
+- **Non-goals:** a general speech model framework or model zoo; model
+  architecture ports; inference kernels; model conversion pipelines; complex
+  diarization postprocessing; speaker embedding reconciliation; large
+  multi-model orchestration; desktop or mobile app UX; Swift-native runtime code
+  that belongs in a Swift package.
+
+**Trunk follows from the thin layer.** The mission depends on four things, and
+each one is Trunk below:
+
+| Thin-layer responsibility | Trunk paths |
+| --- | --- |
+| HTTP compatibility with OpenAI-style transcription | `src/api/routes.py`, `src/main.py` |
+| Queueing, single-worker execution, resource isolation, idle offload | `src/services/transcription.py`, `execution.py`, `worker_session.py`; `src/workers/` |
+| Model aliases and capability gating | `src/core/model_registry.py`, `base_engine.py`, `factory.py`, `src/config.py` |
+| Response normalization (predictable JSON for callers) | the transcript producers listed under Structure paths, led by `src/core/funasr_engine.py` |
+
+**`north_star_conflict` examples.** A task that does any of these is a product
+decision for the owner, not an implementation detail, whatever its radius:
+
+- port or reimplement a model architecture, or vendor a fork of upstream model
+  code (beyond the existing narrow FunASR `distribute_spk` patch);
+- add inference kernels, quantization, or model conversion pipelines;
+- add speaker embedding fallback, clustering, cross-chunk speaker
+  reconciliation, or other diarization postprocessing beyond the existing
+  minimal logic;
+- add a new job domain or a general multi-model orchestration path (for example,
+  restoring the retired `qwen3-sortformer` pipeline or its borrow/restore logic);
+- make an experimental or cloud alias the default model, or add automatic
+  routing between models;
+- add app UI, microphone capture, streaming voice input, or Swift-native runtime
+  code beyond the thin Apple Speech sidecar.
+
 Each change is classified on three separate axes:
 
 1. **Door:** can the change and its effects be undone?
