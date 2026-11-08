@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,109 @@ def test_analyze_segments_marks_all_non_dict_items_as_invalid() -> None:
     assert summary.monotonic is False
     assert summary.missing_timing_count == 3
     assert summary.zero_or_negative_duration_count == 0
+
+
+@pytest.mark.parametrize("field", ["start", "end"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), True, False, None])
+def test_analyze_segments_treats_invalid_numbers_as_missing(
+    field: str, value: object
+) -> None:
+    segment: dict[str, object] = {"start": 0, "end": 1}
+    segment[field] = value
+
+    summary = analyze_segments({"segments": [segment]})
+
+    assert summary.field_state == "non_empty"
+    assert summary.count == 1
+    assert summary.monotonic is False
+    assert summary.missing_timing_count == 1
+    assert summary.zero_or_negative_duration_count == 0
+
+
+@pytest.mark.parametrize("field", ["start", "end"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_analyze_segments_preserves_count_around_non_finite_timing(
+    field: str, value: float
+) -> None:
+    segment = {"start": 1.0, "end": 2.0}
+    segment[field] = value
+
+    summary = analyze_segments(
+        {
+            "segments": [
+                {"start": 0.0, "end": 1.0},
+                segment,
+                {"start": 2.0, "end": 3.0},
+            ]
+        }
+    )
+
+    assert summary.field_state == "non_empty"
+    assert summary.count == 3
+    assert summary.missing_timing_count == 1
+    assert summary.monotonic is False
+    assert summary.zero_or_negative_duration_count == 0
+
+
+@pytest.mark.parametrize("field", ["start", "end"])
+def test_analyze_segments_treats_absent_timestamps_as_missing(field: str) -> None:
+    segment = {"start": 0, "end": 1}
+    del segment[field]
+
+    summary = analyze_segments({"segments": [segment]})
+
+    assert summary.monotonic is False
+    assert summary.missing_timing_count == 1
+
+
+@pytest.mark.parametrize("start,end", [(0, 1), (0.25, 1.5), (-2, -1.5)])
+def test_analyze_segments_preserves_finite_timestamps(
+    start: int | float, end: int | float
+) -> None:
+    summary = analyze_segments({"segments": [{"start": start, "end": end}]})
+
+    assert summary.monotonic is True
+    assert summary.missing_timing_count == 0
+    assert summary.zero_or_negative_duration_count == 0
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), True, False, None])
+def test_summarize_json_response_normalizes_invalid_duration(value: object) -> None:
+    assert summarize_json_response({"duration": value}).duration is None
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_summarize_json_response_serializes_non_finite_duration_as_null(
+    value: float,
+) -> None:
+    summary = summarize_json_response(
+        {"duration": value, "segments": [{"start": 0.0, "end": 1.0}]}
+    )
+
+    converted = summary.to_json()
+    serialized = json.dumps(converted, allow_nan=False)
+    restored = json.loads(serialized)
+
+    assert summary.duration is None
+    assert converted["duration"] is None
+    assert restored["duration"] is None
+    assert restored == converted
+    assert restored["segments"] == {
+        "field_state": "non_empty",
+        "count": 1,
+        "monotonic": True,
+        "missing_timing_count": 0,
+        "zero_or_negative_duration_count": 0,
+    }
+
+
+def test_summarize_json_response_preserves_missing_duration() -> None:
+    assert summarize_json_response({}).duration is None
+
+
+@pytest.mark.parametrize("value", [0, 2, -1, 0.25, -1.5])
+def test_summarize_json_response_preserves_finite_duration(value: int | float) -> None:
+    assert summarize_json_response({"duration": value}).duration == float(value)
 
 
 def test_summarize_json_response_keeps_model_language_and_preview() -> None:
