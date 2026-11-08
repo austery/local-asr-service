@@ -138,6 +138,11 @@ make it structure.
   transcript output for the same weights. On 2026-11-07 a local isolated A/B
   (kept outside the repository) found that FunASR 1.4.23 changed segmentation
   and the speaker count on the same clip compared with 1.4.19.
+- Architecture decision records: `docs/ADR-*.md` (today `ADR-001.md` and
+  `ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md`). New ADRs go in
+  `docs/` with the same `ADR-<number>-<title>.md` name. A new ADR needs the
+  owner's approval (`~/Documents/global-skills/agents/DOC-LIFECYCLE.md`, "Task
+  closeout"); listing the path here makes it stop.
 - Policy fallback globs: `**/migrations/**`, `**/*.prisma`, `**/schema.*`,
   `**/*.sql`. None exists today; adding one is a new data model and needs a
   design.
@@ -165,6 +170,8 @@ Structure = touched means:
     value; recovery for those rows is One-way (see below).
   - IPC or sidecar protocol: show that both sides ship together, and that a
     restart of the service restores a matched pair.
+  - ADR: the owner's approval of the ADR text. A changed decision gets a new ADR;
+    the old one changes only its status (`Superseded by ADR-<number>`).
 
 Add a path here when the project gains another kind of persistent structure, such
 as a job store, a result cache, or a new sidecar protocol.
@@ -240,6 +247,9 @@ Not yet mapped, so treat as **Unknown**:
     `tests/reliability/test_worker_session_process.py`).
   - `tach.toml` boundary rules and `tests/unit/test_architecture_fitness.py`
     (SPEC-015).
+  - The Markdown link check `scripts/check_doc_links.py` (run by CI), its
+    test `tests/unit/test_check_doc_links.py`, and the version of its parser
+    `markdown-it-py` (a dev dependency) in `uv.lock`.
   - Test configuration in `pyproject.toml`: `[tool.ruff*]`,
     `[tool.pytest.ini_options]`, `[tool.mypy]`. Version changes of `ruff`,
     `tach`, `pytest` or `mypy` in `uv.lock`.

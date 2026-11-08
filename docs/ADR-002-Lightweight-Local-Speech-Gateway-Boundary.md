@@ -157,7 +157,7 @@ The watch process should answer one question: "Can upstream now do something tha
 
 ## Fitness Functions
 
-To keep the boundary from drifting again, we enforce architectural constraints automatically under [SPEC-015](file:///Users/leipeng/Documents/Projects/local-asr-service/docs/SPEC-015-Architecture-Fitness-Harness.md):
+To keep the boundary from drifting again, we enforce architectural constraints automatically under [SPEC-015](SPEC-015-Architecture-Fitness-Harness.md):
 
 - **Module Dependencies**: Enforced via **Tach** (`tach.toml`). Dependencies flow strictly inward from API to Core/Adapters.
 - **Code Complexity**: Enforced via **Ruff** McCabe (`C901`) and Pylint complexity checks (`PLR0915`, `PLR0912`), limiting method length and cyclomatic complexity.

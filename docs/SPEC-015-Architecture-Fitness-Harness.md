@@ -18,11 +18,11 @@ tags:
 
 ## 1. Goal
 
-Establish an automated, lightweight, and unified architecture and quality harness to enforce the project boundaries defined in [ADR-002](file:///Users/leipeng/Documents/Projects/local-asr-service/docs/ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md) and prevent boundary creep.
+Establish an automated, lightweight, and unified architecture and quality harness to enforce the project boundaries defined in [ADR-002](ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md) and prevent boundary creep.
 
 ## 2. Background
 
-In [ADR-002](file:///Users/leipeng/Documents/Projects/local-asr-service/docs/ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md), we defined the `local-asr-service` as a lightweight OpenAI-compatible local speech gateway, not a general speech model platform. However, without automated guardrails, the codebase remains susceptible to incremental creep:
+In [ADR-002](ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md), we defined the `local-asr-service` as a lightweight OpenAI-compatible local speech gateway, not a general speech model platform. However, without automated guardrails, the codebase remains susceptible to incremental creep:
 - Import dependency leaks (e.g., inner layers importing from outer layers).
 - Cognitive complexity accumulation (e.g., long helper functions bypass review).
 - Registry inconsistency (e.g., experimental models marked requestable or missing from `MODELS.md`).
@@ -66,7 +66,7 @@ We configure `Ruff` in `pyproject.toml` to fail on excessively complex methods:
   - `PLR0913` (Too many arguments): Set `max-args = 5`.
 
 ### 4.3. Project-Specific Semantic Checks (`pytest`)
-A dedicated unit test file [test_architecture_fitness.py](file:///Users/leipeng/Documents/Projects/local-asr-service/tests/unit/test_architecture_fitness.py) is introduced to statically verify the following draft requirements:
+A dedicated unit test file [test_architecture_fitness.py](../tests/unit/test_architecture_fitness.py) is introduced to statically verify the following draft requirements:
 1. **`MODELS.md` Sync**: Automatically scans the model and pipeline registries, verifying that all registered aliases are documented.
 2. **Explicit `requestable`**: Checks that all pipeline profiles explicitly declare `requestable` in their definition, rather than relying on defaults.
 3. **Module Gating**: Asserts that only approved engine adapters and diarization reconciliation modules exist, blocking undocumented extensions.
@@ -78,17 +78,17 @@ A dedicated unit test file [test_architecture_fitness.py](file:///Users/leipeng/
 ## 5. Implementation Phases
 
 ### Phase 1: Dependency Setup & Linter Configuration
-- [x] Add `tach>=0.34.0` to `dependency-groups.dev` in [pyproject.toml](file:///Users/leipeng/Documents/Projects/local-asr-service/pyproject.toml).
+- [x] Add `tach>=0.34.0` to `dependency-groups.dev` in [pyproject.toml](../pyproject.toml).
 - [x] Enable `C901` and `PLR` rules in Ruff's `select` list in `pyproject.toml`.
 - [x] Run `uv run ruff check .` and fix or suppress any existing violations.
 - [x] Run `uv sync`.
 
 ### Phase 2: Tach Boundary Specification
-- [x] Create [tach.toml](file:///Users/leipeng/Documents/Projects/local-asr-service/tach.toml) configuration.
+- [x] Create [tach.toml](../tach.toml) configuration.
 - [x] Execute `uv run tach check` to verify existing imports and correct any architectural leaks.
 
 ### Phase 3: Custom Fitness Tests
-- [x] Create [test_architecture_fitness.py](file:///Users/leipeng/Documents/Projects/local-asr-service/tests/unit/test_architecture_fitness.py).
+- [x] Create [test_architecture_fitness.py](../tests/unit/test_architecture_fitness.py).
 - [x] Verify test suite execution: `uv run pytest tests/unit/test_architecture_fitness.py`.
 
 ---
@@ -112,5 +112,5 @@ A dedicated unit test file [test_architecture_fitness.py](file:///Users/leipeng/
 
 ## 8. Related
 
-- **Code**: [pyproject.toml](file:///Users/leipeng/Documents/Projects/local-asr-service/pyproject.toml)
-- **ADRs**: [ADR-002](file:///Users/leipeng/Documents/Projects/local-asr-service/docs/ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md)
+- **Code**: [pyproject.toml](../pyproject.toml)
+- **ADRs**: [ADR-002](ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md)
