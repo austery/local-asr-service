@@ -112,8 +112,10 @@ Not yet mapped, so treat as **Unknown**:
   also a stored PureSubs channel preference.
 - `src/core/apple_speech_engine.py` and the sidecar internal
   `apple-speech-worker/Sources/AppleSpeechWorkerCore/WorkerRuntime.swift`.
-  Missing evidence: whether a hung sidecar process blocks admission for other
-  requests.
+  Each sidecar call has a 120-second timeout
+  (`src/adapters/apple_speech_worker_client.py`). Missing evidence: whether a
+  request that waits for that timeout holds `_spawn_lock` and blocks admission
+  for other aliases.
 - `src/adapters/deepgram_http.py`. It puts the API key in the `Authorization`
   header and makes the paid upload. Missing evidence: none needed to stop; see
   Always stop and One-way effects.
