@@ -169,8 +169,10 @@ model stops at its output-token limit. The work splits like this:
 
 As of 2026-11-08, none of these holds, so automatic merge stays off:
 
-- **`main` requires the CI check.** `main` has no ruleset requiring the
-  `Lint, Boundary, and Unit Tests` job, and GitHub auto-merge is not enabled.
+- **`main` requires the CI check.** The only ruleset on `main` ("protest my main
+  branch") blocks deletion and force-push. It does not require the
+  `Lint, Boundary, and Unit Tests` job, there is no classic branch protection,
+  and GitHub auto-merge is disabled.
 - **Agents and the owner have different GitHub identities.** PRs are authored and
   merged as the owner's account, and `ci.yml` runs from the PR itself, so a PR can
   change the check that judges it. Until agents act through a separate account or
