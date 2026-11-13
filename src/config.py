@@ -92,6 +92,9 @@ APPLE_SPEECH_WORKER_PATH = os.getenv(
 )
 APPLE_SPEECH_WORKER_TIMEOUT_SEC = float(os.getenv("APPLE_SPEECH_WORKER_TIMEOUT_SEC", "120"))
 APPLE_SPEECH_MAX_CONCURRENCY = max(1, int(os.getenv("APPLE_SPEECH_MAX_CONCURRENCY", "1")))
+# Explicit Apple Speech requests have their own admission limit, so slow sidecar
+# calls cannot fill MAX_QUEUE_SIZE and reject local-model requests (Issue #72).
+APPLE_SPEECH_MAX_QUEUE_SIZE = max(1, int(os.getenv("APPLE_SPEECH_MAX_QUEUE_SIZE", str(MAX_QUEUE_SIZE))))
 
 # Tokenizers 并行警告抑制
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")

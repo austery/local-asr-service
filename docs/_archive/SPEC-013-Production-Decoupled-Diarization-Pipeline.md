@@ -1,7 +1,7 @@
 ---
 specId: SPEC-013
 title: Experimental Qwen3 + Sortformer Speaker Separation Pipeline
-status: 🧪 实验保留 (Experimental)
+status: 🛑 退役 (Retired — retired from production orchestration by ADR-002 and SPEC-016)
 priority: P1 - Core Feature
 creationDate: 2026-05-17
 lastUpdateDate: 2026-05-21

@@ -4,6 +4,12 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Give explicit `apple-speech` requests their own admission limit,
+  `APPLE_SPEECH_MAX_QUEUE_SIZE` (default: `MAX_QUEUE_SIZE`), so slow sidecar
+  calls no longer reject local-model requests with "Queue full". Passthrough
+  requests that route to Apple Speech still count toward `MAX_QUEUE_SIZE`.
+  Run the first Apple Speech `load()` off the event loop (Issue #72).
+
 - Prepare FunASR 1.4.19 with unchanged model weights and the existing speaker
   timestamp patch. Isolated Mandarin samples retain full text and timestamps,
   improve segment text allocation, and take longer to process. Runtime activation
