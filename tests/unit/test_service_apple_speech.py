@@ -11,6 +11,7 @@ import pytest
 from fastapi import UploadFile
 
 from src.core.model_registry import lookup
+from src.services.execution import ExecutionResult
 from src.services.transcription import TranscriptionService
 
 
@@ -246,18 +247,112 @@ async def test_submit_apple_speech_limits_sidecar_concurrency() -> None:
     assert fake_engine.max_active == 1
 
 
-@pytest.mark.asyncio
-async def test_submit_apple_speech_rejects_when_combined_queue_is_full() -> None:
-    service = TranscriptionService(engine_type="funasr", model_id="iic/default", max_queue_size=1)
-    service._sidecar_pending.add("busy-request")
+class BlockingAppleSpeechEngine(FakeAppleSpeechEngine):
+    """Holds transcribe_file until released, to keep a sidecar request in flight."""
 
-    with pytest.raises(RuntimeError, match="Queue is full"):
-        await service.submit(
-            _upload(),
-            {"language": "en", "output_format": "json", "with_timestamp": False},
-            request_id="req-queue-full",
-            model_spec=lookup("apple-speech"),
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def transcribe_file(
+        self,
+        file_path: str,
+        language: str = "auto",
+        output_format: str = "json",
+        with_timestamp: bool = False,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        self.started.set()
+        assert self.release.wait(timeout=5)
+        return super().transcribe_file(file_path, language, output_format, with_timestamp)
+
+
+_APPLE_PARAMS: dict[str, object] = {"language": "en", "output_format": "json", "with_timestamp": False}
+
+
+async def _wait_until_started(engine: BlockingAppleSpeechEngine) -> None:
+    assert await asyncio.to_thread(engine.started.wait, 5)
+
+
+@pytest.mark.asyncio
+async def test_submit_apple_speech_rejects_when_apple_queue_is_full() -> None:
+    service = TranscriptionService(
+        engine_type="funasr", model_id="iic/default", max_queue_size=50, apple_speech_max_queue_size=1
+    )
+    engine = BlockingAppleSpeechEngine()
+
+    with patch.object(service, "_get_apple_speech_engine", return_value=engine):
+        first = asyncio.create_task(
+            service.submit(_upload(), dict(_APPLE_PARAMS), request_id="apple-1", model_spec=lookup("apple-speech"))
         )
+        await _wait_until_started(engine)
+        try:
+            with pytest.raises(RuntimeError, match="Queue is full"):
+                await service.submit(
+                    _upload(), dict(_APPLE_PARAMS), request_id="apple-2", model_spec=lookup("apple-speech")
+                )
+        finally:
+            engine.release.set()
+            await first
+
+    assert service.queue_size == 0
+
+
+@pytest.mark.asyncio
+async def test_pending_apple_speech_requests_do_not_fill_the_local_model_queue() -> None:
+    service = TranscriptionService(
+        engine_type="funasr", model_id="iic/default", max_queue_size=1, apple_speech_max_queue_size=5
+    )
+    engine = BlockingAppleSpeechEngine()
+    resident = AsyncMock(return_value=ExecutionResult({"text": "local"}, "paraformer"))
+
+    with (
+        patch.object(service, "_get_apple_speech_engine", return_value=engine),
+        patch.object(service, "_submit_resident_job", resident),
+    ):
+        apple = asyncio.create_task(
+            service.submit(_upload(), dict(_APPLE_PARAMS), request_id="apple-1", model_spec=lookup("apple-speech"))
+        )
+        await _wait_until_started(engine)
+        try:
+            assert service.queue_size == 1
+            result = await service.submit(_upload(), dict(_APPLE_PARAMS), request_id="local-1")
+        finally:
+            engine.release.set()
+            await apple
+
+    assert result.payload == {"text": "local"}
+    resident.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_first_apple_speech_load_does_not_block_the_event_loop() -> None:
+    service = TranscriptionService(engine_type="funasr", model_id="iic/default")
+
+    class SlowLoadingEngine(FakeAppleSpeechEngine):
+        def load(self) -> None:
+            time.sleep(0.3)  # Stands in for the blocking capabilities subprocess.
+
+    ticks = 0
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    beat = asyncio.create_task(heartbeat())
+    try:
+        with patch("src.services.transcription.AppleSpeechEngine.from_config", return_value=SlowLoadingEngine()):
+            await service.submit(
+                _upload(), dict(_APPLE_PARAMS), request_id="apple-load", model_spec=lookup("apple-speech")
+            )
+    finally:
+        beat.cancel()
+
+    # A blocking load would freeze the loop for 0.3 s and leave the heartbeat near zero.
+    assert ticks >= 10
 
 
 @pytest.mark.asyncio

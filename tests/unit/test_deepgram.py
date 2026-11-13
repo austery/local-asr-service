@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine
 from io import BytesIO
 from pathlib import Path
 from typing import cast
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import httpx
@@ -365,8 +366,12 @@ async def test_serial_cloud_capacity_and_queued_cancel_never_uploads() -> None:
     assert provider.calls == 1
     with pytest.raises(RuntimeError, match="Queue is full"):
         await service.submit(upload(), {}, "native-overflow")
-    with pytest.raises(RuntimeError, match="Queue is full"):
-        await service.submit(upload(), {"language": "en"}, "apple-overflow", lookup("apple-speech"))
+    # Explicit Apple Speech requests have their own limit (Issue #72), so a full
+    # shared queue still admits them.
+    sidecar = AsyncMock(return_value={"text": "apple"})
+    with patch.object(service, "_submit_apple_speech_job", sidecar):
+        await service.submit(upload(), {"language": "en"}, "apple-separate-limit", lookup("apple-speech"))
+    sidecar.assert_awaited_once()
     second.cancel()
     with pytest.raises(asyncio.CancelledError):
         await second
