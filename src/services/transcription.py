@@ -9,6 +9,7 @@ from fastapi import UploadFile
 
 from src.config import (
     APPLE_SPEECH_MAX_CONCURRENCY,
+    APPLE_SPEECH_MAX_QUEUE_SIZE,
     APPLE_SPEECH_WORKER_PATH,
     APPLE_SPEECH_WORKER_TIMEOUT_SEC,
 )
@@ -46,12 +47,16 @@ class TranscriptionService:
         *,
         worker_session: WorkerSession | None = None,
         remote_session: RemoteSession | None = None,
+        apple_speech_max_queue_size: int | None = None,
     ) -> None:
         self._engine_type = engine_type
         self._model_id = model_id
         self._current_model_spec = initial_model_spec
         self._idle_timeout = idle_timeout
         self._max_queue_size = max_queue_size
+        self._apple_speech_max_queue_size = (
+            APPLE_SPEECH_MAX_QUEUE_SIZE if apple_speech_max_queue_size is None else apple_speech_max_queue_size
+        )
 
         if initial_model_spec is not None and initial_model_spec.engine_type == "deepgram":
             raise ValueError("Cloud aliases cannot be startup MODEL_ID; select Deepgram per request.")
@@ -60,9 +65,11 @@ class TranscriptionService:
         self._session = worker_session or WorkerSession()
         self._spawn_lock = asyncio.Lock()
         self._stopping = False
-        self._sidecar_pending: set[str] = set()
+        # Explicit Apple Speech admissions; counted against their own limit only.
+        self._sidecar_admitted = 0
         self._sidecar_semaphore = asyncio.Semaphore(APPLE_SPEECH_MAX_CONCURRENCY)
         self._apple_speech_engines: dict[str, AppleSpeechEngine] = {}
+        self._apple_speech_load_lock = asyncio.Lock()
         self.is_running = False
 
         self.logger = logging.getLogger(__name__)
@@ -87,7 +94,7 @@ class TranscriptionService:
     @property
     def queue_size(self) -> int:
         """Number of jobs currently in-flight across worker and sidecar paths."""
-        return self._active_job_count()
+        return self._resident_job_count() + self._sidecar_admitted
 
     @property
     def max_queue_size(self) -> int:
@@ -126,7 +133,14 @@ class TranscriptionService:
         explicit_plan = ExecutionPlan.select(model_spec, self._model_id) if model_spec is not None else None
         if explicit_plan is not None:
             explicit_plan.validate(params)
-        if self._active_job_count() >= self._max_queue_size:
+        # Explicit Apple Speech requests run in the sidecar, not the resident
+        # worker, so they are admitted against their own limit (Issue #72).
+        sidecar = explicit_plan is not None and self._is_apple_speech_spec(explicit_plan.spec)
+        if sidecar:
+            if self._sidecar_admitted >= self._apple_speech_max_queue_size:
+                self.logger.warning(f"[{request_id}] Apple Speech queue full, rejecting request")
+                raise RuntimeError("Service busy: Queue is full.")
+        elif self._resident_job_count() >= self._max_queue_size:
             self.logger.warning(f"[{request_id}] Queue full, rejecting request")
             raise RuntimeError("Service busy: Queue is full.")
 
@@ -137,7 +151,10 @@ class TranscriptionService:
             file.file.seek(0)
         # No await between shutdown/capacity checks and reservation. All paths count,
         # including requests waiting for native startup or a remote semaphore.
-        self._admitted += 1
+        if sidecar:
+            self._sidecar_admitted += 1
+        else:
+            self._admitted += 1
         deadline = self._remote.deadline() if cloud else 0.0
         temp_dir: str | None = None
         try:
@@ -154,7 +171,7 @@ class TranscriptionService:
                 return ExecutionResult(render_remote(remote_result, params.get("output_format", "json"), params.get("with_timestamp") is True), explicit_plan.model)
 
             # Explicit sidecar requests do not wait for resident-worker startup.
-            if explicit_plan is not None and self._is_apple_speech_spec(explicit_plan.spec):
+            if sidecar and explicit_plan is not None:
                 result = await self._submit_apple_speech_job(
                     temp_file_path=temp_path, params=params, request_id=request_id,
                 )
@@ -170,7 +187,10 @@ class TranscriptionService:
         finally:
             if temp_dir is not None:
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            self._admitted -= 1
+            if sidecar:
+                self._sidecar_admitted -= 1
+            else:
+                self._admitted -= 1
 
     async def _submit_resident_job(
         self,
@@ -180,7 +200,7 @@ class TranscriptionService:
         plan: ExecutionPlan | None,
         admitted: bool = False,
     ) -> ExecutionResult:
-        if not admitted and self._active_job_count() >= self._max_queue_size:
+        if not admitted and self._resident_job_count() >= self._max_queue_size:
             raise RuntimeError("Service busy: Queue is full.")
         # Select passthrough under the same lock that protects model switches.
         # Release it after enqueue, so waiting for inference never serializes
@@ -206,26 +226,30 @@ class TranscriptionService:
             result = await future
         return ExecutionResult(self._coerce_transcription_result(result), selected.model)
 
-    def _active_job_count(self) -> int:
-        return max(self._admitted, self._session.pending_count + len(self._sidecar_pending))
+    def _resident_job_count(self) -> int:
+        """Admissions that share MAX_QUEUE_SIZE: resident worker, cloud, and passthrough."""
+        return max(self._admitted, self._session.pending_count)
 
     @staticmethod
     def _is_apple_speech_spec(model_spec: ModelSpec | None) -> bool:
         return model_spec is not None and model_spec.engine_type == "apple-speech"
 
-    def _get_apple_speech_engine(self) -> AppleSpeechEngine:
+    async def _get_apple_speech_engine(self) -> AppleSpeechEngine:
         module: AppleSpeechModule = "speechTranscriber"
-        engine = self._apple_speech_engines.get(module)
-        if engine is None:
-            engine = AppleSpeechEngine.from_config(
-                AppleSpeechEngineConfig(
-                    worker_path=Path(APPLE_SPEECH_WORKER_PATH),
-                    timeout_seconds=APPLE_SPEECH_WORKER_TIMEOUT_SEC,
-                ),
-                module=module,
-            )
-            engine.load()
-            self._apple_speech_engines[module] = engine
+        async with self._apple_speech_load_lock:
+            engine = self._apple_speech_engines.get(module)
+            if engine is None:
+                engine = AppleSpeechEngine.from_config(
+                    AppleSpeechEngineConfig(
+                        worker_path=Path(APPLE_SPEECH_WORKER_PATH),
+                        timeout_seconds=APPLE_SPEECH_WORKER_TIMEOUT_SEC,
+                    ),
+                    module=module,
+                )
+                # load() runs a blocking subprocess for up to the worker timeout;
+                # keep it off the event loop so other requests stay responsive.
+                await asyncio.to_thread(engine.load)
+                self._apple_speech_engines[module] = engine
         return engine
 
     async def _submit_apple_speech_job(
@@ -237,22 +261,18 @@ class TranscriptionService:
         if self._stopping:
             raise RuntimeError("Service is stopping")
 
-        self._sidecar_pending.add(request_id)
-        try:
-            async with self._sidecar_semaphore:
-                engine = self._get_apple_speech_engine()
-                language = params.get("language", "auto")
-                output_format = params.get("output_format", "json")
-                with_timestamp = params.get("with_timestamp", False)
-                return await asyncio.to_thread(
-                    engine.transcribe_file,
-                    temp_file_path,
-                    language=language if isinstance(language, str) else "auto",
-                    output_format=output_format if isinstance(output_format, str) else "json",
-                    with_timestamp=with_timestamp if isinstance(with_timestamp, bool) else False,
-                )
-        finally:
-            self._sidecar_pending.discard(request_id)
+        async with self._sidecar_semaphore:
+            engine = await self._get_apple_speech_engine()
+            language = params.get("language", "auto")
+            output_format = params.get("output_format", "json")
+            with_timestamp = params.get("with_timestamp", False)
+            return await asyncio.to_thread(
+                engine.transcribe_file,
+                temp_file_path,
+                language=language if isinstance(language, str) else "auto",
+                output_format=output_format if isinstance(output_format, str) else "json",
+                with_timestamp=with_timestamp if isinstance(with_timestamp, bool) else False,
+            )
 
     async def _enqueue_worker_job(
         self,

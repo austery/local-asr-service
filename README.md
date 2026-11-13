@@ -268,6 +268,7 @@ MODEL_IDLE_TIMEOUT_SEC=60     # Worker auto-terminates after idle period (0 = di
 APPLE_SPEECH_WORKER_PATH=apple-speech-worker/.build/debug/apple-speech-worker
 APPLE_SPEECH_WORKER_TIMEOUT_SEC=120
 APPLE_SPEECH_MAX_CONCURRENCY=1
+APPLE_SPEECH_MAX_QUEUE_SIZE=50   # Separate limit for explicit apple-speech requests (default: MAX_QUEUE_SIZE)
 
 # Audio processing (generic MLX path; MOSS has a separate fixed 30-minute bound)
 MAX_AUDIO_DURATION_MINUTES=50   # Auto-chunk audio longer than this
