@@ -217,7 +217,7 @@ Retain the accepted September runtime/MOSS decisions and these records:
 - FunASR 1.4.14 validation (checkout-local: `.scratch/runtime-upgrades-moss/evidence/2026-09-07-funasr-preflight.md`), PR #29
 - Bounded MOSS admission (checkout-local: `.scratch/runtime-upgrades-moss/evidence/2026-09-07-moss-adapter-admission.md`), PR #30
 - [MOSS adapter contract](2026-09-07-moss-adapter-contract.md) and duration evidence (checkout-local: `.scratch/runtime-upgrades-moss/evidence/2026-09-07-moss-duration-validation.md`)
-- [ADR-002](../ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md), [SPEC-016](../SPEC-016-runtime-module-deepening.md), [model roles](../../MODELS.md), [changelog](../../CHANGELOG.md)
+- [ADR-002](../ADR-002-Lightweight-Local-Speech-Gateway-Boundary.md), [SPEC-016](../_archive/SPEC-016-runtime-module-deepening.md), [model roles](../../MODELS.md), [changelog](../../CHANGELOG.md)
 
 Historical `.scratch` evidence is checkout-local and may not exist in another
 clone. Record availability before relying on it. Do not infer fresh acceptance
