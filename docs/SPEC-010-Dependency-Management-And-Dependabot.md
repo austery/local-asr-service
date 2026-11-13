@@ -4,7 +4,7 @@ title: Dependency Management and Dependabot Configuration Strategy
 status: 🟡 待实施 (Ready for Implementation)
 priority: P1 - Core Infrastructure
 creationDate: 2026-03-16
-lastUpdateDate: 2026-03-16
+lastUpdateDate: 2026-11-13
 owner: Copilot (AI-Assisted)
 relatedSpecs:
   - SPEC-001
@@ -141,6 +141,39 @@ Establish a centralized, version-constraint strategy for Python dependencies to 
 | `torchaudio <3.0` | Must track torch version | With torch monitoring |
 | `funasr <2.0` | No monitoring yet; upgrade deferred until major version released | Quarterly or on 2.0 alpha |
 
+## 5a. When a Runtime Upgrade Is Worth Doing
+
+Scope: the inference runtimes in `uv.lock` (`funasr`, `torch`, `torchaudio`,
+`mlx`, `mlx-audio`, `mlx-metal`). Owner decision, 2026-11-13. A new release
+alone is not a reason to upgrade. Start an upgrade only when every condition
+below holds:
+
+1. **Released.** The fix or feature is in a published PyPI release. A merged
+   upstream PR is not enough.
+2. **Reachable.** The changed upstream code is on a path a production alias
+   runs (`paraformer`, `qwen3-asr`, `sensevoice-small`, `moss-transcribe-diarize`).
+   Trace the call down to the class the cached model's config selects. A
+   changelog title is not evidence: the 2026-11-13 review found that the
+   "Paraformer" CIF fix (#3854) does not reach SEACO Paraformer, which uses
+   `CifPredictorV3`.
+3. **Measurable benefit.** The change fixes a failure we observed or can
+   reproduce, or improves an outcome we can measure on the approved clips. A
+   cosmetic text change does not count as benefit by itself.
+4. **Known regressions accepted.** Every behavior change inherited from the
+   intermediate releases is either judged acceptable by the owner or outweighed
+   by the benefit. Example: the FunASR 1.4.23 VAD end-silence change split one
+   speaker into two on the 300-second clip, and every later FunASR release
+   carries it ([radius map](agents/impact-radius.md), Dependencies).
+5. **A/B cost accepted.** The owner agrees to run the real-model A/B on the
+   approved clips that the radius map requires for a runtime change
+   ("Structure = touched"). It uses cached weights only, and it never runs
+   beside the live service.
+
+If any condition fails, record the decision and its re-evaluation trigger in
+the status history below, and wait. Prefer one upgrade that collects several
+released fixes over a series of small upgrades: each upgrade costs one A/B.
+Security fixes follow the Dependabot path and are assessed separately.
+
 ## 6. Acceptance Criteria
 
 - [ ] `.github/dependabot.yml` exists and is syntactically valid
@@ -270,6 +303,7 @@ dependencies = [
 | Date | Status | Note |
 |------|--------|------|
 | 2026-03-16 | 🟡 待实施 (Ready for Implementation) | Initial analysis complete, awaiting implementation |
+| 2026-11-13 | Runtime upgrades deferred | Reviewed against §5a. FunASR stays at 1.4.19 (latest 1.4.26): no released fix reaches the production path with a measurable benefit, and 1.4.23+ carries the speaker-split change. Re-evaluate when upstream releases #3848 (empty-ASR result row) or #3862 (pure-silence VAD segments). mlx-audio stays at 0.6.1 (latest 0.6.5): Qwen3-ASR #1155 (per-chunk token budget) and the Whisper fixes #1164/#1165 merged after 0.6.5. Re-evaluate when a release contains #1155. |
 
 ## 10. Related
 
