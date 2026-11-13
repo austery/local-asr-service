@@ -1,7 +1,7 @@
 ---
 specId: SPEC-011
 title: Pipeline Foundation Hardening for Decoupled Diarization
-status: 📝 草案 (Draft)
+status: 🛑 退役 (Retired — superseded by ADR-002 and SPEC-016)
 priority: P1 - Core Feature
 creationDate: 2026-04-30
 lastUpdateDate: 2026-05-17

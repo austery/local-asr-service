@@ -208,8 +208,8 @@ The ASR model is moved into a child subprocess (`src/workers/model_worker.py`). 
 - During transcription: ~20–23 GB
 - After idle timeout: < 500 MB
 
-**Design doc**: `docs/plans/2026-03-08-subprocess-model-isolation-design.md`
-**Implementation plan**: `docs/plans/2026-03-08-subprocess-model-isolation.md`
+**Design doc**: `docs/_archive/2026-03-08-subprocess-model-isolation-design.md`
+**Implementation plan**: `docs/_archive/2026-03-08-subprocess-model-isolation.md`
 
 ## 11. Related
 
