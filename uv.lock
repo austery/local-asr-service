@@ -865,7 +865,7 @@ requires-dist = [
     { name = "funasr", extras = ["llm"], specifier = ">=1.4.19" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=0.26.0" },
-    { name = "mlx-audio", specifier = ">=0.6.1" },
+    { name = "mlx-audio", specifier = ">=0.6.6" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "python-multipart", specifier = ">=0.0.31" },
     { name = "torch", specifier = ">=2.11.0,<3.0" },
@@ -1021,22 +1021,29 @@ wheels = [
 
 [[package]]
 name = "mlx-audio"
-version = "0.6.1"
+version = "0.6.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "anyio" },
+    { name = "certifi" },
+    { name = "filelock" },
+    { name = "fsspec" },
     { name = "huggingface-hub" },
+    { name = "jinja2" },
     { name = "miniaudio" },
     { name = "mlx" },
     { name = "numpy" },
+    { name = "requests" },
     { name = "scipy" },
     { name = "sentencepiece" },
     { name = "sounddevice" },
     { name = "tqdm" },
-    { name = "transformers" },
+    { name = "transformers", extra = ["chat-template"] },
+    { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b2/5b/e7be1d322253a56f891dd41773afe21997e3c889a4b68953aa0db67efe68/mlx_audio-0.6.1.tar.gz", hash = "sha256:94259999694c707129c1f6a30cc1e164e525d0471c9311c5af88f37f20682300", size = 1919670, upload-time = "2026-10-20T15:21:25.496Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/0b/07e1e6ba6143d729aa0ef874a0fbda0f33f62da50882629769adcc628bc9/mlx_audio-0.6.6.tar.gz", hash = "sha256:7d5ce0feae7f2ddba2f7f3e47cd77e26fa9db20f1208de2187f54c84728c6269", size = 2304235, upload-time = "2026-11-16T17:01:51.097Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/35/831928ee30f7509e8298411aed20b124dccbef6030d668e98e644d49564d/mlx_audio-0.6.1-py3-none-any.whl", hash = "sha256:4c5e4ef3f2a453dcc1c84c9aaf1e43701f62f5a32632aff50bfa6be9047d0f10", size = 2305453, upload-time = "2026-10-20T15:21:23.754Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/50/ee5a19b578eb2890370fd181bff2f27beb8929d2393f5c27fb06d3ce8bc0/mlx_audio-0.6.6-py3-none-any.whl", hash = "sha256:5a398fcc7746d3ae9f0108caa357545cb87b50416e8504722b527f218f668d2d", size = 2770863, upload-time = "2026-11-16T17:01:49.317Z" },
 ]
 
 [[package]]
@@ -1823,7 +1830,7 @@ wheels = [
 
 [[package]]
 name = "requests"
-version = "2.32.5"
+version = "2.33.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -1831,9 +1838,9 @@ dependencies = [
     { name = "idna" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/74/b3ff8e6c8446842c3f5c837e9c3dfcfe2018ea6ecef224c710c85ef728f4/requests-2.32.5.tar.gz", hash = "sha256:dbba0bac56e100853db0ea71b82b4dfd5fe2bf6d3754a8893c3af500cec7d7cf", size = 134517, upload-time = "2025-08-18T20:46:02.573Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/34/64/8860370b167a9721e8956ae116825caff829224fbca0ca6e7bf8ddef8430/requests-2.33.0.tar.gz", hash = "sha256:c7ebc5e8b0f21837386ad0e1c8fe8b829fa5f544d8df3b2253bff14ef29d7652", size = 134232, upload-time = "2026-03-25T15:10:41.586Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/db/4254e3eabe8020b458f1a747140d32277ec7a271daf1d235b70dc0b4e6e3/requests-2.32.5-py3-none-any.whl", hash = "sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6", size = 64738, upload-time = "2025-08-18T20:46:00.542Z" },
+    { url = "https://files.pythonhosted.org/packages/56/5d/c814546c2333ceea4ba42262d8c4d55763003e767fa169adc693bd524478/requests-2.33.0-py3-none-any.whl", hash = "sha256:3324635456fa185245e24865e810cecec7b4caf933d7eb133dcde67d48cee69b", size = 65017, upload-time = "2026-03-25T15:10:40.382Z" },
 ]
 
 [[package]]
@@ -2348,6 +2355,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ad/2e/ba418680ab901dae269360bb8642485eae04f1af91ee2ebb8bd6f3607305/transformers-5.16.1.tar.gz", hash = "sha256:17b0eac726ddc55e84ac58946063e0c6d37fd000c456b581f050ea0f4e822869", size = 9650542, upload-time = "2026-08-26T14:48:58.789Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0d/4d/ee3728674c0bbc637bb4af88ccf0be697f92e4e90b55f5dc110c44d61b61/transformers-5.16.1-py3-none-any.whl", hash = "sha256:2f2d5b98a5ad3718713653734298fa620754ed683702a635ebb587df3ed29c7e", size = 12080592, upload-time = "2026-08-26T14:48:55.083Z" },
+]
+
+[package.optional-dependencies]
+chat-template = [
+    { name = "jinja2" },
 ]
 
 [[package]]
