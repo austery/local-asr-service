@@ -4,6 +4,12 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Prepare mlx-audio 0.6.6 and its required requests 2.33.0 dependency for an
+  owner-authorized branch trial. Qwen now budgets tokens per internal chunk.
+  Keep existing weights and adapters. The owner waived the full A/B matrix;
+  candidate-only validation does not establish a measured improvement. See
+  [trial scope](docs/plans/2026-11-17-mlx-audio-066-upgrade-assessment.md).
+
 - Give explicit `apple-speech` requests their own admission limit,
   `APPLE_SPEECH_MAX_QUEUE_SIZE` (default: `MAX_QUEUE_SIZE`), so slow sidecar
   calls no longer reject local-model requests with "Queue full". Passthrough

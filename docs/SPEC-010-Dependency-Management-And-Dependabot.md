@@ -304,6 +304,7 @@ dependencies = [
 |------|--------|------|
 | 2026-03-16 | 🟡 待实施 (Ready for Implementation) | Initial analysis complete, awaiting implementation |
 | 2026-11-13 | Runtime upgrades deferred | Reviewed against §5a. FunASR stays at 1.4.19 (latest 1.4.26): no released fix reaches the production path with a measurable benefit, and 1.4.23+ carries the speaker-split change. Re-evaluate when upstream releases #3848 (empty-ASR result row) or #3862 (pure-silence VAD segments). mlx-audio stays at 0.6.1 (latest 0.6.5): Qwen3-ASR #1155 (per-chunk token budget) and the Whisper fixes #1164/#1165 merged after 0.6.5. Re-evaluate when a release contains #1155. |
+| 2026-11-17 | Owner-authorized branch trial | mlx-audio 0.6.6 contains #1155. The owner waived the full A/B matrix for this task, requested tests using existing local audio, and authorized stopping the old service and serving real traffic from the branch. requests 2.33.0 is the required companion update. This is a task-specific exception, not a change to section 5a. FunASR stays at 1.4.19. See [trial scope](plans/2026-11-17-mlx-audio-066-upgrade-assessment.md). Merge remains unapproved. |
 
 ## 10. Related
 
