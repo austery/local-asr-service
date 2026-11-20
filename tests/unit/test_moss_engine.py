@@ -69,6 +69,20 @@ def test_whole_recording_uses_tested_budget_and_normalizes_speakers(runtime: _Ru
     assert not Path(kwargs["output_path"]).parent.exists()
 
 
+def test_moss_explicitly_preserves_english_instead_of_translating(runtime: _Runtime) -> None:
+    engine, generate, _ = runtime
+    engine.transcribe_file("recording.mp3", "en", output_format="json")
+
+    prompt = generate.call_args.kwargs.get("prompt")
+    assert isinstance(prompt, str)
+    assert prompt.startswith(
+        "The spoken language is English. Transcribe the original English speech in English only."
+    )
+    assert "Preserve the original English wording." in prompt
+    assert "Do not translate the speech into another language." in prompt
+    assert "timestamp" in prompt and "[S01]" in prompt
+
+
 @pytest.mark.parametrize("duration", [1800.001, 3600.0, 0.0, -1.0, float("nan"), float("inf")])
 def test_rejects_invalid_duration_before_inference(runtime: _Runtime, duration: float) -> None:
     engine, generate, chunker = runtime
