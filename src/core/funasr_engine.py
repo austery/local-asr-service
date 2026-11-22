@@ -67,7 +67,8 @@ else:
 # alphas [0.03, 0, 0, 0, 0.24, 1.72]). FunASR >= 1.4.19 sentence_postprocess then
 # raises "time_stamp is missing a retained token timestamp" and the whole request
 # fails. Keep upstream timestamps and spread missing tokens evenly over the rest
-# of the segment, so the transcription survives with segment-bounded timing.
+# of the segment; if upstream already reached the segment end, split the last
+# timed token's span with them. Timing is a segment-bounded estimate.
 _upstream_ts_prediction = _timestamp_tools.ts_prediction_lfr6_standard
 _LFR6_FRAME_MS = 10.0 * 6  # one LFR6 encoder frame; matches upstream TIME_RATE
 
@@ -99,28 +100,37 @@ def _patched_ts_prediction_lfr6_standard(  # noqa: PLR0913  # mirrors upstream s
     frame_ms = _LFR6_FRAME_MS / upsample_rate
     segment_start = int(vad_offset)
     segment_end = int(vad_offset + num_frames * frame_ms)
-    fill_start = min(timestamps[-1][1] if timestamps else segment_start, segment_end)
-    step = (segment_end - fill_start) / missing
-    filled = [
-        [int(fill_start + i * step), int(fill_start + (i + 1) * step)] for i in range(missing)
+    kept = [list(pair) for pair in timestamps]
+    share_count = missing
+    share_start = min(kept[-1][1] if kept else segment_start, segment_end)
+    if kept and share_start >= segment_end:
+        # Upstream stretched the last timed token to the segment end, leaving no
+        # room. Split that token's span with the missing tokens instead of
+        # emitting zero-length timestamps, which would get no speaker overlap.
+        share_start = kept.pop()[0]
+        share_count += 1
+    step = (segment_end - share_start) / share_count
+    shared = [
+        [int(share_start + i * step), int(share_start + (i + 1) * step)]
+        for i in range(share_count)
     ]
-    filled[-1][1] = segment_end
+    shared[-1][1] = segment_end
     _log.warning(
         "ts_prediction patch: filled %d/%d token timestamps over %d-%d ms "
         "(CIF fired fewer times than tokens).",
         missing,
         len(tokens),
-        fill_start,
+        share_start,
         segment_end,
     )
-    return res_txt, timestamps + filled
+    return res_txt, kept + shared
 
 
 # seaco_paraformer uses `from funasr.utils.timestamp_tools import
-# ts_prediction_lfr6_standard`, so patch that call-site namespace. Only SEACO
-# Paraformer is served (model_registry.py); other Paraformer variants and the
-# source module stay unpatched to keep this upstream patch narrow. Fail loudly
-# if FunASR moves the name.
+# ts_prediction_lfr6_standard`, so patch that call-site namespace. SEACO is the
+# only registered Paraformer alias (model_registry.py). Ad-hoc `iic/` models that
+# load other Paraformer classes, and the source module, stay unpatched to keep
+# this upstream patch narrow. Fail loudly if FunASR moves the name.
 if not hasattr(_seaco_paraformer_model, "ts_prediction_lfr6_standard"):
     _log.warning(
         "funasr.models.seaco_paraformer.model has no 'ts_prediction_lfr6_standard' "

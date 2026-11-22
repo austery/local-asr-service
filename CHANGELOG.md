@@ -6,8 +6,8 @@ This file separates merged runtime changes from work that has not yet landed.
 
 - Fix FunASR Paraformer requests failing with HTTP 500 and "time_stamp is
   missing a retained token timestamp" when a very short VAD segment needs two
-  CIF fires in one frame. A local patch keeps upstream timestamps and spreads
-  missing token timestamps over the rest of that segment. Upstream FunASR 1.4.28
+  CIF fires in one frame. A local patch keeps upstream timestamps and gives the
+  missing tokens segment-bounded estimates instead of failing the request. Upstream FunASR 1.4.28
   and main still contain the defect. See `CLAUDE.md` Known Issues.
 
 - Prepare mlx-audio 0.6.6 and its required requests 2.33.0 dependency for an

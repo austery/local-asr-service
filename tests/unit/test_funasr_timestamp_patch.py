@@ -43,20 +43,32 @@ def test_filled_timestamps_include_vad_offset() -> None:
     assert timestamps == [[5000, 5120]]
 
 
-def test_missing_tokens_share_remaining_segment_after_known_timestamps() -> None:
-    # Two tokens, one fire short: the second token falls in the final frame.
+def test_missing_token_splits_last_span_when_upstream_reached_segment_end() -> None:
+    # Two tokens, one fire short: the second token falls in the final frame, and
+    # upstream stretches "你" to the segment end (180 ms), leaving no room.
     alphas = torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0])
     peaks = torch.zeros_like(alphas)
 
     _, upstream = upstream_ts(alphas.clone(), peaks.clone(), ["你", "好"])
     _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, ["你", "好"])
 
-    assert len(upstream) < 2, "fixture must reproduce the upstream shortfall"
-    assert len(timestamps) == 2
-    assert timestamps[: len(upstream)] == upstream
-    starts_ends = [value for pair in timestamps for value in pair]
-    assert starts_ends == sorted(starts_ends)
-    assert timestamps[-1][1] == 9 * 20
+    assert upstream == [[10, 180]], "fixture must reproduce the upstream shortfall"
+    assert timestamps == [[10, 95], [95, 180]]
+    assert all(end > start for start, end in timestamps)
+
+
+def test_missing_token_uses_remaining_segment_after_trailing_silence() -> None:
+    # 16 frames: upstream caps "你" at MAX_TOKEN_DURATION (250 ms) and marks the
+    # rest as <sil>, so the missing token fits in the 250-320 ms tail.
+    alphas = torch.zeros(16)
+    alphas[2], alphas[15] = 1.0, 2.0
+    peaks = torch.zeros_like(alphas)
+
+    _, upstream = upstream_ts(alphas.clone(), peaks.clone(), ["你", "好"])
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, ["你", "好"])
+
+    assert upstream == [[10, 250]], "fixture must reproduce the upstream shortfall"
+    assert timestamps == [[10, 250], [250, 320]]
 
 
 def test_complete_timestamps_are_returned_unchanged() -> None:
