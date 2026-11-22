@@ -80,3 +80,11 @@ def test_complete_timestamps_are_returned_unchanged() -> None:
 
     assert len(expected[1]) == 2
     assert actual == expected
+
+
+def test_positional_arguments_are_forwarded_like_upstream() -> None:
+    args = (torch.tensor(SINGLE_FRAME_ALPHAS), torch.tensor(SINGLE_FRAME_PEAKS), ["嗯"], 5000)
+
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(*args)
+
+    assert timestamps == [[5000, 5120]]

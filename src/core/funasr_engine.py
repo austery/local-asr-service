@@ -1,4 +1,5 @@
 import gc
+import inspect
 import logging
 import time
 from typing import Any
@@ -70,28 +71,27 @@ else:
 # of the segment; if upstream already reached the segment end, split the last
 # timed token's span with them. Timing is a segment-bounded estimate.
 _upstream_ts_prediction = _timestamp_tools.ts_prediction_lfr6_standard
+_upstream_ts_signature = inspect.signature(_upstream_ts_prediction)
 _LFR6_FRAME_MS = 10.0 * 6  # one LFR6 encoder frame; matches upstream TIME_RATE
 
 
-def _patched_ts_prediction_lfr6_standard(  # noqa: PLR0913  # mirrors upstream signature
+def _patched_ts_prediction_lfr6_standard(
     us_alphas: torch.Tensor,
     us_peaks: torch.Tensor,
     char_list: list[str],
-    vad_offset: float = 0.0,
-    force_time_shift: float = -1.5,
-    sil_in_str: bool = True,
-    upsample_rate: int = 3,
+    *args: object,
+    **kwargs: object,
 ) -> tuple[str, list[list[int]]]:
+    # Forward every argument unchanged so upstream signature additions cannot
+    # break the call; read only what the fill needs, with upstream defaults.
+    bound = _upstream_ts_signature.bind(us_alphas, us_peaks, char_list, *args, **kwargs)
+    bound.apply_defaults()
+    vad_offset = float(bound.arguments["vad_offset"])  # type: ignore[arg-type]
+    upsample_rate = int(bound.arguments["upsample_rate"])  # type: ignore[call-overload]
     num_frames = int(us_alphas.shape[-1])
     tokens = char_list[:-1] if char_list and char_list[-1] == "</s>" else char_list
     res_txt, timestamps = _upstream_ts_prediction(
-        us_alphas,
-        us_peaks,
-        char_list,
-        vad_offset=vad_offset,
-        force_time_shift=force_time_shift,
-        sil_in_str=sil_in_str,
-        upsample_rate=upsample_rate,
+        us_alphas, us_peaks, char_list, *args, **kwargs
     )
     missing = len(tokens) - len(timestamps)
     if missing <= 0:
