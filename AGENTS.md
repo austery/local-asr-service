@@ -125,8 +125,8 @@ FunASR's `timestamp_tools.ts_prediction_lfr6_standard` can return fewer timestam
 
 - Scope: SEACO is the only registered Paraformer alias. Ad-hoc `iic/` models that load other Paraformer classes stay unpatched.
 - Unchanged output: the wrapper returns upstream output whenever `sentence_postprocess` would accept it. Trailing `<s>`, `</s>`, `<unk>` and `<OOV>` need no timestamp.
-- Fill: each missing token gets one upsampled frame at the segment end. If the last timed span overlaps those frames, it is truncated when it keeps one frame; otherwise its token shares the end frames from its own start. Every other upstream span stays unchanged.
-- Upgrade safety: the wrapper forwards all arguments. If it cannot bind them by name, it returns upstream output. If FunASR moves the modules or the function, rebinds SEACO, or drops a required parameter, the patch is skipped at import with a warning.
+- Fill: each missing token gets one upsampled frame at the segment end. If the last timed span overlaps those frames, it is truncated when it keeps one frame; otherwise its token shares the end frames from its own start, clamped to the segment start. Every other upstream span stays unchanged.
+- Upgrade safety: the wrapper forwards all arguments. If it cannot bind them by name, it returns upstream output. The patch is skipped at import with a warning if the FunASR modules fail to import (any exception), the function moves, SEACO rebinds it, its signature is unreadable, or a required parameter disappears.
 - Tests: `tests/unit/test_funasr_timestamp_patch.py`. Remove the patch once a FunASR release fixes it and the shortfall assertions in those tests fail.
 
 ### Parakeet Metal OOM on Long Audio (Known Issue, unfixed)

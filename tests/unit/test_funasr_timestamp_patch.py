@@ -417,3 +417,55 @@ def test_patch_is_skipped_when_seaco_module_moves(
         assert "single-frame CIF timestamp patch was NOT applied" in caplog.text
     finally:
         _restore_engine(monkeypatch)
+
+
+class _FailingFinder:
+    """Meta-path finder that makes one module raise a non-ImportError on import."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def find_spec(self, fullname: str, path: object, target: object = None) -> None:
+        if fullname == self.name:
+            raise AttributeError(f"simulated import-time failure in {fullname}")
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    ["funasr.utils.timestamp_tools", "funasr.models.seaco_paraformer.model"],
+)
+def test_patch_is_skipped_when_a_module_raises_on_import(
+    module_name: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import sys
+
+    from src.core import funasr_engine
+
+    monkeypatch.delitem(sys.modules, module_name)
+    monkeypatch.setattr(sys, "meta_path", [_FailingFinder(module_name), *sys.meta_path])
+    try:
+        with caplog.at_level("WARNING"):
+            importlib.reload(funasr_engine)
+        assert funasr_engine._patched_ts_prediction_lfr6_standard is None
+        assert "single-frame CIF timestamp patch was NOT applied" in caplog.text
+    finally:
+        _restore_engine(monkeypatch)
+
+
+def test_patch_is_skipped_when_upstream_signature_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from src.core import funasr_engine
+
+    def opaque_upstream(*args: object, **kwargs: object) -> tuple[str, list[list[int]]]:
+        return "", []
+
+    opaque_upstream.__signature__ = "not a signature"  # type: ignore[attr-defined]
+    try:
+        with caplog.at_level("WARNING"):
+            _reload_engine_with_upstream(monkeypatch, opaque_upstream, opaque_upstream)
+        assert seaco_model.ts_prediction_lfr6_standard is opaque_upstream
+        assert funasr_engine._patched_ts_prediction_lfr6_standard is None
+        assert "no readable signature" in caplog.text
+    finally:
+        _restore_engine(monkeypatch)

@@ -6,9 +6,9 @@ This file separates merged runtime changes from work that has not yet landed.
 
 - Fix SEACO Paraformer (`paraformer` alias) requests failing with HTTP 500 and "time_stamp is
   missing a retained token timestamp" when a very short VAD segment needs two
-  CIF fires in one frame. A local patch keeps upstream timestamps and places
-  each missing token in the last frames of that segment instead of failing
-  the request; output that already succeeded is unchanged. Upstream FunASR 1.4.28
+  CIF fires in one frame. A local patch places each missing token in the last
+  frames of that segment instead of failing the request. Only the last
+  upstream timestamp can change; output that already succeeded is unchanged. Upstream FunASR 1.4.28
   and main still contain the defect (reported upstream as
   modelscope/FunASR#3934). See `CLAUDE.md` Known Issues.
 

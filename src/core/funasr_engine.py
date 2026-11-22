@@ -71,8 +71,10 @@ else:
 # retained token timestamp" and the whole request fails.
 #
 # The patch returns upstream output unchanged whenever sentence_postprocess would
-# accept it. Otherwise it keeps upstream timestamps and gives each missing token
-# one upsampled frame at the segment end, where the lost fires belong.
+# accept it. Otherwise it gives each missing token one upsampled frame at the
+# segment end, where the lost fires belong. Only the last upstream span can
+# change (truncated, or shared from its start); fills never start before the
+# segment start, so a merged span that started earlier is clamped to it.
 _TsResult = tuple[str, list[list[int]]]
 _TsPrediction = Callable[..., _TsResult]
 _LFR6_FRAME_MS = 10.0 * 6  # one LFR6 encoder frame; matches upstream TIME_RATE
@@ -92,8 +94,8 @@ def _fill_missing_timestamps(
 
     Each missing token gets one upsampled frame at the segment end. The last
     timed span, if it overlaps those frames, is truncated when it keeps at least
-    one frame; otherwise its token shares the end frames from its own start.
-    Every other upstream span is returned unchanged.
+    one frame; otherwise its token shares the end frames from its own start,
+    clamped to the segment start. Every other upstream span is returned unchanged.
     """
     kept = [list(pair) for pair in timestamps]
     share_count = missing
@@ -168,8 +170,8 @@ def _install_ts_prediction_patch() -> _TsPrediction | None:
     try:
         timestamp_tools = importlib.import_module("funasr.utils.timestamp_tools")
         seaco = importlib.import_module("funasr.models.seaco_paraformer.model")
-    except ImportError as exc:
-        _skip_ts_patch(f"FunASR timestamp modules moved ({exc})")
+    except Exception as exc:  # noqa: BLE001 - FunASR itself tolerates any submodule import error
+        _skip_ts_patch(f"FunASR timestamp modules failed to import ({exc!r})")
         return None
     upstream = getattr(timestamp_tools, "ts_prediction_lfr6_standard", None)
     binding = getattr(seaco, "ts_prediction_lfr6_standard", None)
