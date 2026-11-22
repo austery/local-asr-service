@@ -4,6 +4,14 @@ This file separates merged runtime changes from work that has not yet landed.
 
 ## Unreleased
 
+- Remove the local FunASR `distribute_spk` patch and use upstream speaker
+  attribution. A sentence now goes to the speaker with the largest total
+  overlap, not the largest single segment; speaker labels change only where
+  one speaker's segments within a sentence add up to more than another's
+  longest segment. The patch's `None` filter could not trigger on FunASR
+  1.4.19, and it did not prevent the 2026-02 crash it was written for. See
+  `CLAUDE.md` Known Issues.
+
 - Fix SEACO Paraformer (`paraformer` alias) requests failing with HTTP 500 and "time_stamp is
   missing a retained token timestamp" when a very short VAD segment needs two
   CIF fires in one frame. A local patch places each missing token in the last
