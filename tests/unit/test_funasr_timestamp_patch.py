@@ -7,9 +7,7 @@ the token "嗯". Both CIF fires land in the last upsampled frame, so FunASR's
 ``sentence_postprocess`` raises instead of returning the transcription.
 """
 
-import funasr.models.paraformer.model as paraformer_model
 import funasr.models.seaco_paraformer.model as seaco_model
-import pytest
 import torch
 from funasr.utils import postprocess_utils
 from funasr.utils.timestamp_tools import ts_prediction_lfr6_standard as upstream_ts
@@ -19,18 +17,12 @@ import src.core.funasr_engine  # noqa: F401  # applies the module-level patch
 SINGLE_FRAME_ALPHAS = [0.0335148, 0.0, 0.0, 0.0, 0.2435439, 1.7229414]
 SINGLE_FRAME_PEAKS = [0.0335148, 0.0335148, 0.0335148, 0.0335148, 0.2770587, 2.0]
 
-CALL_SITES = [
-    pytest.param(seaco_model, id="seaco_paraformer"),
-    pytest.param(paraformer_model, id="paraformer"),
-]
 
-
-@pytest.mark.parametrize("module", CALL_SITES)
-def test_single_frame_double_fire_keeps_token_with_segment_timestamp(module: object) -> None:
+def test_single_frame_double_fire_keeps_token_with_segment_timestamp() -> None:
     alphas = torch.tensor(SINGLE_FRAME_ALPHAS)
     peaks = torch.tensor(SINGLE_FRAME_PEAKS)
 
-    _, timestamps = module.ts_prediction_lfr6_standard(  # type: ignore[attr-defined]
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(
         alphas, peaks, ["嗯"], vad_offset=0
     )
     text, sentence_ts, _ = postprocess_utils.sentence_postprocess(["嗯"], timestamps)
@@ -40,9 +32,8 @@ def test_single_frame_double_fire_keeps_token_with_segment_timestamp(module: obj
     assert sentence_ts == [[0, 120]]
 
 
-@pytest.mark.parametrize("module", CALL_SITES)
-def test_filled_timestamps_include_vad_offset(module: object) -> None:
-    _, timestamps = module.ts_prediction_lfr6_standard(  # type: ignore[attr-defined]
+def test_filled_timestamps_include_vad_offset() -> None:
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(
         torch.tensor(SINGLE_FRAME_ALPHAS),
         torch.tensor(SINGLE_FRAME_PEAKS),
         ["嗯"],

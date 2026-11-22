@@ -5,7 +5,6 @@ from typing import Any
 
 import funasr.auto.auto_model as _auto_model
 import funasr.models.campplus.utils as _campplus_utils
-import funasr.models.paraformer.model as _paraformer_model
 import funasr.models.seaco_paraformer.model as _seaco_paraformer_model
 import funasr.utils.timestamp_tools as _timestamp_tools
 import torch
@@ -117,19 +116,19 @@ def _patched_ts_prediction_lfr6_standard(  # noqa: PLR0913  # mirrors upstream s
     return res_txt, timestamps + filled
 
 
-# Paraformer model modules use `from funasr.utils.timestamp_tools import
-# ts_prediction_lfr6_standard`, so patch each call-site namespace this service
-# runs (see _FUNASR_MODEL_CAPABILITIES). Fail loudly if FunASR moves the name.
-for _call_site in (_paraformer_model, _seaco_paraformer_model):
-    if not hasattr(_call_site, "ts_prediction_lfr6_standard"):
-        _log.warning(
-            "%s has no 'ts_prediction_lfr6_standard' attribute; the single-frame CIF "
-            "timestamp patch was NOT applied. FunASR may have been updated — verify "
-            "the patch is still needed.",
-            _call_site.__name__,
-        )
-    else:
-        _call_site.ts_prediction_lfr6_standard = _patched_ts_prediction_lfr6_standard
+# seaco_paraformer uses `from funasr.utils.timestamp_tools import
+# ts_prediction_lfr6_standard`, so patch that call-site namespace. Only SEACO
+# Paraformer is served (model_registry.py); other Paraformer variants and the
+# source module stay unpatched to keep this upstream patch narrow. Fail loudly
+# if FunASR moves the name.
+if not hasattr(_seaco_paraformer_model, "ts_prediction_lfr6_standard"):
+    _log.warning(
+        "funasr.models.seaco_paraformer.model has no 'ts_prediction_lfr6_standard' "
+        "attribute; the single-frame CIF timestamp patch was NOT applied. FunASR may "
+        "have been updated — verify the patch is still needed."
+    )
+else:
+    _seaco_paraformer_model.ts_prediction_lfr6_standard = _patched_ts_prediction_lfr6_standard
 
 # 推荐使用的 Paraformer 模型 ID (支持时间戳，必须用于说话人分离)
 # SEACO-Paraformer 是目前阿里最成熟的串联模型，中文识别 SOTA

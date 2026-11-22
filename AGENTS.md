@@ -116,7 +116,7 @@ FunASR's `campplus/utils.py:distribute_spk` crashes with `TypeError: '>' not sup
 ### FunASR Single-Frame CIF Timestamp Bug (Fixed 2026-11-21)
 FunASR's `timestamp_tools.ts_prediction_lfr6_standard` records at most one CIF fire per frame. When a very short VAD segment needs two fires in one frame (observed: a 120 ms segment holding only "嗯", alphas `[0.03, 0, 0, 0, 0.24, 1.72]`), it returns fewer timestamps than tokens. FunASR 1.4.19+ `sentence_postprocess` then raises `ValueError: time_stamp is missing a retained token timestamp`, and the whole request returns 500. Upstream 1.4.28 and main are unchanged on this path; #3929 fixes a different symbol-token path.
 
-**Fix**: `src/core/funasr_engine.py` wraps `ts_prediction_lfr6_standard` in the `paraformer` and `seaco_paraformer` model namespaces (both use `from ... import`). It keeps upstream timestamps and spreads only the missing ones over the rest of the segment, with a warning log. Regression tests: `tests/unit/test_funasr_timestamp_patch.py`. Re-check upstream before removing the patch.
+**Fix**: `src/core/funasr_engine.py` wraps `ts_prediction_lfr6_standard` in the `seaco_paraformer` model namespace only (it uses `from ... import`; SEACO is the only served Paraformer). It keeps upstream timestamps and spreads only the missing ones over the rest of the segment, with a warning log. Regression tests: `tests/unit/test_funasr_timestamp_patch.py`. Re-check upstream before removing the patch.
 
 ### Parakeet Metal OOM on Long Audio (Known Issue, unfixed)
 MLX Parakeet (`mlx-community/parakeet-tdt-0.6b-v2`) crashes with
