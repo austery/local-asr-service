@@ -361,7 +361,12 @@ What this means for the classes in "Review depth":
 
 - A Leaf change depends on items 1 to 3. It needs no engine containment, so
   items 4 to 6 do not block it.
-- A controlled Branch depends on item 4, and the Unknown paths on item 6. No
-  engine can be a controlled Branch until they hold.
+- A controlled Branch inside the shared worker (every FunASR and MLX engine)
+  depends on item 4, and the Unknown paths on item 6. None of those engines can
+  be a controlled Branch until they hold.
+- A path that runs outside the shared worker, such as the Apple Speech
+  per-request sidecar, does not depend on item 4. It needs its own containment
+  evidence (the controlled-Branch evidence in the owner's global policy) and the
+  owner's review.
 - Trunk, Structure and the wrong-but-green domains stay with the owner whatever
   the state of items 1 to 6.
