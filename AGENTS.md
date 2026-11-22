@@ -113,6 +113,22 @@ FunASR's `campplus/utils.py:distribute_spk` crashes with `TypeError: '>' not sup
 
 **Do not remove this patch** — the underlying FunASR library bug has not been fixed upstream.
 
+### FunASR Single-Frame CIF Timestamp Bug (Fixed 2026-11-21)
+FunASR's `timestamp_tools.ts_prediction_lfr6_standard` can return fewer timestamps than tokens.
+
+- Cause: its CIF loop records at most one fire per frame. Leftover weight moves to the next frame, so fires are lost only as weight still pending after the final frame.
+- Observed: a 120 ms VAD segment holding only "嗯", alphas `[0.03, 0, 0, 0, 0.24, 1.72]`.
+- Effect: FunASR 1.4.19+ `sentence_postprocess` raises `ValueError: time_stamp is missing a retained token timestamp`, and the whole request returns 500.
+- Upstream: 1.4.28 and main are unchanged on this path. #3929 fixes a different symbol-token path. Reported as modelscope/FunASR#3934.
+
+**Fix**: `src/core/funasr_engine.py` wraps `ts_prediction_lfr6_standard` in the `seaco_paraformer` namespace only.
+
+- Scope: SEACO is the only registered Paraformer alias. Ad-hoc `iic/` models that load other Paraformer classes stay unpatched.
+- Unchanged output: the wrapper returns upstream output whenever `sentence_postprocess` would accept it. Trailing `<s>`, `</s>`, `<unk>` and `<OOV>` need no timestamp.
+- Fill: each missing token gets one upsampled frame at the segment end. If the last timed span overlaps those frames, it is truncated when it keeps one frame; otherwise its token shares the end frames from its own start, clamped to the segment start. Every other upstream span stays unchanged.
+- Upgrade safety: the wrapper forwards all arguments. If it cannot bind them by name, it returns upstream output. The patch is skipped at import with a warning if the FunASR modules fail to import (any exception), the function moves, SEACO rebinds it, its signature is unreadable, or a required parameter disappears.
+- Tests: `tests/unit/test_funasr_timestamp_patch.py`. Remove the patch once a FunASR release fixes it and the shortfall assertions in those tests fail.
+
 ### Parakeet Metal OOM on Long Audio (Known Issue, unfixed)
 MLX Parakeet (`mlx-community/parakeet-tdt-0.6b-v2`) crashes with
 `[METAL] Command buffer execution failed: kIOGPUCommandBufferCallbackErrorOutOfMemory`
