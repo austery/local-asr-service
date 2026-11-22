@@ -17,7 +17,7 @@ updates:
     # 说明：dual-engine 设计（PyTorch + MLX），主版本升级需要完整测试
     ignore:
       # PyTorch：屏蔽主版本 3.0+（Apple Silicon Metal 兼容性未知）
-      # 当前：2.9.1 稳定
+      # 当前版本见 uv.lock
       - dependency-name: 'torch'
         update-types: ['version-update:semver-major']
 
@@ -25,9 +25,15 @@ updates:
       - dependency-name: 'torchaudio'
         update-types: ['version-update:semver-major']
 
-      # FunASR：屏蔽主版本 2.0+（与 torch/transformers 兼容性需验证）
+      # FunASR：屏蔽所有版本更新（major、minor、patch），只允许人工升级。
+      # 原因：1.4.14 -> 1.4.19 只是 patch 级升级，却让缺时间戳从静默变成 ValueError，
+      # 一个 52 分钟请求返回 500（见 AGENTS.md 的 CIF 小节）。升级前按 SPEC-010 §5a
+      # 做真实音频 A/B。本规则只管版本更新 PR，不影响 Dependabot alerts。
       - dependency-name: 'funasr'
-        update-types: ['version-update:semver-major']
+        update-types:
+          - 'version-update:semver-major'
+          - 'version-update:semver-minor'
+          - 'version-update:semver-patch'
 
     # 依赖分组策略：按优先级组织，减少 PR 噪音
     groups:
