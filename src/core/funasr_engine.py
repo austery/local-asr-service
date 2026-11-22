@@ -1,4 +1,5 @@
 import gc
+import importlib
 import inspect
 import logging
 import time
@@ -7,8 +8,6 @@ from typing import Any
 
 import funasr.auto.auto_model as _auto_model
 import funasr.models.campplus.utils as _campplus_utils
-import funasr.models.seaco_paraformer.model as _seaco_paraformer_model
-import funasr.utils.timestamp_tools as _timestamp_tools
 import torch
 from funasr import AutoModel
 
@@ -89,25 +88,23 @@ def _fill_missing_timestamps(
     segment_end: int,
     frame_ms: float,
 ) -> list[list[int]]:
-    """Append `missing` end-anchored spans, one upsampled frame each.
+    """Append `missing` spans in the last frames of the segment.
 
-    A timed span that overlaps the end frames is truncated if it keeps at least
-    one frame; otherwise it is merged into the end frames (keeping its order).
-    Spans before that point are returned unchanged.
+    Each missing token gets one upsampled frame at the segment end. The last
+    timed span, if it overlaps those frames, is truncated when it keeps at least
+    one frame; otherwise its token shares the end frames from its own start.
+    Every other upstream span is returned unchanged.
     """
     kept = [list(pair) for pair in timestamps]
     share_count = missing
-    while kept:
-        boundary = int(segment_end - share_count * frame_ms)
-        last = kept[-1]
-        if last[1] <= boundary:
-            break
-        if boundary - last[0] >= frame_ms:
-            last[1] = boundary
-            break
-        kept.pop()
-        share_count += 1
-    share_start = max(segment_start, int(segment_end - share_count * frame_ms))
+    share_start = int(segment_end - missing * frame_ms)
+    if kept and kept[-1][1] > share_start:
+        if share_start - kept[-1][0] >= frame_ms:
+            kept[-1][1] = share_start
+        else:
+            share_start = kept.pop()[0]
+            share_count += 1
+    share_start = max(share_start, segment_start)
     step = (segment_end - share_start) / share_count
     shared = [
         [int(share_start + i * step), int(share_start + (i + 1) * step)]
@@ -168,20 +165,31 @@ def _install_ts_prediction_patch() -> _TsPrediction | None:
     the only registered Paraformer alias (model_registry.py). Ad-hoc `iic/` models
     that load other Paraformer classes, and the source module, stay unpatched.
     """
-    upstream = getattr(_timestamp_tools, "ts_prediction_lfr6_standard", None)
-    binding = getattr(_seaco_paraformer_model, "ts_prediction_lfr6_standard", None)
+    try:
+        timestamp_tools = importlib.import_module("funasr.utils.timestamp_tools")
+        seaco = importlib.import_module("funasr.models.seaco_paraformer.model")
+    except ImportError as exc:
+        _skip_ts_patch(f"FunASR timestamp modules moved ({exc})")
+        return None
+    upstream = getattr(timestamp_tools, "ts_prediction_lfr6_standard", None)
+    binding = getattr(seaco, "ts_prediction_lfr6_standard", None)
     if upstream is None or binding is None:
         _skip_ts_patch("ts_prediction_lfr6_standard moved out of its FunASR modules")
         return None
     if binding is not upstream and getattr(binding, "__module__", None) != __name__:
         _skip_ts_patch("seaco_paraformer no longer binds the timestamp_tools function")
         return None
-    absent = _REQUIRED_TS_PARAMS - set(inspect.signature(upstream).parameters)
+    try:
+        parameters = set(inspect.signature(upstream).parameters)
+    except (TypeError, ValueError):
+        _skip_ts_patch("ts_prediction_lfr6_standard has no readable signature")
+        return None
+    absent = _REQUIRED_TS_PARAMS - parameters
     if absent:
         _skip_ts_patch(f"ts_prediction_lfr6_standard lacks parameters {sorted(absent)}")
         return None
     patched = _build_ts_prediction_patch(upstream)
-    _seaco_paraformer_model.ts_prediction_lfr6_standard = patched
+    setattr(seaco, "ts_prediction_lfr6_standard", patched)  # noqa: B010 - dynamic module
     return patched
 
 

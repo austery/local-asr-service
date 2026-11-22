@@ -137,8 +137,8 @@ def test_filled_span_stays_in_segment_and_kept_start_is_upstream() -> None:
     assert timestamps == [[-10, 100], [100, 120]]
 
 
-def test_merged_share_borrows_only_needed_leading_silence() -> None:
-    # 7 frames, 4 tokens, fires bunched at the end: each token gets one frame.
+def test_merged_token_shares_end_frames_from_its_own_start() -> None:
+    # 7 frames, 4 tokens: "a" is too short to truncate, so it shares from 70 ms.
     alphas = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 4.0])
     peaks = torch.zeros_like(alphas)
 
@@ -146,7 +146,7 @@ def test_merged_share_borrows_only_needed_leading_silence() -> None:
     _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, list("abcd"))
 
     assert upstream == [[70, 140]], "fixture must reproduce the upstream shortfall"
-    assert timestamps == [[60, 80], [80, 100], [100, 120], [120, 140]]
+    assert timestamps == [[70, 87], [87, 105], [105, 122], [122, 140]]
 
 
 @pytest.mark.parametrize(
@@ -329,8 +329,9 @@ def test_patch_is_skipped_when_seaco_no_longer_imports_the_function(
         _restore_engine(monkeypatch)
 
 
-def test_truncation_does_not_cascade_into_earlier_spans() -> None:
-    # 240 ms, 5 tokens, 3 missing: only "b" overlaps the end frames.
+def test_merge_does_not_cascade_into_earlier_spans() -> None:
+    # 240 ms, 5 tokens, 3 missing: "b" overlaps the end frames and is too short
+    # to truncate, so it shares them from its own start; "a" is unchanged.
     alphas = torch.zeros(12)
     alphas[2], alphas[10], alphas[11] = 1.0, 1.0, 3.0
     peaks = torch.zeros_like(alphas)
@@ -339,7 +340,7 @@ def test_truncation_does_not_cascade_into_earlier_spans() -> None:
     _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, list("abcde"))
 
     assert upstream == [[10, 170], [170, 240]], "fixture must reproduce the shortfall"
-    assert timestamps == [[10, 160], [160, 180], [180, 200], [200, 220], [220, 240]]
+    assert timestamps == [[10, 170], [170, 187], [187, 205], [205, 222], [222, 240]]
 
 
 def test_patch_is_skipped_when_upstream_function_moves(
@@ -375,6 +376,44 @@ def test_patch_is_skipped_when_seaco_binds_a_different_function(
         with caplog.at_level("WARNING"):
             importlib.reload(funasr_engine)
         assert seaco_model.ts_prediction_lfr6_standard is relocated
+        assert "single-frame CIF timestamp patch was NOT applied" in caplog.text
+    finally:
+        _restore_engine(monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("tokens", "expected"),
+    [
+        pytest.param(["你", "<unk>", "好"], 3, id="middle-unk-is-timed"),
+        pytest.param(["你", "<OOV>"], 1, id="trailing-oov"),
+        pytest.param(["你", "<s>"], 1, id="trailing-s"),
+        pytest.param([b"\xe4\xbd\xa0", b"\xe5\xa5\xbd"], 2, id="bytes-tokens"),
+    ],
+)
+def test_fill_counts_tokens_like_sentence_postprocess(
+    tokens: list[str | bytes], expected: int
+) -> None:
+    alphas = torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0])
+    peaks = torch.zeros_like(alphas)
+
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, list(tokens))
+
+    assert len(timestamps) == expected
+    postprocess_utils.sentence_postprocess(list(tokens), timestamps)
+
+
+def test_patch_is_skipped_when_seaco_module_moves(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import sys
+
+    from src.core import funasr_engine
+
+    monkeypatch.setitem(sys.modules, "funasr.models.seaco_paraformer.model", None)
+    try:
+        with caplog.at_level("WARNING"):
+            importlib.reload(funasr_engine)
+        assert funasr_engine._patched_ts_prediction_lfr6_standard is None
         assert "single-frame CIF timestamp patch was NOT applied" in caplog.text
     finally:
         _restore_engine(monkeypatch)
