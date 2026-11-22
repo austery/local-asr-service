@@ -6,10 +6,11 @@ This file separates merged runtime changes from work that has not yet landed.
 
 - Remove the local FunASR `distribute_spk` patch and use upstream speaker
   attribution. A sentence now goes to the speaker with the largest total
-  overlap, not the largest single segment; speaker labels change only where
-  one speaker's segments within a sentence add up to more than another's
-  longest segment. The patch's `None` filter could not trigger on FunASR
-  1.4.19, and it did not prevent the 2026-02 crash it was written for. See
+  overlap. On a tie, it goes to the speaker that overlaps first. The patch
+  chose the speaker with the largest single overlap. Labels change only where
+  these two rules pick different speakers. In a real-model A/B on four clips,
+  2 of 1,505 sentences changed. The patch's `None` filter could not trigger on
+  FunASR 1.4.19. It did not prevent the 2026-02 crash it was written for. See
   `CLAUDE.md` Known Issues.
 
 - Fix SEACO Paraformer (`paraformer` alias) requests failing with HTTP 500 and "time_stamp is
