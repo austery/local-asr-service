@@ -63,30 +63,39 @@ else:
 
 # Monkey-patch for FunASR bug: ts_prediction_lfr6_standard returns fewer token
 # timestamps than tokens when CIF must fire twice within one frame. Its CIF loop
-# records at most one fire per frame, and renormalisation cannot help when the
-# weight sum is already correct (seen on a ~120 ms VAD segment holding only "嗯",
-# alphas [0.03, 0, 0, 0, 0.24, 1.72]). FunASR >= 1.4.19 sentence_postprocess then
-# raises "time_stamp is missing a retained token timestamp" and the whole request
-# fails. Keep upstream timestamps and spread missing tokens evenly over the rest
-# of the segment; if upstream already reached the segment end, split the last
-# timed token's span with them. Timing is a segment-bounded estimate.
+# records at most one fire per frame; weight left over in an earlier frame fires
+# in the next one, so only the final frame can lose a fire. Renormalisation
+# cannot help when the weight sum is already correct (seen on a ~120 ms VAD
+# segment holding only "嗯", alphas [0.03, 0, 0, 0, 0.24, 1.72]). FunASR >= 1.4.19
+# sentence_postprocess then raises "time_stamp is missing a retained token
+# timestamp" and the whole request fails. Keep upstream timestamps and place each
+# missing token in one upsampled frame at the segment end, where its fire was
+# lost. Timing is a segment-bounded estimate.
 _upstream_ts_prediction = _timestamp_tools.ts_prediction_lfr6_standard
 _upstream_ts_signature = inspect.signature(_upstream_ts_prediction)
 _LFR6_FRAME_MS = 10.0 * 6  # one LFR6 encoder frame; matches upstream TIME_RATE
+# Tokens sentence_postprocess drops; trailing ones need no timestamp.
+_UNTIMED_TOKENS = frozenset({"<s>", "</s>", "<unk>", "<OOV>"})
 
 
 def _patched_ts_prediction_lfr6_standard(
     *args: object, **kwargs: object
 ) -> tuple[str, list[list[int]]]:
     # Forward every argument unchanged, so upstream signature changes cannot
-    # break the call. Read what the fill needs by parameter name, and only after
-    # upstream came back short, so complete results never depend on the parsing.
+    # break the call. If the arguments cannot be read by name, return the
+    # upstream result as is; the fill is only a repair for short results.
     res_txt, timestamps = _upstream_ts_prediction(*args, **kwargs)
-    bound = _upstream_ts_signature.bind(*args, **kwargs)
+    try:
+        bound = _upstream_ts_signature.bind(*args, **kwargs)
+    except TypeError:
+        return res_txt, timestamps
     bound.apply_defaults()
-    char_list = list(bound.arguments["char_list"])
-    tokens = char_list[:-1] if char_list and char_list[-1] == "</s>" else char_list
-    missing = len(tokens) - len(timestamps)
+    tokens = [
+        t.decode("utf-8") if isinstance(t, bytes) else str(t)
+        for t in bound.arguments["char_list"]
+    ]
+    needed = max((i + 1 for i, t in enumerate(tokens) if t not in _UNTIMED_TOKENS), default=0)
+    missing = needed - len(timestamps)
     if missing <= 0:
         return res_txt, timestamps
 
@@ -97,19 +106,18 @@ def _patched_ts_prediction_lfr6_standard(
     segment_end = int(vad_offset + num_frames * frame_ms)
     kept = [list(pair) for pair in timestamps]
     share_count = missing
-    share_start = kept[-1][1] if kept else segment_start
-    share_start = max(min(share_start, segment_end), segment_start)
-    # Give each filled token at least one upsampled frame. When upstream left
-    # less room (it stretches the last timed token to the segment end, and its
-    # float truncation can leave a 1 ms gap), merge the last timed spans into the
-    # share instead of emitting zero- or 1 ms spans with no speaker overlap.
-    while kept and segment_end - share_start < share_count * frame_ms:
-        share_start = max(kept.pop()[0], segment_start)
+    merged_start: int | None = None
+    # Upstream stretches the last timed token to the segment end, and its float
+    # truncation can stop 1 ms short. Merge any timed span that overlaps the
+    # end frames into the share (keeping its start) rather than emitting zero-
+    # or 1 ms spans, which get no speaker overlap.
+    while kept and kept[-1][1] > segment_end - share_count * frame_ms:
+        merged_start = kept.pop()[0]
         share_count += 1
-    if segment_end - share_start < share_count * frame_ms:
-        # Every timed span was merged and room is still short: borrow only the
-        # leading silence needed, keeping the share close to upstream timing.
-        share_start = max(segment_start, int(segment_end - share_count * frame_ms))
+    share_start = int(segment_end - share_count * frame_ms)
+    if merged_start is not None:
+        share_start = min(merged_start, share_start)
+    share_start = max(share_start, segment_start)
     step = (segment_end - share_start) / share_count
     shared = [
         [int(share_start + i * step), int(share_start + (i + 1) * step)]
@@ -120,7 +128,7 @@ def _patched_ts_prediction_lfr6_standard(
         "ts_prediction patch: filled %d/%d token timestamps over %d-%d ms "
         "(CIF fired fewer times than tokens).",
         missing,
-        len(tokens),
+        needed,
         share_start,
         segment_end,
     )
