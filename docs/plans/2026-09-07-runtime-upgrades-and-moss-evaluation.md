@@ -1,7 +1,7 @@
 # Local ASR Runtime and Model Roadmap
 
 Status: Runtime upgrades and SPEC-016 Phases 1-3 merged; next-phase priorities proposed for review.
-Updated: 2026-10-24
+Updated: 2026-11-22 (follow-up rows and watch items only; the 2026-10-24 priorities are unchanged)
 Source baseline: `4a031c6121177c9f75931b53d6f6f845cb80442d` (PR #38 merge; local main synchronized).
 
 ## Recommendation and decision boundary
@@ -61,6 +61,9 @@ live acceptance remain separate states.
 | P2 | FunASR 1.4.14 -> 1.4.16 regression study | Same checkpoints; short/long, repeated calls, VAD, punctuation, CAM++ and SenseVoice non-regression | Separate lock change; promote earlier only for a reproduced device-placement defect |
 | P2 | PureSubs MOSS caller work | Both byte/duration limits, chunk-local identities, deterministic error handling and complete real caller acceptance | Conditional on MOSS reliability decision; separate repository/PR |
 | P3 | SPEC-016 Phase 4 contract hardening | A concrete remaining contract defect or maintenance burden justifies scoped typed options/results/errors and narrower fitness exemptions | Deferred maintenance; not a prerequisite for isolated model PoCs |
+| P2 | Automatic-merge prerequisites 4 to 6 | Per-job inference timeout in the shared worker (or equivalent containment evidence); the real-model A/B scripts and approved-clip hashes recorded in a tracked file; the Unknown paths in `docs/agents/impact-radius.md` resolved | Prerequisites 1 to 3 hold as of 2026-11-22 (`docs/agents/impact-radius.md`). Until 4 to 6 hold, only Leaf changes can skip owner involvement and no FunASR or MLX engine can be a controlled Branch. Split into issues when scheduled |
+| P2 | Apple Speech controlled-Branch evidence | Real isolation run and the remaining gaps in `docs/agents/controlled-branch-apple-speech.md` | Issue #95. Needs the owner at the machine; does not depend on the row above |
+| P2 | Dependabot configuration review | `uv.lock` update behavior confirmed; hold rules for the other inference runtimes decided | Issues #96 and #97 |
 | Watch | FireRedASR2 Swift/MLX | Reproducible target-hardware evidence and a thin upstream integration path | No sidecar or adapter work now |
 
 P0 success permits one isolated PoC; MOSS uncertainty blocks MOSS expansion,
@@ -190,6 +193,8 @@ fixes mixed-device configuration propagation. Its published regression boundary
 uses CPU stand-ins/mocked accelerators, not MPS certification. It does not establish
 that our CAM++ None-timestamp failure is fixed. Retain both patch sites and fixed
 ASR/VAD/punctuation/speaker checkpoints while evaluating repeated requests.
+
+Watch (2026-11-22): FunASR#3935, the upstream fix for our #3934 (missing token timestamps), merged to `main` as `4da23bc` and is unreleased; PyPI 1.4.28 does not contain it. Do not upgrade for this bug. When a release contains it, remove the local CIF patch after one real-audio A/B (issue #88).
 
 Superseded on 2026-11-22: the local `distribute_spk` patch and both of its
 binding sites were removed. The 2026-02 `None` came from a sentence start, not
