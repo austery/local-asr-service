@@ -191,6 +191,11 @@ uses CPU stand-ins/mocked accelerators, not MPS certification. It does not estab
 that our CAM++ None-timestamp failure is fixed. Retain both patch sites and fixed
 ASR/VAD/punctuation/speaker checkpoints while evaluating repeated requests.
 
+Superseded on 2026-11-22: the local `distribute_spk` patch and both of its
+binding sites were removed. The 2026-02 `None` came from a sentence start, not
+from CAM++ speaker segments. Its likely cause is a missing CIF token timestamp
+(inferred; see `CLAUDE.md` Known Issues).
+
 [Swift MLX v0.1.3](https://github.com/Blaizzy/mlx-audio-swift/releases/tag/v0.1.3)
 lists FireRed ASR 2 support, and the
 [upstream FireRed README](https://github.com/Blaizzy/mlx-audio-swift/blob/main/Sources/MLXAudioSTT/Models/FireRedASR2/README.md)

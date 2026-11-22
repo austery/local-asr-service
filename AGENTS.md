@@ -106,12 +106,15 @@ The codebase is organized into layers:
 
 ## Known Issues & Workarounds
 
-### FunASR distribute_spk NoneType Bug (Fixed 2026-02-21)
-FunASR's `campplus/utils.py:distribute_spk` crashes with `TypeError: '>' not supported between instances of 'float' and 'NoneType'` when `sv_output` contains entries with `None` timestamps (happens on short or ambiguous audio segments).
-
-**Fix**: A module-level monkey-patch is applied in `src/core/funasr_engine.py` at import time. It patches **both** `funasr.models.campplus.utils.distribute_spk` (the source module) **and** `funasr.auto.auto_model.distribute_spk` (the actual call site). The second patch is critical: `auto_model.py` uses `from ... import distribute_spk`, creating a direct reference that bypasses the source module attribute. Patching only the source module silently fails. A `hasattr` guard ensures the patch fails loudly (via `logging.warning`) if FunASR is restructured and the attribute no longer exists. Note: `auto_model.py`'s campplus import is wrapped in `try/except: pass`, so the second patch is only effective when campplus is installed and that import succeeds.
-
-**Do not remove this patch** — the underlying FunASR library bug has not been fixed upstream.
+### FunASR distribute_spk Patch (Removed 2026-11-22)
+- From 2026-02-21 to 2026-11-22, `src/core/funasr_engine.py` replaced FunASR `distribute_spk` with a local copy.
+- The copy filtered speaker segments with `None` times and chose the speaker with the single largest overlap.
+- The original diagnosis was wrong. The archived trace (`docs/_archive/SPEC-007-Speaker-Diarization-FunASR.md`, section 7.1) shows `'>' not supported between instances of 'float' and 'NoneType'`. That operand order comes from `max(sentence_start, spk_st)` with `sentence_start=None`. A `None` speaker time fails earlier, at the `* 1000` conversion, with a different error.
+- On FunASR 1.4.14, a sentence whose token lost its timestamp reproduces that error with valid speaker segments. The removed patch crashed the same way on that input.
+- The likely cause is the CIF timestamp bug below. This link is inferred. The 2026-02 run used FunASR 1.2.7 (`uv.lock` at commit `f8c02ad`). Only the trace excerpt was kept.
+- On FunASR 1.4.19, speaker segments are computed floats. Missing token timestamps are rejected upstream or filled by the CIF patch below. The `None` filter was dead code.
+- The patch's only live effect was to replace upstream's per-speaker summed overlap with the single largest overlap.
+- Speaker attribution now uses upstream `distribute_spk` at both bindings. `tests/unit/test_funasr_speaker_attribution.py` checks that both bindings hold the function defined in FunASR's `campplus/utils.py` after the engine import. It also checks the summed-overlap and tie results.
 
 ### FunASR Single-Frame CIF Timestamp Bug (Fixed 2026-11-21)
 FunASR's `timestamp_tools.ts_prediction_lfr6_standard` can return fewer timestamps than tokens.
