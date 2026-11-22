@@ -76,28 +76,23 @@ _LFR6_FRAME_MS = 10.0 * 6  # one LFR6 encoder frame; matches upstream TIME_RATE
 
 
 def _patched_ts_prediction_lfr6_standard(
-    us_alphas: torch.Tensor,
-    us_peaks: torch.Tensor,
-    char_list: list[str],
-    *args: object,
-    **kwargs: object,
+    *args: object, **kwargs: object
 ) -> tuple[str, list[list[int]]]:
-    # Forward every argument unchanged so upstream signature additions cannot
-    # break the call; read only what the fill needs, with upstream defaults.
-    bound = _upstream_ts_signature.bind(us_alphas, us_peaks, char_list, *args, **kwargs)
+    # Forward every argument unchanged, so upstream signature changes cannot
+    # break the call. Read what the fill needs by parameter name, and only after
+    # upstream came back short, so complete results never depend on the parsing.
+    res_txt, timestamps = _upstream_ts_prediction(*args, **kwargs)
+    bound = _upstream_ts_signature.bind(*args, **kwargs)
     bound.apply_defaults()
-    vad_offset = float(bound.arguments["vad_offset"])  # type: ignore[arg-type]
-    upsample_rate = int(bound.arguments["upsample_rate"])  # type: ignore[call-overload]
-    num_frames = int(us_alphas.shape[-1])
+    char_list = list(bound.arguments["char_list"])
     tokens = char_list[:-1] if char_list and char_list[-1] == "</s>" else char_list
-    res_txt, timestamps = _upstream_ts_prediction(
-        us_alphas, us_peaks, char_list, *args, **kwargs
-    )
     missing = len(tokens) - len(timestamps)
     if missing <= 0:
         return res_txt, timestamps
 
-    frame_ms = _LFR6_FRAME_MS / upsample_rate
+    num_frames = int(bound.arguments["us_alphas"].shape[-1])
+    vad_offset = float(bound.arguments["vad_offset"] or 0.0)
+    frame_ms = _LFR6_FRAME_MS / int(bound.arguments["upsample_rate"])
     segment_start = int(vad_offset)
     segment_end = int(vad_offset + num_frames * frame_ms)
     kept = [list(pair) for pair in timestamps]
@@ -111,6 +106,10 @@ def _patched_ts_prediction_lfr6_standard(
     while kept and segment_end - share_start < share_count * frame_ms:
         share_start = max(kept.pop()[0], segment_start)
         share_count += 1
+    if segment_end - share_start < share_count * frame_ms:
+        # Every timed span was merged and room is still short: borrow only the
+        # leading silence needed, keeping the share close to upstream timing.
+        share_start = max(segment_start, int(segment_end - share_count * frame_ms))
     step = (segment_end - share_start) / share_count
     shared = [
         [int(share_start + i * step), int(share_start + (i + 1) * step)]
@@ -133,7 +132,9 @@ def _patched_ts_prediction_lfr6_standard(
 # only registered Paraformer alias (model_registry.py). Ad-hoc `iic/` models that
 # load other Paraformer classes, and the source module, stay unpatched to keep
 # this upstream patch narrow. Fail loudly if FunASR moves the name.
-_missing_ts_params = {"vad_offset", "upsample_rate"} - set(_upstream_ts_signature.parameters)
+_missing_ts_params = {"us_alphas", "char_list", "vad_offset", "upsample_rate"} - set(
+    _upstream_ts_signature.parameters
+)
 if _missing_ts_params:
     _log.warning(
         "ts_prediction_lfr6_standard no longer has parameters %s; the single-frame "

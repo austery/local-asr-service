@@ -7,7 +7,10 @@ the token "嗯". Both CIF fires land in the last upsampled frame, so FunASR's
 ``sentence_postprocess`` raises instead of returning the transcription.
 """
 
+import importlib
+
 import funasr.models.seaco_paraformer.model as seaco_model
+import pytest
 import torch
 from funasr.utils import postprocess_utils
 from funasr.utils.timestamp_tools import ts_prediction_lfr6_standard as upstream_ts
@@ -131,3 +134,71 @@ def test_split_never_starts_before_segment_start() -> None:
 
     assert upstream == [[-10, 120]], "fixture must reproduce the negative upstream start"
     assert timestamps == [[0, 60], [60, 120]]
+
+
+def test_merged_share_borrows_only_needed_leading_silence() -> None:
+    # 7 frames, 4 tokens, fires bunched at the end: each token gets one frame.
+    alphas = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 4.0])
+    peaks = torch.zeros_like(alphas)
+
+    _, upstream = upstream_ts(alphas.clone(), peaks.clone(), list("abcd"))
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, list("abcd"))
+
+    assert upstream == [[70, 140]], "fixture must reproduce the upstream shortfall"
+    assert timestamps == [[60, 80], [80, 100], [100, 120], [120, 140]]
+
+
+@pytest.mark.parametrize(
+    ("char_list", "upsample_rate", "expected"),
+    [
+        pytest.param(["嗯", "</s>"], 3, [[0, 120]], id="trailing-eos"),
+        pytest.param(["嗯"], 6, [[0, 60]], id="upsample-rate-6"),
+        pytest.param([], 3, [], id="empty-token-list"),
+    ],
+)
+def test_fill_handles_upstream_token_and_rate_conventions(
+    char_list: list[str], upsample_rate: int, expected: list[list[int]]
+) -> None:
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(
+        torch.tensor(SINGLE_FRAME_ALPHAS),
+        torch.tensor(SINGLE_FRAME_PEAKS),
+        list(char_list),
+        upsample_rate=upsample_rate,
+    )
+
+    assert timestamps == expected
+
+
+def test_complete_timestamps_accept_any_vad_offset_upstream_accepts() -> None:
+    alphas = torch.tensor([0.0, 0.5, 0.5, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.5, 0.5, 0.0])
+    peaks = torch.zeros_like(alphas)
+
+    expected = upstream_ts(alphas.clone(), peaks.clone(), ["你", "好"], vad_offset=None)
+    actual = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, ["你", "好"], vad_offset=None)
+
+    assert actual == expected
+
+
+def test_patch_is_skipped_when_upstream_drops_a_required_parameter(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from funasr.utils import timestamp_tools
+
+    from src.core import funasr_engine
+
+    def renamed_upstream(  # simulates a FunASR release without upsample_rate
+        us_alphas: torch.Tensor, us_peaks: torch.Tensor, char_list: list[str], vad_offset: float = 0.0
+    ) -> tuple[str, list[list[int]]]:
+        return "", []
+
+    monkeypatch.setattr(timestamp_tools, "ts_prediction_lfr6_standard", renamed_upstream)
+    monkeypatch.setattr(seaco_model, "ts_prediction_lfr6_standard", renamed_upstream)
+    try:
+        with caplog.at_level("WARNING"):
+            importlib.reload(funasr_engine)
+        assert seaco_model.ts_prediction_lfr6_standard is renamed_upstream
+        assert "single-frame CIF timestamp patch was NOT applied" in caplog.text
+    finally:
+        monkeypatch.undo()
+        importlib.reload(funasr_engine)
+    assert seaco_model.ts_prediction_lfr6_standard is funasr_engine._patched_ts_prediction_lfr6_standard
