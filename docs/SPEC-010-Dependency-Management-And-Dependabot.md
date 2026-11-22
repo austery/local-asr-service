@@ -1,10 +1,10 @@
 ---
 specId: SPEC-010
 title: Dependency Management and Dependabot Configuration Strategy
-status: 🟡 待实施 (Ready for Implementation)
+status: 🟢 已实施，Phase 3 监控未完成 (Implemented; Phase 3 monitoring open)
 priority: P1 - Core Infrastructure
 creationDate: 2026-03-16
-lastUpdateDate: 2026-11-13
+lastUpdateDate: 2026-11-22
 owner: Copilot (AI-Assisted)
 relatedSpecs:
   - SPEC-001
@@ -28,7 +28,7 @@ Establish a centralized, version-constraint strategy for Python dependencies to 
 
 ## 2. Background
 
-### Current State
+### Current State (historical, 2026-03-16; superseded by the files named in §10)
 
 - **No Dependabot configuration**: `.github/dependabot.yml` missing
 - **No version constraints**: `pyproject.toml` uses loose version ranges (e.g., `torch>=2.9.1`, no upper bound)
@@ -89,18 +89,18 @@ Establish a centralized, version-constraint strategy for Python dependencies to 
 
 ### Phase 1: Create `.github/dependabot.yml` — Target: 2026-03-16 (This Week)
 
-- [ ] Create `.github/` directory structure
-- [ ] Write `.github/dependabot.yml` with version constraints and grouping rules
+- [x] Create `.github/` directory structure
+- [x] Write `.github/dependabot.yml` with version constraints and grouping rules
 - [ ] Document version constraint rationale in CLAUDE.md (Known Issues section)
-- [ ] Add to git and push to remote (auto-enable on GitHub)
-- [ ] Verify Dependabot is active in repo settings
+- [x] Add to git and push to remote (auto-enable on GitHub)
+- [x] Verify Dependabot is active in repo settings
 
 **Acceptance**: Dependabot dashboard shows "Active" and pulls latest dependency list
 
 ### Phase 2: Update `pyproject.toml` with Version Boundaries — Target: 2026-03-16 (This Week)
 
-- [ ] Add `torch<3.0` constraint to pyproject.toml (line 8)
-- [ ] Add `torchaudio<3.0` constraint (line 9)
+- [x] Add `torch<3.0` constraint to pyproject.toml (line 8)
+- [x] Add `torchaudio<3.0` constraint (line 9)
 - [ ] Document rationale in comment: `# <3.0: Apple Silicon Metal compatibility, avoid PyTorch 3.0 breaking changes`
 - [ ] Run `uv sync` and validate lock file
 - [ ] Commit with message: `chore: add version upper bounds for torch/torchaudio for stability`
@@ -121,6 +121,8 @@ Establish a centralized, version-constraint strategy for Python dependencies to 
 
 ## 5. Version Compatibility Status (Baseline)
 
+Historical baseline from 2026-03-16. The versions below are not current; `uv.lock` is the source of truth. The constraint table after it was updated on 2026-11-22.
+
 ### ✅ Verified Compatible
 
 | Pair | Current Versions | Status | Tested? |
@@ -136,10 +138,10 @@ Establish a centralized, version-constraint strategy for Python dependencies to 
 
 | Constraint | Rationale | Review Period |
 |-----------|-----------|---|
-| `mlx-audio <0.4` | 0.3.1 is prerelease; 0.4.0 may have breaking API changes | When 0.4.0 stable released |
+| `mlx-audio <0.4` | Retired. Never added to `.github/dependabot.yml`, and mlx-audio is now 0.6.6. Runtime upgrades follow §5a | Not applicable |
 | `torch <3.0` | PyTorch 3.0 planned for late 2026; unknown Metal/MPS compatibility | Quarterly or on 3.0 alpha |
 | `torchaudio <3.0` | Must track torch version | With torch monitoring |
-| `funasr <2.0` | No monitoring yet; upgrade deferred until major version released | Quarterly or on 2.0 alpha |
+| `funasr` (all versions) | Dependabot version updates are ignored (major, minor, patch). Upgrades are manual, after §5a and a real-audio A/B. Reason: the 1.4.19 upgrade turned silent missing timestamps into a 500 on a 52-minute request | When a release contains FunASR#3935 (issue #88) |
 
 ## 5a. When a Runtime Upgrade Is Worth Doing
 
@@ -188,90 +190,16 @@ Security fixes follow the Dependabot path and are assessed separately.
 
 ## 7. Configuration Reference
 
-### `.github/dependabot.yml` (Complete)
+### `.github/dependabot.yml`
 
-```yaml
-version: 2
+The live file is `.github/dependabot.yml`. This spec no longer copies it, because
+the copy drifted. What the file does, as of 2026-11-22:
 
-updates:
-  # Python dependencies (pip/uv)
-  - package-ecosystem: 'pip'
-    directory: '/'
-    schedule:
-      interval: 'weekly'
-      day: 'monday'
-      time: '09:00'  # 17:00 Beijing time
-
-    # Version constraints: prevent breaking changes in dual-engine design
-    ignore:
-      # MLX Audio: defer 0.4+ until stable and thoroughly tested
-      - dependency-name: 'mlx-audio'
-        versions: ['>=0.4.0']
-
-      # PyTorch: block major version 3.0+ (unknown Apple Silicon/Metal compatibility)
-      - dependency-name: 'torch'
-        update-types: ['version-update:semver-major']
-
-      # torchaudio: must track torch version, block 3.0+
-      - dependency-name: 'torchaudio'
-        update-types: ['version-update:semver-major']
-
-      # FunASR: defer major version 2.0+ until tested with current PyTorch
-      - dependency-name: 'funasr'
-        update-types: ['version-update:semver-major']
-
-    # Grouping strategy: reduce PR noise, organize by priority
-    groups:
-      # Group 1: Production security patches (highest priority)
-      security-patches:
-        patterns:
-          - '*'
-        update-types:
-          - 'patch'
-        dependency-type: 'production'
-
-      # Group 2: Production minor updates
-      production-updates:
-        patterns:
-          - '*'
-        update-types:
-          - 'minor'
-        dependency-type: 'production'
-
-      # Group 3: Development updates (lower priority)
-      development-updates:
-        patterns:
-          - '*'
-        update-types:
-          - 'minor'
-          - 'patch'
-        dependency-type: 'development'
-
-    # Other settings
-    open-pull-requests-limit: 5
-    labels:
-      - 'dependencies'
-      - 'automated'
-
-    # Conventional Commits format
-    commit-message:
-      prefix: 'chore'
-      prefix-development: 'chore'
-      include: 'scope'
-
-  # GitHub Actions updates (separate ecosystem)
-  - package-ecosystem: 'github-actions'
-    directory: '/'
-    schedule:
-      interval: 'monthly'
-    groups:
-      github-actions:
-        patterns:
-          - '*'
-    labels:
-      - 'dependencies'
-      - 'github-actions'
-```
+- `pip` ecosystem, weekly on Monday 09:00 UTC, at most 5 open PRs, grouped into
+  production patches, production minors and development updates.
+- Ignored: `torch` and `torchaudio` major versions; every `funasr` version
+  update (major, minor, patch).
+- `github-actions` ecosystem, monthly, one group.
 
 ### `pyproject.toml` (Version Constraint Updates)
 
@@ -305,10 +233,11 @@ dependencies = [
 | 2026-03-16 | 🟡 待实施 (Ready for Implementation) | Initial analysis complete, awaiting implementation |
 | 2026-11-13 | Runtime upgrades deferred | Reviewed against §5a. FunASR stays at 1.4.19 (latest 1.4.26): no released fix reaches the production path with a measurable benefit, and 1.4.23+ carries the speaker-split change. Re-evaluate when upstream releases #3848 (empty-ASR result row) or #3862 (pure-silence VAD segments). mlx-audio stays at 0.6.1 (latest 0.6.5): Qwen3-ASR #1155 (per-chunk token budget) and the Whisper fixes #1164/#1165 merged after 0.6.5. Re-evaluate when a release contains #1155. |
 | 2026-11-17 | Owner-authorized branch trial | mlx-audio 0.6.6 contains #1155. The owner waived the full A/B matrix for this task, requested tests using existing local audio, and authorized stopping the old service and serving real traffic from the branch. requests 2.33.0 is the required companion update. This is a task-specific exception, not a change to section 5a. FunASR stays at 1.4.19. See [trial scope](plans/2026-11-17-mlx-audio-066-upgrade-assessment.md). Merge remains unapproved. |
+| 2026-11-22 | Status corrected; FunASR held | `.github/dependabot.yml` exists and Dependabot has opened PRs, so the 2026-03-16 "not implemented" status was stale. Section 7 now points at the live file. `funasr` minor and patch version updates are now ignored, in addition to major. FunASR#3935 (the upstream fix for our #3934) merged on 2026-11-22 but is unreleased; PyPI 1.4.28 does not contain it. Re-evaluate when a release contains it (issue #88). |
 
 ## 10. Related
 
-- **Code**: `pyproject.toml`, `.github/dependabot.yml` (to be created)
+- **Code**: `pyproject.toml`, `.github/dependabot.yml`
 - **Architecture**: SPEC-009 (Idle Model Offload), SPEC-008 (Dynamic Model Switching)
 - **Reference**: puresubs `.github/dependabot.yml` (TypeScript/Angular pattern)
 - **Knowledge Base**: CLAUDE.md > Known Issues & Architecture Decisions
