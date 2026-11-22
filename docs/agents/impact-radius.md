@@ -342,23 +342,26 @@ no engine is a controlled Branch yet. The work splits like this:
 
 ## Prerequisites before automatic merge
 
-As of 2026-11-08, none of these holds, so automatic merge stays off:
+Rechecked on 2026-11-22 against the live repository settings (`gh api`) and
+the five most recent agent PRs (#82, #85, #86, #87, #89). Items 1 to 3 now hold,
+with the caveats below. Items 4 to 6 do not. Whether to turn automatic merge on
+for Leaf changes is the owner's decision; this section records the evidence and
+changes no setting.
 
-- **`main` requires the CI check.** The only ruleset on `main` ("protest my main
-  branch") blocks deletion and force-push. It does not require the
-  `Lint, Boundary, and Unit Tests` job, there is no classic branch protection,
-  and GitHub auto-merge is disabled.
-- **Agents and the owner have different GitHub identities.** PRs are authored and
-  merged as the owner's account, and `ci.yml` runs from the PR itself, so a PR can
-  change the check that judges it. Until agents act through a separate account or
-  GitHub App, the verifier and Structure rules above are followed by agents, not
-  enforced by GitHub.
-- **Structure and verifier paths are checked by a rule the PR cannot change.** For
-  example, a CODEOWNERS entry plus a required code-owner review for the paths
-  above.
-- **Engine containment exists.** A per-job inference timeout, or equivalent
-  evidence, so that an engine change can be a controlled Branch.
-- **The acceptance harness is reproducible from the repository.** The real-model
-  A/B scripts and the identity (hashes) of the approved clips are recorded in a
-  tracked file, so a path rule can protect them.
-- **The Unknown paths above are resolved.**
+| # | Prerequisite | Status on 2026-11-22 | Evidence and caveat |
+| --- | --- | --- | --- |
+| 1 | `main` requires the CI check | Holds | Ruleset "protest my main branch" (active) requires a pull request and the `Lint, Boundary, and Unit Tests` status check, and blocks deletion and force-push. Repository auto-merge is allowed (`allow_auto_merge: true`); no workflow turns it on. Caveats: `strict_required_status_checks_policy` is false, so a branch need not be up to date. `required_approving_review_count` is 0. The ruleset lets the repository Admin role bypass always |
+| 2 | Agents and the owner have different GitHub identities | Holds for the agent flow | #85, #86, #87 and #89 were authored and merged by `app/austery-code-agent`, with approvals from `austery`. Caveats: #82 was merged by `austery`, and a session that uses the local `gh` login still acts as the owner (PR #91 was created that way). `ci.yml` still runs from the PR itself, so a PR can change the check that judges it; item 3 is the defense |
+| 3 | Structure and verifier paths are checked by a rule the PR cannot change | Holds in configuration | `.github/CODEOWNERS` lists the verifier, Structure and policy paths, and the ruleset sets `require_code_owner_review: true` with stale-review dismissal on push. `.github/` and `docs/agents/` are covered. Not checked: a path-by-path diff of CODEOWNERS against the lists in this file |
+| 4 | Engine containment exists | Does not hold | `WorkerSession.enqueue` still waits without a timeout; the only per-job inference deadline is for MOSS (`src/workers/model_worker.py`). No other timeout in `src/workers/` or `src/services/worker_session.py` bounds an inference job |
+| 5 | The acceptance harness is reproducible from the repository | Does not hold | `pr-reviews/` is Git-ignored (`.gitignore`), and no tracked file records the A/B scripts or the clip hashes |
+| 6 | The Unknown paths above are resolved | Does not hold | Both Unknown groups above are still listed. The MLX group depends on item 4. Not re-verified on 2026-11-22: whether a live path reaches the retired diarization modules |
+
+What this means for the classes in "Review depth":
+
+- A Leaf change depends on items 1 to 3. It needs no engine containment, so
+  items 4 to 6 do not block it.
+- A controlled Branch depends on item 4, and the Unknown paths on item 6. No
+  engine can be a controlled Branch until they hold.
+- Trunk, Structure and the wrong-but-green domains stay with the owner whatever
+  the state of items 1 to 6.
