@@ -5,6 +5,9 @@ from typing import Any
 
 import funasr.auto.auto_model as _auto_model
 import funasr.models.campplus.utils as _campplus_utils
+import funasr.models.paraformer.model as _paraformer_model
+import funasr.models.seaco_paraformer.model as _seaco_paraformer_model
+import funasr.utils.timestamp_tools as _timestamp_tools
 import torch
 from funasr import AutoModel
 
@@ -56,6 +59,77 @@ if not hasattr(_auto_model, "distribute_spk"):
     )
 else:
     _auto_model.distribute_spk = _patched_distribute_spk
+
+
+# Monkey-patch for FunASR bug: ts_prediction_lfr6_standard returns fewer token
+# timestamps than tokens when CIF must fire twice within one frame. Its CIF loop
+# records at most one fire per frame, and renormalisation cannot help when the
+# weight sum is already correct (seen on a ~120 ms VAD segment holding only "嗯",
+# alphas [0.03, 0, 0, 0, 0.24, 1.72]). FunASR >= 1.4.19 sentence_postprocess then
+# raises "time_stamp is missing a retained token timestamp" and the whole request
+# fails. Keep upstream timestamps and spread missing tokens evenly over the rest
+# of the segment, so the transcription survives with segment-bounded timing.
+_upstream_ts_prediction = _timestamp_tools.ts_prediction_lfr6_standard
+_LFR6_FRAME_MS = 10.0 * 6  # one LFR6 encoder frame; matches upstream TIME_RATE
+
+
+def _patched_ts_prediction_lfr6_standard(  # noqa: PLR0913  # mirrors upstream signature
+    us_alphas: torch.Tensor,
+    us_peaks: torch.Tensor,
+    char_list: list[str],
+    vad_offset: float = 0.0,
+    force_time_shift: float = -1.5,
+    sil_in_str: bool = True,
+    upsample_rate: int = 3,
+) -> tuple[str, list[list[int]]]:
+    num_frames = int(us_alphas.shape[-1])
+    tokens = char_list[:-1] if char_list and char_list[-1] == "</s>" else char_list
+    res_txt, timestamps = _upstream_ts_prediction(
+        us_alphas,
+        us_peaks,
+        char_list,
+        vad_offset=vad_offset,
+        force_time_shift=force_time_shift,
+        sil_in_str=sil_in_str,
+        upsample_rate=upsample_rate,
+    )
+    missing = len(tokens) - len(timestamps)
+    if missing <= 0:
+        return res_txt, timestamps
+
+    frame_ms = _LFR6_FRAME_MS / upsample_rate
+    segment_start = int(vad_offset)
+    segment_end = int(vad_offset + num_frames * frame_ms)
+    fill_start = min(timestamps[-1][1] if timestamps else segment_start, segment_end)
+    step = (segment_end - fill_start) / missing
+    filled = [
+        [int(fill_start + i * step), int(fill_start + (i + 1) * step)] for i in range(missing)
+    ]
+    filled[-1][1] = segment_end
+    _log.warning(
+        "ts_prediction patch: filled %d/%d token timestamps over %d-%d ms "
+        "(CIF fired fewer times than tokens).",
+        missing,
+        len(tokens),
+        fill_start,
+        segment_end,
+    )
+    return res_txt, timestamps + filled
+
+
+# Paraformer model modules use `from funasr.utils.timestamp_tools import
+# ts_prediction_lfr6_standard`, so patch each call-site namespace this service
+# runs (see _FUNASR_MODEL_CAPABILITIES). Fail loudly if FunASR moves the name.
+for _call_site in (_paraformer_model, _seaco_paraformer_model):
+    if not hasattr(_call_site, "ts_prediction_lfr6_standard"):
+        _log.warning(
+            "%s has no 'ts_prediction_lfr6_standard' attribute; the single-frame CIF "
+            "timestamp patch was NOT applied. FunASR may have been updated — verify "
+            "the patch is still needed.",
+            _call_site.__name__,
+        )
+    else:
+        _call_site.ts_prediction_lfr6_standard = _patched_ts_prediction_lfr6_standard
 
 # 推荐使用的 Paraformer 模型 ID (支持时间戳，必须用于说话人分离)
 # SEACO-Paraformer 是目前阿里最成熟的串联模型，中文识别 SOTA
