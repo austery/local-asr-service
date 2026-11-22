@@ -188,11 +188,13 @@ normalization. Timestamp/diarization scoring applies only to models claiming it.
 [FunASR 1.4.16](https://github.com/modelscope/FunASR/releases/tag/v1.4.16)
 fixes mixed-device configuration propagation. Its published regression boundary
 uses CPU stand-ins/mocked accelerators, not MPS certification. It does not establish
-that our CAM++ None-timestamp failure is fixed. Keep fixed
+that our CAM++ None-timestamp failure is fixed. Retain both patch sites and fixed
 ASR/VAD/punctuation/speaker checkpoints while evaluating repeated requests.
-Superseded on 2026-11-22: the local `distribute_spk` patch was removed. Its
-`None` failure came from missing CIF token timestamps, not from CAM++ speaker
-segments (`CLAUDE.md` Known Issues).
+
+Superseded on 2026-11-22: the local `distribute_spk` patch and both of its
+binding sites were removed. The 2026-02 `None` came from a sentence start, not
+from CAM++ speaker segments. Its likely cause is a missing CIF token timestamp
+(inferred; see `CLAUDE.md` Known Issues).
 
 [Swift MLX v0.1.3](https://github.com/Blaizzy/mlx-audio-swift/releases/tag/v0.1.3)
 lists FireRed ASR 2 support, and the

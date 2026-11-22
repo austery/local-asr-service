@@ -45,11 +45,12 @@ def test_sentence_without_overlap_defaults_to_speaker_zero() -> None:
 
 
 def test_equal_total_overlap_goes_to_first_overlapping_speaker() -> None:
-    # Speaker 0: 0-100 ms and 400-600 ms (300 ms total); speaker 1: 100-400 ms
-    # (300 ms). The largest single overlap is speaker 1, but upstream keeps the
-    # first overlapping speaker on a tie.
+    # Speaker 1: 0-100 ms and 400-600 ms (300 ms total); speaker 0: 100-400 ms
+    # (300 ms). The largest single overlap is speaker 0, but upstream keeps the
+    # first overlapping speaker on a tie. Speaker 1 is neither the default nor
+    # the lowest id, so this checks the tie rule itself.
     sentences: list[dict[str, object]] = [{"start": 0, "end": 600}]
 
-    auto_model.distribute_spk(sentences, [[0.0, 0.1, 0], [0.1, 0.4, 1], [0.4, 0.6, 0]])
+    auto_model.distribute_spk(sentences, [[0.0, 0.1, 1], [0.1, 0.4, 0], [0.4, 0.6, 1]])
 
-    assert sentences[0]["spk"] == 0
+    assert sentences[0]["spk"] == 1
