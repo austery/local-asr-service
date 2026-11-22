@@ -2,6 +2,7 @@ import gc
 import inspect
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 import funasr.auto.auto_model as _auto_model
@@ -63,101 +64,136 @@ else:
 
 # Monkey-patch for FunASR bug: ts_prediction_lfr6_standard returns fewer token
 # timestamps than tokens when CIF must fire twice within one frame. Its CIF loop
-# records at most one fire per frame; weight left over in an earlier frame fires
-# in the next one, so only the final frame can lose a fire. Renormalisation
-# cannot help when the weight sum is already correct (seen on a ~120 ms VAD
-# segment holding only "嗯", alphas [0.03, 0, 0, 0, 0.24, 1.72]). FunASR >= 1.4.19
-# sentence_postprocess then raises "time_stamp is missing a retained token
-# timestamp" and the whole request fails. Keep upstream timestamps and place each
-# missing token in one upsampled frame at the segment end, where its fire was
-# lost. Timing is a segment-bounded estimate.
-_upstream_ts_prediction = _timestamp_tools.ts_prediction_lfr6_standard
-_upstream_ts_signature = inspect.signature(_upstream_ts_prediction)
+# records at most one fire per frame and carries leftover weight to the next
+# frame, so fires are lost only as weight still pending after the final frame.
+# Renormalisation cannot help when the weight sum is already correct (seen on a
+# ~120 ms VAD segment holding only "嗯", alphas [0.03, 0, 0, 0, 0.24, 1.72]).
+# FunASR >= 1.4.19 sentence_postprocess then raises "time_stamp is missing a
+# retained token timestamp" and the whole request fails.
+#
+# The patch returns upstream output unchanged whenever sentence_postprocess would
+# accept it. Otherwise it keeps upstream timestamps and gives each missing token
+# one upsampled frame at the segment end, where the lost fires belong.
+_TsResult = tuple[str, list[list[int]]]
+_TsPrediction = Callable[..., _TsResult]
 _LFR6_FRAME_MS = 10.0 * 6  # one LFR6 encoder frame; matches upstream TIME_RATE
 # Tokens sentence_postprocess drops; trailing ones need no timestamp.
 _UNTIMED_TOKENS = frozenset({"<s>", "</s>", "<unk>", "<OOV>"})
+_REQUIRED_TS_PARAMS = frozenset({"us_alphas", "char_list", "vad_offset", "upsample_rate"})
 
 
-def _patched_ts_prediction_lfr6_standard(
-    *args: object, **kwargs: object
-) -> tuple[str, list[list[int]]]:
-    # Forward every argument unchanged, so upstream signature changes cannot
-    # break the call. If the arguments cannot be read by name, return the
-    # upstream result as is; the fill is only a repair for short results.
-    res_txt, timestamps = _upstream_ts_prediction(*args, **kwargs)
-    try:
-        bound = _upstream_ts_signature.bind(*args, **kwargs)
-    except TypeError:
-        return res_txt, timestamps
-    bound.apply_defaults()
-    tokens = [
-        t.decode("utf-8") if isinstance(t, bytes) else str(t)
-        for t in bound.arguments["char_list"]
-    ]
-    needed = max((i + 1 for i, t in enumerate(tokens) if t not in _UNTIMED_TOKENS), default=0)
-    missing = needed - len(timestamps)
-    if missing <= 0:
-        return res_txt, timestamps
+def _fill_missing_timestamps(
+    timestamps: list[list[int]],
+    missing: int,
+    segment_start: int,
+    segment_end: int,
+    frame_ms: float,
+) -> list[list[int]]:
+    """Append `missing` end-anchored spans, one upsampled frame each.
 
-    num_frames = int(bound.arguments["us_alphas"].shape[-1])
-    vad_offset = float(bound.arguments["vad_offset"] or 0.0)
-    frame_ms = _LFR6_FRAME_MS / int(bound.arguments["upsample_rate"])
-    segment_start = int(vad_offset)
-    segment_end = int(vad_offset + num_frames * frame_ms)
+    A timed span that overlaps the end frames is truncated if it keeps at least
+    one frame; otherwise it is merged into the end frames (keeping its order).
+    Spans before that point are returned unchanged.
+    """
     kept = [list(pair) for pair in timestamps]
     share_count = missing
-    merged_start: int | None = None
-    # Upstream stretches the last timed token to the segment end, and its float
-    # truncation can stop 1 ms short. Merge any timed span that overlaps the
-    # end frames into the share (keeping its start) rather than emitting zero-
-    # or 1 ms spans, which get no speaker overlap.
-    while kept and kept[-1][1] > segment_end - share_count * frame_ms:
-        merged_start = kept.pop()[0]
+    while kept:
+        boundary = int(segment_end - share_count * frame_ms)
+        last = kept[-1]
+        if last[1] <= boundary:
+            break
+        if boundary - last[0] >= frame_ms:
+            last[1] = boundary
+            break
+        kept.pop()
         share_count += 1
-    share_start = int(segment_end - share_count * frame_ms)
-    if merged_start is not None:
-        share_start = min(merged_start, share_start)
-    share_start = max(share_start, segment_start)
+    share_start = max(segment_start, int(segment_end - share_count * frame_ms))
     step = (segment_end - share_start) / share_count
     shared = [
         [int(share_start + i * step), int(share_start + (i + 1) * step)]
         for i in range(share_count)
     ]
     shared[-1][1] = segment_end
-    _log.warning(
-        "ts_prediction patch: filled %d/%d token timestamps over %d-%d ms "
-        "(CIF fired fewer times than tokens).",
-        missing,
-        needed,
-        share_start,
-        segment_end,
-    )
-    return res_txt, kept + shared
+    return kept + shared
 
 
-# seaco_paraformer uses `from funasr.utils.timestamp_tools import
-# ts_prediction_lfr6_standard`, so patch that call-site namespace. SEACO is the
-# only registered Paraformer alias (model_registry.py). Ad-hoc `iic/` models that
-# load other Paraformer classes, and the source module, stay unpatched to keep
-# this upstream patch narrow. Fail loudly if FunASR moves the name.
-_missing_ts_params = {"us_alphas", "char_list", "vad_offset", "upsample_rate"} - set(
-    _upstream_ts_signature.parameters
-)
-if _missing_ts_params:
+def _build_ts_prediction_patch(upstream: _TsPrediction) -> _TsPrediction:
+    signature = inspect.signature(upstream)
+
+    def patched(*args: object, **kwargs: object) -> _TsResult:
+        # Forward every argument unchanged. If the arguments cannot be read by
+        # name, return the upstream result as is; the fill only repairs results
+        # sentence_postprocess would reject.
+        res_txt, timestamps = upstream(*args, **kwargs)
+        try:
+            bound = signature.bind(*args, **kwargs)
+        except TypeError:
+            return res_txt, timestamps
+        bound.apply_defaults()
+        tokens = [
+            t.decode("utf-8") if isinstance(t, bytes) else str(t)
+            for t in bound.arguments["char_list"]
+        ]
+        needed = max(
+            (i + 1 for i, t in enumerate(tokens) if t not in _UNTIMED_TOKENS), default=0
+        )
+        missing = needed - len(timestamps)
+        if missing <= 0:
+            return res_txt, timestamps
+
+        vad_offset = float(bound.arguments["vad_offset"] or 0.0)
+        frame_ms = _LFR6_FRAME_MS / int(bound.arguments["upsample_rate"])
+        segment_start = int(vad_offset)
+        segment_end = int(vad_offset + int(bound.arguments["us_alphas"].shape[-1]) * frame_ms)
+        filled = _fill_missing_timestamps(
+            timestamps, missing, segment_start, segment_end, frame_ms
+        )
+        _log.warning(
+            "ts_prediction patch: filled %d/%d token timestamps ending at %d ms "
+            "(CIF fired fewer times than tokens).",
+            missing,
+            needed,
+            segment_end,
+        )
+        return res_txt, filled
+
+    return patched
+
+
+def _install_ts_prediction_patch() -> _TsPrediction | None:
+    """Patch the SEACO call site, or warn and return None if FunASR changed.
+
+    seaco_paraformer uses `from funasr.utils.timestamp_tools import
+    ts_prediction_lfr6_standard`, so the call-site namespace is patched. SEACO is
+    the only registered Paraformer alias (model_registry.py). Ad-hoc `iic/` models
+    that load other Paraformer classes, and the source module, stay unpatched.
+    """
+    upstream = getattr(_timestamp_tools, "ts_prediction_lfr6_standard", None)
+    binding = getattr(_seaco_paraformer_model, "ts_prediction_lfr6_standard", None)
+    if upstream is None or binding is None:
+        _skip_ts_patch("ts_prediction_lfr6_standard moved out of its FunASR modules")
+        return None
+    if binding is not upstream and getattr(binding, "__module__", None) != __name__:
+        _skip_ts_patch("seaco_paraformer no longer binds the timestamp_tools function")
+        return None
+    absent = _REQUIRED_TS_PARAMS - set(inspect.signature(upstream).parameters)
+    if absent:
+        _skip_ts_patch(f"ts_prediction_lfr6_standard lacks parameters {sorted(absent)}")
+        return None
+    patched = _build_ts_prediction_patch(upstream)
+    _seaco_paraformer_model.ts_prediction_lfr6_standard = patched
+    return patched
+
+
+def _skip_ts_patch(reason: str) -> None:
     _log.warning(
-        "ts_prediction_lfr6_standard no longer has parameters %s; the single-frame "
-        "CIF timestamp patch was NOT applied. FunASR may have been updated — verify "
-        "the patch is still needed.",
-        sorted(_missing_ts_params),
+        "%s; the single-frame CIF timestamp patch was NOT applied. FunASR may have "
+        "been updated — verify the patch is still needed.",
+        reason,
     )
-elif not hasattr(_seaco_paraformer_model, "ts_prediction_lfr6_standard"):
-    _log.warning(
-        "funasr.models.seaco_paraformer.model has no 'ts_prediction_lfr6_standard' "
-        "attribute; the single-frame CIF timestamp patch was NOT applied. FunASR may "
-        "have been updated — verify the patch is still needed."
-    )
-else:
-    _seaco_paraformer_model.ts_prediction_lfr6_standard = _patched_ts_prediction_lfr6_standard
+
+
+_patched_ts_prediction_lfr6_standard = _install_ts_prediction_patch()
 
 # 推荐使用的 Paraformer 模型 ID (支持时间戳，必须用于说话人分离)
 # SEACO-Paraformer 是目前阿里最成熟的串联模型，中文识别 SOTA

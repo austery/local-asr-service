@@ -47,7 +47,7 @@ def test_filled_timestamps_include_vad_offset() -> None:
     assert timestamps == [[5100, 5120]]
 
 
-def test_missing_token_splits_last_span_when_upstream_reached_segment_end() -> None:
+def test_missing_token_truncates_last_span_that_reached_segment_end() -> None:
     # Two tokens, one fire short: the second token falls in the final frame, and
     # upstream stretches "你" to the segment end (180 ms), leaving no room.
     alphas = torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0])
@@ -57,7 +57,7 @@ def test_missing_token_splits_last_span_when_upstream_reached_segment_end() -> N
     _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, ["你", "好"])
 
     assert upstream == [[10, 180]], "fixture must reproduce the upstream shortfall"
-    assert timestamps == [[10, 95], [95, 180]]
+    assert timestamps == [[10, 160], [160, 180]]
     assert all(end > start for start, end in timestamps)
 
 
@@ -94,7 +94,7 @@ def test_positional_arguments_are_forwarded_like_upstream() -> None:
     assert timestamps == [[5100, 5120]]
 
 
-def test_rounding_gap_with_vad_offset_still_splits_last_span() -> None:
+def test_rounding_gap_with_vad_offset_still_truncates_last_span() -> None:
     # Upstream truncates its end to 199 ms while the segment ends at 200 ms.
     alphas = torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0])
     peaks = torch.zeros_like(alphas)
@@ -105,7 +105,7 @@ def test_rounding_gap_with_vad_offset_still_splits_last_span() -> None:
     )
 
     assert upstream == [[30, 199]], "fixture must reproduce the upstream 1 ms gap"
-    assert timestamps == [[30, 115], [115, 200]]
+    assert timestamps == [[30, 180], [180, 200]]
 
 
 def test_long_segment_rounding_gap_with_two_missing_tokens() -> None:
@@ -125,7 +125,7 @@ def test_long_segment_rounding_gap_with_two_missing_tokens() -> None:
     assert timestamps[-1][1] == 16060
 
 
-def test_split_never_starts_before_segment_start() -> None:
+def test_filled_span_stays_in_segment_and_kept_start_is_upstream() -> None:
     # Upstream's force_time_shift puts the first token at -10 ms.
     alphas = torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0, 2.0])
     peaks = torch.zeros_like(alphas)
@@ -134,7 +134,7 @@ def test_split_never_starts_before_segment_start() -> None:
     _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, ["你", "好"])
 
     assert upstream == [[-10, 120]], "fixture must reproduce the negative upstream start"
-    assert timestamps == [[0, 60], [60, 120]]
+    assert timestamps == [[-10, 100], [100, 120]]
 
 
 def test_merged_share_borrows_only_needed_leading_silence() -> None:
@@ -280,7 +280,10 @@ def test_patch_survives_upstream_adding_a_positional_parameter(
         vad_offset: float = 0.0,
         upsample_rate: int = 3,
     ) -> tuple[str, list[list[int]]]:
-        return upstream_ts(us_alphas, us_peaks, char_list, vad_offset, upsample_rate=upsample_rate)
+        result: tuple[str, list[list[int]]] = upstream_ts(
+            us_alphas, us_peaks, char_list, vad_offset, upsample_rate=upsample_rate
+        )
+        return result
 
     try:
         _reload_engine_with_upstream(monkeypatch, extended_upstream, extended_upstream)
@@ -296,7 +299,8 @@ def test_unreadable_arguments_return_upstream_result(monkeypatch: pytest.MonkeyP
     # A decorated upstream whose reported signature no longer matches its calls.
     def decorated_upstream(*args: object, **kwargs: object) -> tuple[str, list[list[int]]]:
         kwargs.pop("calibration", None)
-        return upstream_ts(*args, **kwargs)  # type: ignore[arg-type]
+        result: tuple[str, list[list[int]]] = upstream_ts(*args, **kwargs)
+        return result
 
     decorated_upstream.__signature__ = inspect.signature(upstream_ts)  # type: ignore[attr-defined]
     alphas = torch.tensor([0.0, 0.5, 0.5, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.5, 0.5, 0.0])
@@ -320,6 +324,57 @@ def test_patch_is_skipped_when_seaco_no_longer_imports_the_function(
         with caplog.at_level("WARNING"):
             importlib.reload(funasr_engine)
         assert not hasattr(seaco_model, "ts_prediction_lfr6_standard")
+        assert "single-frame CIF timestamp patch was NOT applied" in caplog.text
+    finally:
+        _restore_engine(monkeypatch)
+
+
+def test_truncation_does_not_cascade_into_earlier_spans() -> None:
+    # 240 ms, 5 tokens, 3 missing: only "b" overlaps the end frames.
+    alphas = torch.zeros(12)
+    alphas[2], alphas[10], alphas[11] = 1.0, 1.0, 3.0
+    peaks = torch.zeros_like(alphas)
+
+    _, upstream = upstream_ts(alphas.clone(), peaks.clone(), list("abcde"))
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, list("abcde"))
+
+    assert upstream == [[10, 170], [170, 240]], "fixture must reproduce the shortfall"
+    assert timestamps == [[10, 160], [160, 180], [180, 200], [200, 220], [220, 240]]
+
+
+def test_patch_is_skipped_when_upstream_function_moves(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from funasr.utils import timestamp_tools
+
+    from src.core import funasr_engine
+
+    original = timestamp_tools.ts_prediction_lfr6_standard
+    monkeypatch.delattr(timestamp_tools, "ts_prediction_lfr6_standard")
+    monkeypatch.setattr(seaco_model, "ts_prediction_lfr6_standard", original)
+    try:
+        with caplog.at_level("WARNING"):
+            importlib.reload(funasr_engine)
+        assert seaco_model.ts_prediction_lfr6_standard is original
+        assert funasr_engine._patched_ts_prediction_lfr6_standard is None
+        assert "single-frame CIF timestamp patch was NOT applied" in caplog.text
+    finally:
+        _restore_engine(monkeypatch)
+
+
+def test_patch_is_skipped_when_seaco_binds_a_different_function(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from src.core import funasr_engine
+
+    def relocated(*args: object, **kwargs: object) -> tuple[str, list[list[int]]]:
+        return "", []
+
+    monkeypatch.setattr(seaco_model, "ts_prediction_lfr6_standard", relocated)
+    try:
+        with caplog.at_level("WARNING"):
+            importlib.reload(funasr_engine)
+        assert seaco_model.ts_prediction_lfr6_standard is relocated
         assert "single-frame CIF timestamp patch was NOT applied" in caplog.text
     finally:
         _restore_engine(monkeypatch)
