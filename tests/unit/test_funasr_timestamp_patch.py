@@ -88,3 +88,46 @@ def test_positional_arguments_are_forwarded_like_upstream() -> None:
     _, timestamps = seaco_model.ts_prediction_lfr6_standard(*args)
 
     assert timestamps == [[5000, 5120]]
+
+
+def test_rounding_gap_with_vad_offset_still_splits_last_span() -> None:
+    # Upstream truncates its end to 199 ms while the segment ends at 200 ms.
+    alphas = torch.tensor([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0])
+    peaks = torch.zeros_like(alphas)
+
+    _, upstream = upstream_ts(alphas.clone(), peaks.clone(), ["你", "好"], vad_offset=20)
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(
+        alphas, peaks, ["你", "好"], vad_offset=20
+    )
+
+    assert upstream == [[30, 199]], "fixture must reproduce the upstream 1 ms gap"
+    assert timestamps == [[30, 115], [115, 200]]
+
+
+def test_long_segment_rounding_gap_with_two_missing_tokens() -> None:
+    # Production path (vad_offset=0): ~16 s segment, final-frame shortfall of two.
+    alphas = torch.zeros(803)
+    alphas[799], alphas[802] = 1.0, 3.0
+    peaks = torch.zeros_like(alphas)
+    tokens = ["你", "好", "吗"]
+
+    _, upstream = upstream_ts(alphas.clone(), peaks.clone(), list(tokens))
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, list(tokens))
+
+    assert upstream == [[15950, 16059]], "fixture must reproduce the upstream gap"
+    assert len(timestamps) == 3
+    assert timestamps[0][0] == 15950
+    assert all(end - start >= 20 for start, end in timestamps)
+    assert timestamps[-1][1] == 16060
+
+
+def test_split_never_starts_before_segment_start() -> None:
+    # Upstream's force_time_shift puts the first token at -10 ms.
+    alphas = torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0, 2.0])
+    peaks = torch.zeros_like(alphas)
+
+    _, upstream = upstream_ts(alphas.clone(), peaks.clone(), ["你", "好"])
+    _, timestamps = seaco_model.ts_prediction_lfr6_standard(alphas, peaks, ["你", "好"])
+
+    assert upstream == [[-10, 120]], "fixture must reproduce the negative upstream start"
+    assert timestamps == [[0, 60], [60, 120]]

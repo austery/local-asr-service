@@ -102,12 +102,14 @@ def _patched_ts_prediction_lfr6_standard(
     segment_end = int(vad_offset + num_frames * frame_ms)
     kept = [list(pair) for pair in timestamps]
     share_count = missing
-    share_start = min(kept[-1][1] if kept else segment_start, segment_end)
-    if kept and share_start >= segment_end:
-        # Upstream stretched the last timed token to the segment end, leaving no
-        # room. Split that token's span with the missing tokens instead of
-        # emitting zero-length timestamps, which would get no speaker overlap.
-        share_start = kept.pop()[0]
+    share_start = kept[-1][1] if kept else segment_start
+    share_start = max(min(share_start, segment_end), segment_start)
+    # Give each filled token at least one upsampled frame. When upstream left
+    # less room (it stretches the last timed token to the segment end, and its
+    # float truncation can leave a 1 ms gap), merge the last timed spans into the
+    # share instead of emitting zero- or 1 ms spans with no speaker overlap.
+    while kept and segment_end - share_start < share_count * frame_ms:
+        share_start = max(kept.pop()[0], segment_start)
         share_count += 1
     step = (segment_end - share_start) / share_count
     shared = [
@@ -131,7 +133,15 @@ def _patched_ts_prediction_lfr6_standard(
 # only registered Paraformer alias (model_registry.py). Ad-hoc `iic/` models that
 # load other Paraformer classes, and the source module, stay unpatched to keep
 # this upstream patch narrow. Fail loudly if FunASR moves the name.
-if not hasattr(_seaco_paraformer_model, "ts_prediction_lfr6_standard"):
+_missing_ts_params = {"vad_offset", "upsample_rate"} - set(_upstream_ts_signature.parameters)
+if _missing_ts_params:
+    _log.warning(
+        "ts_prediction_lfr6_standard no longer has parameters %s; the single-frame "
+        "CIF timestamp patch was NOT applied. FunASR may have been updated — verify "
+        "the patch is still needed.",
+        sorted(_missing_ts_params),
+    )
+elif not hasattr(_seaco_paraformer_model, "ts_prediction_lfr6_standard"):
     _log.warning(
         "funasr.models.seaco_paraformer.model has no 'ts_prediction_lfr6_standard' "
         "attribute; the single-frame CIF timestamp patch was NOT applied. FunASR may "
